@@ -310,6 +310,12 @@ for local authority; evicting a peer is `DROP GRAPH <urn:tar:peer:{id}>`.
 | `tar:availability` | ours | `public` \| `restricted` \| `embargoed` \| `metadata-only` |
 | `tar:accessRequestURL` | ours | Where to request access when not `public` |
 
+> **Vocabulary audit (2026-08-30):** every `tar:` term above was audited against the standard
+> vocabularies — see [`2026-08-30-vocabulary-audit.md`](2026-08-30-vocabulary-audit.md).
+> `tar:availability` is now always written beside `dct:accessRights` with the EU access-right
+> authority table (the DCAT-AP reading); several other `tar:` terms were replaced outright
+> (`tar:atInstance` → `prov:wasAssociatedWith`, `tar:externalKey` → `dct:identifier`, …).
+
 ### 6.2 `metadata-only` is the common case, not an edge case
 
 For IDS's health-data work, most artifacts must be **findable and described but not

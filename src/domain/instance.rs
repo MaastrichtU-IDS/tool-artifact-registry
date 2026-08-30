@@ -37,11 +37,22 @@ pub fn instance_quads(base: &str, iri: &str, input: &InstanceIn, actor: &str, so
     n.opt_link(ns::DCAT, "endpointURL", &input.endpoint_url);
     n.opt_link(ns::DCAT, "endpointDescription", &input.endpoint_description);
     n.opt_text(ns::TAR, "availability", &input.availability);
+    // Supplement (audit 2026-08-30): dct:accessRights with the EU access-right authority
+    // table is what DCAT-AP harvesters read; tar:availability keeps the finer four-way enum.
+    if let Some(ar) = input.availability.as_deref().and_then(super::artifact::access_right) {
+        n.link(ns::DCT, "accessRights", &ar);
+    }
     n.opt_text(ns::TAR, "jurisdiction", &input.jurisdiction);
     n.opt_text(ns::TAR, "oidcClientId", &input.oidc_client_id);
     n.opt_text(ns::TAR, "oidcIssuer", &input.oidc_issuer);
     n.texts(ns::TAR, "allowedScope", &input.allowed_scopes);
-    n.link(ns::TAR, "homeRegistry", base);
+    // Audit 2026-08-30: dcat:inCatalog (DCAT 3) replaces tar:homeRegistry. Its scope note
+    // requires the inverse dcat:resource on the catalog side, so both edges are written.
+    n.link(ns::DCAT, "inCatalog", base);
+    let mut cat = Node::local(base);
+    cat.a(&format!("{}Catalog", ns::DCAT));
+    cat.link(ns::DCAT, "resource", iri);
+    quads.extend(cat.finish());
     crate::rdf::attribution(&mut n, actor);
     if let Some(op) = &input.operator {
         let (oiri, oq) = agent_quads(base, op);
@@ -84,7 +95,7 @@ pub fn instance_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Instance {
         availability: p.str(ns::TAR, "availability"),
         jurisdiction: p.str(ns::TAR, "jurisdiction"),
         health: p.str(ns::TAR, "health").unwrap_or_else(|| "unknown".into()),
-        home_registry: p.iri(ns::TAR, "homeRegistry"),
+        home_registry: p.iri(ns::DCAT, "inCatalog").or_else(|| p.iri(ns::TAR, "homeRegistry")),
         capability: p.iri(ns::TAR, "hasCapability").and_then(|c| super::software::capability_from(ctx, &c, "instance")),
         last_run_at: None,
         runs_30d: 0,
@@ -116,7 +127,7 @@ pub fn instance_signals(ctx: &Ctx, only: Option<&str>) -> AppResult<HashMap<Stri
     let q = format!(
         r#"{p}
 SELECT ?i (MAX(?t) AS ?last) (COUNT(DISTINCT ?run) AS ?n) WHERE {{
-  GRAPH ?g {{ ?run a prov:Activity ; tar:atInstance ?i . OPTIONAL {{ ?run prov:startedAtTime ?t }} }}
+  GRAPH ?g {{ ?run a prov:Activity ; prov:wasAssociatedWith|tar:atInstance ?i . OPTIONAL {{ ?run prov:startedAtTime ?t }} }}
   {filter}
 }} GROUP BY ?i"#,
         p = ns::PREFIXES
@@ -130,7 +141,7 @@ SELECT ?i (MAX(?t) AS ?last) (COUNT(DISTINCT ?run) AS ?n) WHERE {{
     let q = format!(
         r#"{p}
 SELECT ?i (COUNT(DISTINCT ?run) AS ?n) (SUM(?failed) AS ?f) WHERE {{
-  GRAPH ?g {{ ?run a prov:Activity ; tar:atInstance ?i ; prov:startedAtTime ?t . OPTIONAL {{ ?run tar:status ?st }} }}
+  GRAPH ?g {{ ?run a prov:Activity ; prov:wasAssociatedWith|tar:atInstance ?i ; prov:startedAtTime ?t . OPTIONAL {{ ?run tar:status ?st }} }}
   FILTER(?t >= "{since}"^^xsd:dateTime)
   BIND(IF(?st = "failed" || ?st = "aborted", 1, 0) AS ?failed)
   {filter}
@@ -147,7 +158,7 @@ SELECT ?i (COUNT(DISTINCT ?run) AS ?n) (SUM(?failed) AS ?f) WHERE {{
     let q = format!(
         r#"{p}
 SELECT ?i (COUNT(DISTINCT ?a) AS ?n) WHERE {{
-  GRAPH ?g {{ ?run tar:atInstance ?i . ?a prov:wasGeneratedBy ?run }}
+  GRAPH ?g {{ ?run prov:wasAssociatedWith|tar:atInstance ?i . ?a prov:wasGeneratedBy ?run }}
   {filter}
 }} GROUP BY ?i"#,
         p = ns::PREFIXES

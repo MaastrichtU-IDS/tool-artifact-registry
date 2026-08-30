@@ -1,8 +1,10 @@
 //! Run projections (spec §4.3).
 //!
 //! `prov:qualifiedAssociation` binds *who acted* (the Instance) to *what plan they followed*
-//! (the Release) in one reified node. A denormalised `tar:atInstance` sits alongside it
-//! purely so that list and count queries stay one-hop.
+//! (the Release) in one reified node. `prov:wasAssociatedWith` — PROV-O's own unqualified
+//! form of exactly that association — sits alongside it so that list and count queries stay
+//! one-hop. (It replaced the invented `tar:atInstance` in the 2026-08-30 vocabulary audit;
+//! readers still fall back to the old term for pre-audit graphs.)
 
 use super::Ctx;
 use crate::error::{AppError, AppResult};
@@ -13,17 +15,40 @@ use crate::rdf::{Node, Props};
 use oxigraph::model::Quad;
 
 pub const TYPE_ACTIVITY: &str = "http://www.w3.org/ns/prov#Activity";
+pub const TYPE_SCHEMA_ACTION: &str = "https://schema.org/Action";
 pub const STATUSES: [&str; 4] = ["success", "failed", "running", "aborted"];
+
+/// The schema.org ActionStatusType IRI for a run status (audit 2026-08-30). Written as a
+/// supplement beside `tar:status`: the standard enumeration has no distinct value for
+/// "aborted" (it folds into FailedActionStatus), so the tar literal stays authoritative.
+pub fn action_status(status: &str) -> Option<String> {
+    let local = match status {
+        "success" => "CompletedActionStatus",
+        "failed" | "aborted" => "FailedActionStatus",
+        "running" => "ActiveActionStatus",
+        _ => return None,
+    };
+    Some(format!("{}{}", ns::SCHEMA, local))
+}
 
 pub fn run_quads(iri: &str, input: &RunIn, instance_iri: &str, actor: &str) -> Vec<Quad> {
     let mut n = Node::local(iri);
     n.a(TYPE_ACTIVITY);
+    // Also a schema:Action, so the schema:actionStatus supplement sits on its intended type.
+    n.a(TYPE_SCHEMA_ACTION);
     n.opt_text(ns::RDFS, "label", &input.label);
     n.datetime(ns::PROV, "startedAtTime", input.started_at.as_deref().unwrap_or(&chrono::Utc::now().to_rfc3339()));
     n.opt_datetime(ns::PROV, "endedAtTime", &input.ended_at);
-    n.text(ns::TAR, "status", input.status.as_deref().unwrap_or("success"));
-    n.opt_text(ns::TAR, "externalKey", &input.external_key);
-    n.link(ns::TAR, "atInstance", instance_iri);
+    let status = input.status.as_deref().unwrap_or("success");
+    n.text(ns::TAR, "status", status);
+    if let Some(st) = action_status(status) {
+        n.link(ns::SCHEMA, "actionStatus", &st);
+    }
+    // Audit 2026-08-30: dct:identifier ("an unambiguous reference to the resource within a
+    // given context") carries the caller's own run key; tar:externalKey is retired.
+    n.opt_text(ns::DCT, "identifier", &input.external_key);
+    // The unqualified form of the association below — PROV-O's own one-hop shortcut.
+    n.link(ns::PROV, "wasAssociatedWith", instance_iri);
     n.opt_link(ns::TAR, "usedRelease", &input.release);
 
     let mut assoc = Node::blank(ns::G_LOCAL);
@@ -57,8 +82,8 @@ pub fn run_summary_from_props(ctx: &Ctx, iri: &str, p: &Props) -> RunSummary {
         started_at: started,
         ended_at: ended,
         duration_seconds: duration,
-        external_key: p.str(ns::TAR, "externalKey"),
-        instance: p.iri(ns::TAR, "atInstance"),
+        external_key: p.str(ns::DCT, "identifier").or_else(|| p.str(ns::TAR, "externalKey")),
+        instance: p.iri(ns::PROV, "wasAssociatedWith").or_else(|| p.iri(ns::TAR, "atInstance")),
         instance_label: None,
         release: p.iri(ns::TAR, "usedRelease"),
         release_version: None,

@@ -236,9 +236,14 @@ pub fn update_run_outcome(tx: &mut GraphTx, run_iri: &str, run: &RunIn) {
         tx.replace_property(run_iri, &format!("{}endedAtTime", ns::PROV), ns::G_LOCAL);
         n.opt_datetime(ns::PROV, "endedAtTime", &run.ended_at);
     }
-    if run.status.is_some() {
+    if let Some(status) = run.status.as_deref() {
         tx.replace_property(run_iri, &format!("{}status", ns::TAR), ns::G_LOCAL);
-        n.opt_text(ns::TAR, "status", &run.status);
+        n.text(ns::TAR, "status", status);
+        // The schema:actionStatus supplement must move with it, or a reader sees two states.
+        tx.replace_property(run_iri, &format!("{}actionStatus", ns::SCHEMA), ns::G_LOCAL);
+        if let Some(st) = rundom::action_status(status) {
+            n.link(ns::SCHEMA, "actionStatus", &st);
+        }
     }
     tx.extend(n.finish());
 }

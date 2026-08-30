@@ -99,6 +99,14 @@ pub struct SoftwareIn {
     /// Further screenshots, in display order.
     #[serde(default)]
     pub screenshots: Vec<String>,
+    /// The full README, as Markdown. `description` is the short line that goes in a list;
+    /// this is the long-form page, rendered with its images, the way a forge shows one.
+    #[serde(default)]
+    pub readme: Option<String>,
+    /// Base URL that relative links and images in the README resolve against — normally the
+    /// repository's raw content root. Without it, `![](docs/images/x.png)` resolves nowhere.
+    #[serde(default)]
+    pub readme_base_url: Option<String>,
     #[serde(default)]
     pub license: Option<String>,
     /// `service` | `library` | `cli` | `workflow`
@@ -139,6 +147,10 @@ pub struct Software {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     pub screenshots: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readme_base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

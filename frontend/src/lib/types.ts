@@ -58,6 +58,8 @@ export interface Software {
   documentation?: string
   image?: string
   screenshots: string[]
+  readme?: string
+  readme_base_url?: string
   license?: string
   kind?: string
   maturity?: string

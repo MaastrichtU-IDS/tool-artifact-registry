@@ -9,6 +9,7 @@ import {
 import {
   ArtifactTypeChip, HealthDot, KindChip, LicenseChip, OriginChip, RelativeTime,
 } from '../components/chips'
+import { Markdown } from '../components/Markdown'
 
 /**
  * Lead with what only this registry can say: what the tool consumes and produces, and which
@@ -189,10 +190,17 @@ export default function SoftwareDetail() {
             </section>
           )}
 
-          {s.description && (
+          {(s.readme || s.description) && (
             <section className="card">
-              <h2>Description</h2>
-              <p style={{ margin: 0 }}>{s.description}</p>
+              <h2>{s.readme ? 'Readme' : 'Description'}</h2>
+              {s.description && s.readme && (
+                <p style={{ marginTop: 0 }}>{s.description}</p>
+              )}
+              {s.readme ? (
+                <Markdown source={s.readme} baseUrl={s.readme_base_url} />
+              ) : (
+                <p style={{ margin: 0 }}>{s.description}</p>
+              )}
             </section>
           )}
 

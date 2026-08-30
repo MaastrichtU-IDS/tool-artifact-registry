@@ -18,6 +18,15 @@ pub const TYPE_TAR_SOFTWARE: &str = "https://w3id.org/tar/ns#Software";
 pub const TYPE_TAR_RELEASE: &str = "https://w3id.org/tar/ns#Release";
 pub const TYPE_SOURCE: &str = "https://schema.org/SoftwareSourceCode";
 pub const TYPE_RELEASE_PLAN: &str = "http://www.w3.org/ns/prov#Plan";
+/// The repostatus.org concepts CodeMeta points `developmentStatus` at.
+/// <https://www.repostatus.org/>
+pub fn repostatus_iri(value: &str) -> Option<String> {
+    const CONCEPTS: [&str; 8] =
+        ["concept", "wip", "suspended", "abandoned", "active", "inactive", "unsupported", "moved"];
+    let v = value.trim().to_ascii_lowercase();
+    CONCEPTS.contains(&v.as_str()).then(|| format!("https://www.repostatus.org/#{v}"))
+}
+
 pub const TYPE_CAPABILITY: &str = "https://w3id.org/tar/ns#Capability";
 
 // ------------------------------------------------------------------- writes
@@ -29,17 +38,31 @@ pub fn software_quads(base: &str, iri: &str, input: &SoftwareIn, actor: &str, cr
     n.a(TYPE_SOURCE);
     n.a(TYPE_TAR_SOFTWARE);
     n.text(ns::SCHEMA, "name", &input.name);
-    n.opt_text(ns::TAR, "tagline", &input.tagline);
+    // Audit 2026-08-30: the short one-liner is dct:abstract ("a summary of the resource"),
+    // not an invented tar:tagline. schema:description keeps the long form.
+    n.opt_text(ns::DCT, "abstract", &input.tagline);
     n.opt_text(ns::SCHEMA, "description", &input.description);
     n.opt_link(ns::SCHEMA, "url", &input.homepage);
     n.opt_link(ns::SCHEMA, "codeRepository", &input.code_repository);
     n.opt_link(ns::SCHEMA, "softwareHelp", &input.documentation);
     n.opt_link(ns::SCHEMA, "image", &input.image);
     n.links(ns::SCHEMA, "screenshot", &input.screenshots);
+    n.opt_text(ns::TAR, "readme", &input.readme);
+    n.opt_link(ns::TAR, "readmeBaseURL", &input.readme_base_url);
     n.opt_link(ns::DCT, "license", &input.license);
-    n.opt_text(ns::TAR, "kind", &input.kind);
+    // Audit 2026-08-30: schema:applicationCategory already carried the kind — the duplicate
+    // tar:kind triple is gone. codemeta:developmentStatus is CodeMeta's term for exactly
+    // this ("description of development status, e.g. active, inactive, suspended").
     n.opt_text(ns::SCHEMA, "applicationCategory", &input.kind);
+    // codemeta:developmentStatus is declared `"@type": "@id"` in CodeMeta's context: its range
+    // is an IRI from repostatus.org, not a string. Emitting a literal there would be a term
+    // used against its own definition, which is worse than not using it — a consumer would try
+    // to dereference "active". So the literal stays on tar:maturity as the authoritative value,
+    // and the standard term is added only when the value names a repostatus concept.
     n.opt_text(ns::TAR, "maturity", &input.maturity);
+    if let Some(iri) = input.maturity.as_deref().and_then(repostatus_iri) {
+        n.link(ns::CODEMETA, "developmentStatus", &iri);
+    }
     n.links(ns::DCT, "subject", &input.edam_topics);
     n.texts(ns::SCHEMA, "keywords", &input.keywords);
     n.links(ns::DCT, "references", &input.publications);
@@ -56,7 +79,9 @@ pub fn software_quads(base: &str, iri: &str, input: &SoftwareIn, actor: &str, cr
     if let Some(c) = &input.contact {
         let (ciri, cq) = agent_quads(base, c);
         if let Some(ci) = ciri {
-            n.link(ns::TAR, "contact", &ci);
+            // Audit 2026-08-30: codemeta:maintainer — "individual responsible for maintaining
+            // the software (usually includes an email contact address)" — is this exact role.
+            n.link(ns::CODEMETA, "maintainer", &ci);
         }
         quads.extend(cq);
     }
@@ -126,20 +151,27 @@ pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
         iri: iri.to_string(),
         id,
         name: p.str(ns::SCHEMA, "name").unwrap_or_else(|| ids::iri_tail(iri).to_string()),
-        tagline: p.str(ns::TAR, "tagline"),
+        // Standard term first; the tar: fallbacks keep graphs written before the 2026-08-30
+        // vocabulary audit readable at zero cost.
+        tagline: p.str(ns::DCT, "abstract").or_else(|| p.str(ns::TAR, "tagline")),
         description: p.str(ns::SCHEMA, "description"),
         homepage: p.iri(ns::SCHEMA, "url"),
         code_repository: p.iri(ns::SCHEMA, "codeRepository"),
         documentation: p.iri(ns::SCHEMA, "softwareHelp"),
         image: p.iri(ns::SCHEMA, "image"),
         screenshots: p.iris(ns::SCHEMA, "screenshot"),
+        readme: p.str(ns::TAR, "readme"),
+        readme_base_url: p.iri(ns::TAR, "readmeBaseURL"),
         license: p.iri(ns::DCT, "license"),
-        kind: p.str(ns::TAR, "kind").or_else(|| p.str(ns::SCHEMA, "applicationCategory")),
-        maturity: p.str(ns::TAR, "maturity"),
+        kind: p.str(ns::SCHEMA, "applicationCategory").or_else(|| p.str(ns::TAR, "kind")),
+        maturity: p.str(ns::TAR, "maturity").or_else(|| {
+            // Recover the literal from the IRI for records written by an older build.
+            p.iri(ns::CODEMETA, "developmentStatus").and_then(|i| i.rsplit('#').next().map(str::to_string))
+        }),
         edam_topics: ctx.type_refs(&p.iris(ns::DCT, "subject")),
         keywords: p.strs(ns::SCHEMA, "keywords"),
         publisher: ctx.opt_agent_ref(p.iri(ns::DCT, "publisher")),
-        contact: ctx.opt_agent_ref(p.iri(ns::TAR, "contact")),
+        contact: ctx.opt_agent_ref(p.iri(ns::CODEMETA, "maintainer").or_else(|| p.iri(ns::TAR, "contact"))),
         publications: p.iris(ns::DCT, "references"),
         capability,
         latest_release: None,
@@ -243,7 +275,7 @@ SELECT ?sw (COUNT(DISTINCT ?i) AS ?n) WHERE {{
         r#"{p}
 SELECT ?sw (COUNT(DISTINCT ?run) AS ?n) WHERE {{
   GRAPH ?g {{
-    ?run a prov:Activity ; tar:atInstance ?i ; prov:startedAtTime ?t .
+    ?run a prov:Activity ; prov:wasAssociatedWith|tar:atInstance ?i ; prov:startedAtTime ?t .
     ?i tar:instanceOf ?sw .
   }}
   FILTER(?t >= "{since}"^^xsd:dateTime)

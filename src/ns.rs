@@ -1,8 +1,10 @@
 //! Vocabulary constants and term helpers.
 //!
-//! The registry speaks DCAT 3, PROV-O, schema.org, SKOS, SPDX and DCTERMS, plus a small
-//! `tar:` namespace for the four things none of them cover: capability declarations,
-//! access descriptors, availability, and federation bookkeeping (spec §4, §6.1).
+//! The registry speaks DCAT 3, PROV-O, schema.org, SKOS, SPDX, DCTERMS, CodeMeta and ADMS,
+//! plus a small `tar:` namespace for the things none of them cover: capability declarations,
+//! access descriptors, and federation bookkeeping (spec §4, §6.1). Every `tar:` term is
+//! audited against the standard vocabularies in `docs/specs/2026-08-30-vocabulary-audit.md`;
+//! `shapes/vocab.ttl` records, per kept term, what was checked and why nothing standard fit.
 
 pub const TAR: &str = "https://w3id.org/tar/ns#";
 pub const DCAT: &str = "http://www.w3.org/ns/dcat#";
@@ -15,6 +17,15 @@ pub const SKOS: &str = "http://www.w3.org/2004/02/skos/core#";
 pub const SPDX: &str = "http://spdx.org/rdf/terms#";
 pub const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 pub const FOAF: &str = "http://xmlns.com/foaf/0.1/";
+/// CodeMeta terms (v3, w3id-hosted): `developmentStatus`, `maintainer`.
+pub const CODEMETA: &str = "https://w3id.org/codemeta/terms/";
+/// W3C ADMS: `adms:status` marks tombstoned records with the EU dataset-status vocabulary.
+pub const ADMS: &str = "http://www.w3.org/ns/adms#";
+/// EU Publications Office access-right authority table, the DCAT-AP value set for
+/// `dct:accessRights`: PUBLIC, RESTRICTED, NON_PUBLIC, SENSITIVE, CONFIDENTIAL.
+pub const EU_ACCESS_RIGHT: &str = "http://publications.europa.eu/resource/authority/access-right/";
+/// EU dataset-status authority table; `WITHDRAWN` is the tombstone marker.
+pub const EU_DATASET_STATUS: &str = "http://publications.europa.eu/resource/authority/dataset-status/";
 
 /// Named graphs (spec §5.4). Provenance of every triple is recoverable by construction.
 pub const G_LOCAL: &str = "urn:tar:local";
@@ -40,7 +51,8 @@ pub fn rdf_type() -> oxigraph::model::NamedNode {
 pub fn jsonld_context() -> serde_json::Value {
     serde_json::json!({
         "tar": TAR, "dcat": DCAT, "dct": DCT, "prov": PROV, "schema": SCHEMA,
-        "rdfs": RDFS, "skos": SKOS, "spdx": SPDX, "xsd": XSD, "foaf": FOAF
+        "rdfs": RDFS, "skos": SKOS, "spdx": SPDX, "xsd": XSD, "foaf": FOAF,
+        "codemeta": CODEMETA, "adms": ADMS
     })
 }
 

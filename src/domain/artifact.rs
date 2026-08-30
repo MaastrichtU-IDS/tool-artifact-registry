@@ -19,6 +19,23 @@ pub const AVAILABILITIES: [&str; 4] = ["public", "restricted", "embargoed", "met
 pub const PROTOCOLS: [&str; 6] = ["https", "s3", "sparql", "oci", "ipfs", "file"];
 pub const AUTH_METHODS: [&str; 5] = ["none", "apikey", "oauth2", "basic", "signed-url"];
 
+/// The EU access-right authority concept for a `tar:availability` value (audit 2026-08-30).
+///
+/// Written as `dct:accessRights` beside `tar:availability` — DCAT 3 admits the property on
+/// both `dcat:Resource` and `dcat:Distribution`, and DCAT-AP binds its values to this table.
+/// The mapping is deliberately lossy: the table has no embargo concept and nothing that
+/// distinguishes "described but not retrievable", so `embargoed` and `metadata-only` both
+/// coarsen to NON_PUBLIC and the tar literal keeps the finer distinction.
+pub fn access_right(availability: &str) -> Option<String> {
+    let concept = match availability {
+        "public" => "PUBLIC",
+        "restricted" => "RESTRICTED",
+        "embargoed" | "metadata-only" => "NON_PUBLIC",
+        _ => return None,
+    };
+    Some(format!("{}{}", ns::EU_ACCESS_RIGHT, concept))
+}
+
 pub fn artifact_quads(base: &str, iri: &str, input: &ArtifactIn, actor: &str, run_iri: Option<&str>) -> Vec<Quad> {
     let mut quads = Vec::new();
     let mut n = Node::local(iri);
@@ -32,7 +49,8 @@ pub fn artifact_quads(base: &str, iri: &str, input: &ArtifactIn, actor: &str, ru
     n.datetime(ns::DCT, "issued", input.issued.as_deref().unwrap_or(&chrono::Utc::now().to_rfc3339()));
     n.links(ns::PROV, "wasDerivedFrom", &input.was_derived_from);
     n.opt_link(ns::PROV, "wasRevisionOf", &input.was_revision_of);
-    n.opt_text(ns::TAR, "externalKey", &input.external_key);
+    // Audit 2026-08-30: dct:identifier replaces tar:externalKey for the producer's own key.
+    n.opt_text(ns::DCT, "identifier", &input.external_key);
     if let Some(r) = run_iri {
         n.link(ns::PROV, "wasGeneratedBy", r);
     }
@@ -81,6 +99,10 @@ pub fn distribution_quads(iri: &str, d: &DistributionIn) -> Vec<Quad> {
     n.opt_text(ns::TAR, "accessProtocol", &d.access_protocol);
     n.opt_text(ns::TAR, "authMethod", &d.auth_method);
     n.text(ns::TAR, "availability", &availability);
+    // Supplement: the coarse standard reading of availability, for DCAT-AP harvesters.
+    if let Some(ar) = access_right(&availability) {
+        n.link(ns::DCT, "accessRights", &ar);
+    }
     n.opt_link(ns::TAR, "accessRequestURL", &d.access_request_url);
     if let Some(c) = &d.checksum {
         let mut cn = Node::blank(ns::G_LOCAL);
@@ -161,7 +183,7 @@ pub fn artifact_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Artifact {
         is_version_of: p.iri(ns::DCT, "isVersionOf"),
         was_generated_by: p.iri(ns::PROV, "wasGeneratedBy"),
         generated_by_run: None,
-        external_key: p.str(ns::TAR, "externalKey"),
+        external_key: p.str(ns::DCT, "identifier").or_else(|| p.str(ns::TAR, "externalKey")),
         origin: ctx.origin(p.graph.as_deref()),
         tombstoned: p.bool(ns::TAR, "tombstoned").unwrap_or(false),
     }

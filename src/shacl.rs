@@ -260,15 +260,15 @@ fn field_for(path: &str, focus: &str, hints: &HashMap<String, String>) -> String
     let local = |ns_: &str, name: &str| format!("{ns_}{name}");
     let base = [
         (local(ns::SCHEMA, "name"), "name"),
-        (local(ns::TAR, "tagline"), "tagline"),
+        (local(ns::DCT, "abstract"), "tagline"),
         (local(ns::SCHEMA, "description"), "description"),
         (local(ns::SCHEMA, "url"), "homepage"),
         (local(ns::SCHEMA, "codeRepository"), "code_repository"),
         (local(ns::SCHEMA, "softwareHelp"), "documentation"),
         (local(ns::SCHEMA, "softwareVersion"), "version"),
         (local(ns::DCT, "license"), "license"),
-        (local(ns::TAR, "kind"), "kind"),
-        (local(ns::TAR, "maturity"), "maturity"),
+        (local(ns::SCHEMA, "applicationCategory"), "kind"),
+        (local(ns::CODEMETA, "developmentStatus"), "maturity"),
         (local(ns::DCT, "subject"), "edam_topics"),
         (local(ns::SCHEMA, "keywords"), "keywords"),
         (local(ns::RDFS, "label"), "label"),
@@ -295,11 +295,13 @@ fn field_for(path: &str, focus: &str, hints: &HashMap<String, String>) -> String
         (local(ns::TAR, "accessProtocol"), "access_protocol"),
         (local(ns::TAR, "authMethod"), "auth_method"),
         (local(ns::TAR, "availability"), "availability"),
+        (local(ns::DCT, "accessRights"), "availability"),
         (local(ns::TAR, "accessRequestURL"), "access_request_url"),
         (local(ns::PROV, "startedAtTime"), "run.started_at"),
         (local(ns::PROV, "endedAtTime"), "run.ended_at"),
         (local(ns::TAR, "status"), "run.status"),
-        (local(ns::TAR, "atInstance"), "run.instance"),
+        (local(ns::SCHEMA, "actionStatus"), "run.status"),
+        (local(ns::PROV, "wasAssociatedWith"), "run.instance"),
     ]
     .into_iter()
     .find(|(iri, _)| iri == path)

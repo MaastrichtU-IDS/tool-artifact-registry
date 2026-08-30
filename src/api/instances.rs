@@ -224,7 +224,7 @@ pub async fn runs(
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Instance, &id);
     let body = format!(
-        "GRAPH ?g {{ ?s a <{t}> ; tar:atInstance <{iri}> }}\n{}",
+        "GRAPH ?g {{ ?s a <{t}> ; prov:wasAssociatedWith|tar:atInstance <{iri}> }}\n{}",
         paging.cursor_filter("?s"),
         t = rundom::TYPE_ACTIVITY
     );
@@ -247,7 +247,7 @@ pub async fn artifacts(
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Instance, &id);
     let body = format!(
-        "GRAPH ?g {{ ?run tar:atInstance <{iri}> . ?s prov:wasGeneratedBy ?run }}\n{}",
+        "GRAPH ?g {{ ?run prov:wasAssociatedWith|tar:atInstance <{iri}> . ?s prov:wasGeneratedBy ?run }}\n{}",
         paging.cursor_filter("?s")
     );
     let (iris, next) = page_iris(&state, &body, &paging)?;

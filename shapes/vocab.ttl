@@ -38,54 +38,192 @@
     skos:prefLabel "Literature and language" .
 
 # --- the tar: vocabulary itself -------------------------------------------
+#
+# Audited against DCAT 3 / DCAT-AP, DCTERMS, PROV-O, schema.org + Bioschemas, ADMS, VoID,
+# DQV, ODRL, FOAF, DOAP, CodeMeta, biotoolsSchema, SKOS, RO-Crate and the EU authority
+# tables on 2026-08-30 (docs/specs/2026-08-30-vocabulary-audit.md). Every term kept below
+# says what was checked and why nothing standard fit; terms a standard vocabulary does
+# cover are marked owl:deprecated and are no longer written, only read as fallbacks for
+# graphs written before the audit.
+
+# ---- marker classes -------------------------------------------------------
+
+tar:Software a rdfs:Class ;
+    rdfs:label "Software" ;
+    rdfs:comment "Registry-internal discriminator beside schema:SoftwareApplication. Kept: a Release is also a schema:SoftwareApplication (spec §4.2), so SHACL targeting and count queries need a type that separates the two; no standard vocabulary distinguishes 'abstract software' from 'versioned release' as classes." .
+
+tar:Release a rdfs:Class ;
+    rdfs:label "Release" ;
+    rdfs:comment "Registry-internal discriminator for a versioned, runnable plan (also schema:SoftwareApplication + prov:Plan). Kept for the same SHACL-targeting reason as tar:Software." .
+
+tar:Instance a rdfs:Class ;
+    rdfs:label "Instance" ;
+    rdfs:comment "Registry-internal discriminator for a deployment (also prov:SoftwareAgent, and dcat:DataService when it serves an endpoint). Kept: prov:SoftwareAgent alone cannot be a SHACL target without also firing on other agents." .
 
 tar:Capability a rdfs:Class ;
     rdfs:label "Capability" ;
-    rdfs:comment "A class-level declaration of what a Software, Release or Instance can consume and produce." .
+    rdfs:comment "A class-level declaration of what a Software, Release or Instance can consume and produce. Kept after checking Bioschemas ComputationalTool (bioschemas.org/properties/input|output expect FormalParameter nodes attached to the tool itself, not a reusable declaration object) and biotoolsSchema (function/input/output is JSON/XML, not RDF). The /export/biotools endpoint is where that mapping belongs; in the graph the Capability node doubles as the prov:Plan of runs." .
+
+# ---- capability -----------------------------------------------------------
+
+tar:hasCapability a rdf:Property ;
+    rdfs:label "has capability" ;
+    rdfs:comment "Software/Release/Instance to Capability. Kept: no standard property attaches an I/O declaration object to a tool (schema:featureList is free text; bioschemas input/output skip the declaration node entirely)." .
 
 tar:produces a rdf:Property ;
     rdfs:label "produces" ;
-    rdfs:domain tar:Capability .
+    rdfs:domain tar:Capability ;
+    rdfs:comment "Capability to ArtifactType (any IRI; EDAM recommended). Kept: bioschemas:output expects a FormalParameter with name/encodingFormat, not a bare type concept; wfdesc:hasOutput expects workflow Parameter nodes. Both would force an indirection this model does not need — the EDAM typing harvesters care about is already here as the object IRI." .
 
 tar:consumes a rdf:Property ;
     rdfs:label "consumes" ;
-    rdfs:domain tar:Capability .
+    rdfs:domain tar:Capability ;
+    rdfs:comment "Capability to ArtifactType. Kept for the same reasons as tar:produces (bioschemas:input / wfdesc:hasInput expect parameter nodes, not type concepts)." .
+
+# ---- structure ------------------------------------------------------------
 
 tar:runsRelease a rdf:Property ;
     rdfs:label "runs release" ;
-    rdfs:comment "Links a deployment to the versioned plan it executes." .
+    rdfs:comment "Links a deployment to the versioned plan it currently executes. Kept: checked schema.org (no 'runs version of' relation), DOAP (doap:release goes Project→Version, the wrong direction and wrong subject), PROV (prov:hadPlan exists only on a qualified Association), DCAT (dcat:version is a literal). Nothing standard expresses 'deployment X currently runs release Y'." .
 
 tar:instanceOf a rdf:Property ;
     rdfs:label "instance of" ;
-    rdfs:comment "Denormalised link from a deployment to its Software, derivable through the Release." .
+    rdfs:comment "Denormalised link from a deployment to its Software, derivable through the Release. Kept: checked schema.org, DOAP, DCAT and PROV — no vocabulary has a 'deployment of software' property (dct:isVersionOf would wrongly claim the Instance is a version, prov:specializationOf wrongly claims it is the same entity)." .
 
-tar:atInstance a rdf:Property ;
-    rdfs:label "at instance" ;
-    rdfs:comment "Denormalised link from a Run to the deployment that performed it; the authoritative form is prov:qualifiedAssociation." .
+tar:usedRelease a rdf:Property ;
+    rdfs:label "used release" ;
+    rdfs:comment "Denormalised Run-to-Release shortcut; the authoritative form is prov:qualifiedAssociation/prov:hadPlan, always written beside it. Kept: PROV deliberately has no unqualified activity-to-plan property, and prov:used cannot be reused because this registry's readers treat prov:used as 'consumed artifact' (lineage traversal, used_count)." .
+
+# ---- access descriptors ---------------------------------------------------
 
 tar:availability a rdf:Property ;
     rdfs:label "availability" ;
-    rdfs:comment "public | restricted | embargoed | metadata-only." .
+    rdfs:comment "public | restricted | embargoed | metadata-only. Kept, but always written beside its standard reading: dct:accessRights with the EU access-right authority table (PUBLIC / RESTRICTED / NON_PUBLIC), which is what DCAT-AP harvesters understand. The table has no embargo concept and cannot distinguish 'described but not retrievable' from merely non-public, and the metadata-only SHACL rules key on those distinctions, so the four-way literal remains authoritative and dct:accessRights is the lossy supplement (embargoed and metadata-only both coarsen to NON_PUBLIC)." .
 
-tar:accessProtocol a rdf:Property ; rdfs:label "access protocol" .
-tar:authMethod a rdf:Property ; rdfs:label "auth method" .
-tar:accessRequestURL a rdf:Property ; rdfs:label "access request URL" .
-tar:externalKey a rdf:Property ; rdfs:label "external key" .
-tar:status a rdf:Property ; rdfs:label "run status" .
-tar:homeRegistry a rdf:Property ; rdfs:label "home registry" .
-tar:tombstoned a rdf:Property ; rdfs:label "tombstoned" .
+tar:accessProtocol a rdf:Property ;
+    rdfs:label "access protocol" ;
+    rdfs:comment "https | s3 | sparql | oci | ipfs | file. Kept: DCAT 3 conveys protocol only implicitly via the accessURL scheme and dcat:accessService/endpointDescription; there is no machine-readable protocol property in DCAT, DCAT-AP, VoID or schema.org. An explicit enum lets a client pick a retrievable distribution without URL-scheme heuristics." .
+
+tar:authMethod a rdf:Property ;
+    rdfs:label "auth method" ;
+    rdfs:comment "none | apikey | oauth2 | basic | signed-url. Kept: checked DCAT 3 (nothing), ODRL (policies express permissions/duties, not authentication mechanics), schema:conditionsOfAccess (free text for humans). Machine-readable auth schemes otherwise live only inside OpenAPI documents behind dcat:endpointDescription; this is the FAIR A1.2 hint at the distribution itself." .
+
+tar:accessRequestURL a rdf:Property ;
+    rdfs:label "access request URL" ;
+    rdfs:comment "Where to request access when a distribution is not public. Kept: nearest standard terms are dcat:landingPage (dataset-level, general navigation, not specifically an access-request flow) and odrl:hasPolicy (expresses the policy, not where to apply). DCAT-AP 3 has no access-request property; HealthDCAT-AP is still drafting one. Revisit when that stabilises." .
+
+tar:defaultMediaType a rdf:Property ;
+    rdfs:label "default media type" ;
+    rdfs:comment "Annotates an ArtifactType concept with the media type its artifacts usually have. Kept: dcat:mediaType is defined on dcat:Distribution (each concrete distribution here already carries it); putting it on a skos:Concept would misstate its domain. This is scheme-level UI metadata, not a claim about any distribution." .
+
+# ---- run bookkeeping ------------------------------------------------------
+
+tar:status a rdf:Property ;
+    rdfs:label "run status" ;
+    rdfs:comment "success | failed | running | aborted. Kept, but always written beside schema:actionStatus (runs are also typed schema:Action): the schema.org ActionStatusType enumeration has no distinct member for 'aborted' (folded into FailedActionStatus), so the literal stays authoritative and the schema term is the interoperable supplement. PROV models run state only indirectly (prov:endedAtTime plus subtyping), which loses failure semantics." .
+
 tar:openLineagePayload a rdf:Property ;
     rdfs:label "OpenLineage payload" ;
-    rdfs:comment "The original OpenLineage event, preserved verbatim so nothing the mapping does not name is lost." .
+    rdfs:comment "The original OpenLineage event, preserved verbatim so nothing the mapping does not name is lost. Kept: OpenLineage is JSON, not RDF; no vocabulary models 'the foreign event this record was derived from' better than a literal." .
+
+tar:claimedNamespace a rdf:Property ;
+    rdfs:label "claimed namespace" ;
+    rdfs:comment "The job.namespace an OpenLineage payload claimed. Recorded as a label only — authorisation always comes from the credential (spec §8.3). Kept: deliberately not dct:identifier, which would suggest the value identifies something." .
+
+# ---- lifecycle ------------------------------------------------------------
+
+tar:tombstoned a rdf:Property ;
+    rdfs:label "tombstoned" ;
+    rdfs:comment "Boolean soft-delete marker; the IRI keeps resolving (spec §7.2). Kept as the cheap query key, but every tombstone also writes the standard reading: adms:status pointing at the EU dataset-status concept WITHDRAWN. prov:invalidatedAtTime was rejected as the sole form because its domain is prov:Entity and tombstones also apply to Instances (agents) and Software." .
+
+tar:tombstonedAt a rdf:Property ;
+    rdfs:label "tombstoned at" ;
+    rdfs:comment "When the record was tombstoned. Kept alongside adms:status for the same domain reason as tar:tombstoned; on artifacts (prov:Entity) prov:invalidatedAtTime would fit and may be added as a supplement later." .
+
+tar:health a rdf:Property ;
+    rdfs:label "health" ;
+    rdfs:comment "Operational health of a deployment (ok | degraded | down | unknown), volatile and registry-observed. Kept: no catalogue vocabulary models liveness; DQV measures dataset quality, not service uptime." .
+
+# ---- software description -------------------------------------------------
+
+tar:readme a rdf:Property ;
+    rdfs:label "readme" ;
+    rdfs:comment "The full README of a Software record, as inline Markdown. Kept: codemeta:readme is a URL pointing at a README file, not its content, and schema:text would claim the README is the text of the software record itself. The registry stores the content so the UI renders without a network call." .
+
+tar:readmeBaseURL a rdf:Property ;
+    rdfs:label "readme base URL" ;
+    rdfs:comment "Base against which relative links and images inside the README resolve, normally a repository's raw content root. Kept: registry-specific rendering detail with no standard counterpart." .
+
+tar:containerImage a rdf:Property ;
+    rdfs:label "container image" ;
+    rdfs:comment "OCI image reference of a Release (e.g. ghcr.io/org/tool:2.1.0). Kept: checked CodeMeta (nothing for container refs), schema:downloadUrl (an OCI reference is not a URL) and DOAP. Paired with tar:imageDigest for provenance." .
+
+tar:imageDigest a rdf:Property ;
+    rdfs:label "image digest" ;
+    rdfs:comment "The immutable sha256 digest of the container image. Kept: spdx:checksum applies to a spdx:Checksum node on a distribution's bytes; the digest here identifies the runnable plan, not an advertised artifact." .
+
+tar:installCommand a rdf:Property ;
+    rdfs:label "install command" ;
+    rdfs:comment "One-line install/pull command for a Release. Kept: codemeta:buildInstructions is a URL to build docs, not an executable one-liner; no schema.org term exists." .
+
+tar:jurisdiction a rdf:Property ;
+    rdfs:label "jurisdiction" ;
+    rdfs:comment "Legal jurisdiction a deployment operates under (e.g. NL). Kept: dct:spatial asserts spatial *coverage* of data, not the law an operator answers to; DPV's dpv:hasJurisdiction expects a Location resource and would drag in a policy framework for one field. Values stay ISO 3166 literals." .
+
+# ---- workload identity (addendum D12–D15) --------------------------------
 
 tar:oidcClientId a rdf:Property ;
     rdfs:label "OIDC client id" ;
-    rdfs:comment "The identity-provider client (Keycloak client, Kubernetes ServiceAccount subject, GitHub Actions subject) allowed to advertise as this deployment." .
+    rdfs:comment "The identity-provider client (Keycloak client, Kubernetes ServiceAccount subject, GitHub Actions subject) allowed to advertise as this deployment. Kept: registry security configuration; no RDF vocabulary models workload-identity binding." .
 
 tar:oidcIssuer a rdf:Property ;
     rdfs:label "OIDC issuer" ;
-    rdfs:comment "Restricts the client id above to one issuer; a client id is only unique within an issuer." .
+    rdfs:comment "Restricts the client id above to one issuer; a client id is only unique within an issuer. Kept with tar:oidcClientId." .
 
 tar:allowedScope a rdf:Property ;
     rdfs:label "allowed scope" ;
-    rdfs:comment "Scopes granted to a verified workload token that carries none of this registry's own scopes." .
+    rdfs:comment "Scopes granted to a verified workload token that carries none of this registry's own scopes. Kept with tar:oidcClientId." .
+
+# ---- validation reporting -------------------------------------------------
+
+tar:jsonField a rdf:Property ;
+    rdfs:label "JSON field" ;
+    rdfs:comment "On a sh:ValidationResult: the dotted path into the request body the result is about, so the UI can attach an error to an input. An extra triple on a standard report; plain SHACL consumers ignore it." .
+
+# ---- deprecated: replaced by standard terms in the 2026-08-30 audit -------
+# Still read as fallbacks for graphs written before the audit; never written again.
+
+tar:atInstance a rdf:Property ;
+    owl:deprecated true ;
+    rdfs:label "at instance" ;
+    rdfs:comment "Replaced by prov:wasAssociatedWith — PROV-O's own unqualified form of the prov:qualifiedAssociation this registry already writes (domain prov:Activity, range prov:Agent; the Instance is a prov:SoftwareAgent)." .
+
+tar:externalKey a rdf:Property ;
+    owl:deprecated true ;
+    rdfs:label "external key" ;
+    rdfs:comment "Replaced by dct:identifier: 'an unambiguous reference to the resource within a given context' is exactly a CI system's own run/dataset key. adms:identifier was considered and rejected as requiring an adms:Identifier node with agency and notation for what is a plain opaque token." .
+
+tar:homeRegistry a rdf:Property ;
+    owl:deprecated true ;
+    rdfs:label "home registry" ;
+    rdfs:comment "Replaced by dcat:inCatalog (new in DCAT 3, inverse of dcat:resource). Per its scope note the catalog-side dcat:resource edge is written too." .
+
+tar:tagline a rdf:Property ;
+    owl:deprecated true ;
+    rdfs:label "tagline" ;
+    rdfs:comment "Replaced by dct:abstract ('a summary of the resource'); schema:description keeps the long form. schema:slogan was rejected (domainIncludes Organization/Brand/Product, not CreativeWork)." .
+
+tar:kind a rdf:Property ;
+    owl:deprecated true ;
+    rdfs:label "kind" ;
+    rdfs:comment "Replaced by schema:applicationCategory, which the registry already wrote with the identical value — the tar: triple was pure duplication." .
+
+tar:maturity a rdf:Property ;
+    owl:deprecated true ;
+    rdfs:label "maturity" ;
+    rdfs:comment "Replaced by codemeta:developmentStatus ('description of development status, e.g. active, inactive, suspended', repostatus.org values recommended). adms:status was rejected: it expects workflow-status concepts, not software lifecycle." .
+
+tar:contact a rdf:Property ;
+    owl:deprecated true ;
+    rdfs:label "contact" ;
+    rdfs:comment "Replaced by codemeta:maintainer ('individual responsible for maintaining the software, usually includes an email contact address'). schema:maintainer is still pending in schema.org; dcat:contactPoint formally ranges over vcard:Kind while these agents are schema:Person/Organization." .

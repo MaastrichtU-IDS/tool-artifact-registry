@@ -18,6 +18,7 @@ export default function SoftwareForm() {
     name: '', tagline: '', description: '', homepage: '', code_repository: '', documentation: '',
     license: '', kind: '', maturity: '', keywords: '', edam_topics: '', publisher_name: '',
     publisher_id: '', consumes: '', produces: '',
+    image: '', screenshots: '', readme: '', readme_base_url: '',
   })
   const [loading, setLoading] = useState(editing)
   const [saving, setSaving] = useState(false)
@@ -31,6 +32,10 @@ export default function SoftwareForm() {
         name: s.name, tagline: s.tagline ?? '', description: s.description ?? '',
         homepage: s.homepage ?? '', code_repository: s.code_repository ?? '',
         documentation: s.documentation ?? '', license: s.license ?? '', kind: s.kind ?? '',
+        image: s.image ?? '',
+        screenshots: s.screenshots.join('\n'),
+        readme: s.readme ?? '',
+        readme_base_url: s.readme_base_url ?? '',
         maturity: s.maturity ?? '', keywords: s.keywords.join(', '),
         edam_topics: s.edam_topics.map((t) => t.iri).join('\n'),
         publisher_name: s.publisher?.name ?? '', publisher_id: s.publisher?.identifier ?? '',
@@ -70,6 +75,10 @@ export default function SoftwareForm() {
       homepage: form.homepage || undefined,
       code_repository: form.code_repository || undefined,
       documentation: form.documentation || undefined,
+      image: form.image || undefined,
+      screenshots: lines(form.screenshots),
+      readme: form.readme || undefined,
+      readme_base_url: form.readme_base_url || undefined,
       license: form.license || undefined,
       kind: form.kind || undefined,
       maturity: form.maturity || undefined,
@@ -150,6 +159,48 @@ export default function SoftwareForm() {
           <label htmlFor="docs">Documentation</label>
           <input id="docs" value={form.documentation} onChange={set('documentation')} />
           {err('documentation')}
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Images and readme</legend>
+        <p className="hint" style={{ marginTop: 0 }}>
+          The registry stores pointers, never bytes — these are URLs to wherever the images
+          already live.
+        </p>
+        <div className={field('image')}>
+          <label htmlFor="image">Logo or hero image</label>
+          <input id="image" value={form.image} onChange={set('image')} placeholder="https://…/logo.png" />
+          <p className="hint">Shown as the thumbnail in the software list.</p>
+          {err('image')}
+        </div>
+        <div className={field('screenshots')}>
+          <label htmlFor="screenshots">Screenshots — one URL per line</label>
+          <textarea id="screenshots" value={form.screenshots} onChange={set('screenshots')}
+                    placeholder={'https://…/screen-1.png\nhttps://…/screen-2.png'} />
+          {err('screenshots')}
+        </div>
+        <div className={field('readme')}>
+          <label htmlFor="readme">Readme — full Markdown</label>
+          <textarea id="readme" value={form.readme} onChange={set('readme')} rows={14}
+                    style={{ minHeight: 260, fontFamily: 'var(--mono)', fontSize: 13 }}
+                    placeholder={'# Tool name\n\nParagraphs, lists, tables, code fences and images all render.'} />
+          <p className="hint">
+            Paste the repository's README. It renders below the short description on the tool's
+            page, images and all.
+          </p>
+          {err('readme')}
+        </div>
+        <div className={field('readme_base_url')}>
+          <label htmlFor="readme_base">Readme base URL</label>
+          <input id="readme_base" value={form.readme_base_url} onChange={set('readme_base_url')}
+                 placeholder="https://raw.githubusercontent.com/OWNER/REPO/main/" />
+          <p className="hint">
+            Relative images and links in the README resolve against this — a repository's raw
+            content root. Without it, <code>![](docs/img.png)</code> resolves nowhere and is
+            dropped rather than shown broken.
+          </p>
+          {err('readme_base_url')}
         </div>
       </fieldset>
 

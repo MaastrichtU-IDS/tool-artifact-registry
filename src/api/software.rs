@@ -38,7 +38,7 @@ pub struct SoftwareFilter {
 fn where_body(f: &SoftwareFilter) -> String {
     let mut w = format!(
         "GRAPH ?g {{ ?s a <{t}> ; schema:name ?name . \
-         OPTIONAL {{ ?s tar:tagline ?tagline }} OPTIONAL {{ ?s schema:description ?desc }} }}",
+         OPTIONAL {{ ?s dct:abstract|tar:tagline ?tagline }} OPTIONAL {{ ?s schema:description ?desc }} }}",
         t = dom::TYPE_SOFTWARE
     );
     if let Some(q) = &f.q {
@@ -61,7 +61,10 @@ fn where_body(f: &SoftwareFilter) -> String {
         w.push_str(&format!("\nGRAPH ?g {{ ?s schema:keywords \"{}\" }}", super::escape_literal(k)));
     }
     if let Some(k) = f.kind.as_deref().filter(|v| !v.is_empty()) {
-        w.push_str(&format!("\nGRAPH ?g {{ ?s tar:kind \"{}\" }}", super::escape_literal(k)));
+        w.push_str(&format!(
+            "\nGRAPH ?g {{ ?s schema:applicationCategory|tar:kind \"{}\" }}",
+            super::escape_literal(k)
+        ));
     }
     match f.registry.as_deref() {
         Some("local") => w.push_str(&format!("\nFILTER(?g = <{}>)", ns::G_LOCAL)),
@@ -99,7 +102,9 @@ pub async fn list(
 
 fn facets(ctx: &Ctx) -> AppResult<Vec<Facet>> {
     let mut out = Vec::new();
-    for (name, predicate) in [("license", "dct:license"), ("kind", "tar:kind"), ("edam_topic", "dct:subject")] {
+    for (name, predicate) in
+        [("license", "dct:license"), ("kind", "schema:applicationCategory|tar:kind"), ("edam_topic", "dct:subject")]
+    {
         let q = format!(
             "{p}\nSELECT ?v (COUNT(DISTINCT ?s) AS ?n) WHERE {{ GRAPH ?g {{ ?s a <{t}> ; {predicate} ?v }} }} GROUP BY ?v ORDER BY DESC(?n) LIMIT 25",
             p = ns::PREFIXES,
@@ -215,6 +220,9 @@ pub async fn tombstone(state: &AppState, iri: &str, principal: &Principal) -> Ap
     let mut n = crate::rdf::Node::local(iri);
     n.boolean(ns::TAR, "tombstoned", true);
     n.datetime(ns::TAR, "tombstonedAt", &chrono::Utc::now().to_rfc3339());
+    // Supplement (audit 2026-08-30): the standard reading of a tombstone. adms:status has an
+    // open domain, and WITHDRAWN comes from the EU dataset-status authority table.
+    n.link(ns::ADMS, "status", &format!("{}WITHDRAWN", ns::EU_DATASET_STATUS));
     n.link(ns::PROV, "wasAttributedTo", &principal.subject);
     let mut tx = GraphTx::new();
     tx.extend(n.finish());

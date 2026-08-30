@@ -134,10 +134,10 @@ fn local_hits(ctx: &Ctx, q: &str, only: Option<&str>, limit: usize) -> AppResult
     let filter = super::text_filter(q, &["?title", "?extra"]);
     let mut hits = Vec::new();
     let kinds: Vec<(&str, &str, &str, &str)> = vec![
-        ("software", crate::domain::software::TYPE_SOFTWARE, "schema:name", "tar:tagline"),
+        ("software", crate::domain::software::TYPE_SOFTWARE, "schema:name", "dct:abstract|tar:tagline"),
         ("instance", crate::domain::instance::TYPE_SOFTWARE_AGENT, "rdfs:label", "dct:description"),
         ("artifact", crate::domain::artifact::TYPE_DATASET, "dct:title", "dct:description"),
-        ("run", crate::domain::run::TYPE_ACTIVITY, "rdfs:label", "tar:externalKey"),
+        ("run", crate::domain::run::TYPE_ACTIVITY, "rdfs:label", "dct:identifier|tar:externalKey"),
     ];
     for (name, type_iri, title_pred, extra_pred) in kinds {
         if let Some(o) = only {

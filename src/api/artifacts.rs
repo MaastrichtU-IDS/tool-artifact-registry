@@ -56,12 +56,14 @@ fn where_body(base: &str, f: &ArtifactFilter) -> String {
     }
     if let Some(i) = f.instance.as_deref().filter(|v| !v.is_empty()) {
         let iri = ids::iri_for(base, Kind::Instance, i);
-        w.push_str(&format!("\nGRAPH ?g {{ ?s prov:wasGeneratedBy ?r . ?r tar:atInstance <{iri}> }}"));
+        w.push_str(&format!(
+            "\nGRAPH ?g {{ ?s prov:wasGeneratedBy ?r . ?r prov:wasAssociatedWith|tar:atInstance <{iri}> }}"
+        ));
     }
     if let Some(sw) = f.software.as_deref().filter(|v| !v.is_empty()) {
         let iri = ids::iri_for(base, Kind::Software, sw);
         w.push_str(&format!(
-            "\nGRAPH ?g {{ ?s prov:wasGeneratedBy ?r . ?r tar:atInstance ?i . ?i tar:instanceOf <{iri}> }}"
+            "\nGRAPH ?g {{ ?s prov:wasGeneratedBy ?r . ?r prov:wasAssociatedWith|tar:atInstance ?i . ?i tar:instanceOf <{iri}> }}"
         ));
     }
     if let Some(r) = f.run.as_deref().filter(|v| !v.is_empty()) {

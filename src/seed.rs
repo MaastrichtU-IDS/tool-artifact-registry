@@ -187,6 +187,8 @@ pub async fn seed_ids_examples(state: &Arc<AppState>, with_runs: bool) -> Result
             documentation: Some(format!("{}#readme", s.repo)),
             image: None,
             screenshots: Vec::new(),
+            readme: None,
+            readme_base_url: None,
             license: Some("https://spdx.org/licenses/Apache-2.0".into()),
             kind: Some(s.kind.into()),
             maturity: Some("active".into()),

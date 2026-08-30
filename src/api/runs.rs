@@ -27,7 +27,7 @@ pub struct RunFilter {
 pub async fn list(State(state): State<Arc<AppState>>, Query(f): Query<RunFilter>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let mut body = format!(
-        "GRAPH ?g {{ ?s a <{t}> . OPTIONAL {{ ?s rdfs:label ?label }} OPTIONAL {{ ?s tar:externalKey ?key }} }}",
+        "GRAPH ?g {{ ?s a <{t}> . OPTIONAL {{ ?s rdfs:label ?label }} OPTIONAL {{ ?s dct:identifier|tar:externalKey ?key }} }}",
         t = dom::TYPE_ACTIVITY
     );
     if let Some(q) = &f.q {
@@ -36,11 +36,13 @@ pub async fn list(State(state): State<Arc<AppState>>, Query(f): Query<RunFilter>
     }
     if let Some(i) = f.instance.as_deref().filter(|v| !v.is_empty()) {
         let iri = ids::iri_for(state.base(), Kind::Instance, i);
-        body.push_str(&format!("\nGRAPH ?g {{ ?s tar:atInstance <{iri}> }}"));
+        body.push_str(&format!("\nGRAPH ?g {{ ?s prov:wasAssociatedWith|tar:atInstance <{iri}> }}"));
     }
     if let Some(sw) = f.software.as_deref().filter(|v| !v.is_empty()) {
         let iri = ids::iri_for(state.base(), Kind::Software, sw);
-        body.push_str(&format!("\nGRAPH ?g {{ ?s tar:atInstance ?i . ?i tar:instanceOf <{iri}> }}"));
+        body.push_str(&format!(
+            "\nGRAPH ?g {{ ?s prov:wasAssociatedWith|tar:atInstance ?i . ?i tar:instanceOf <{iri}> }}"
+        ));
     }
     if let Some(s) = f.status.as_deref().filter(|v| !v.is_empty()) {
         body.push_str(&format!("\nGRAPH ?g {{ ?s tar:status \"{}\" }}", super::escape_literal(s)));

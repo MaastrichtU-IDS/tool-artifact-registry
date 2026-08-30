@@ -417,6 +417,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
 
 [[package]]
+name = "crossbeam-deque"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5181e0de7b61eb03a81e347d6dd8797bae9da5146707b51077e2d71a54ec0ceb"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-epoch"
+version = "0.9.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-queue"
 version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -714,9 +733,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1393,6 +1414,7 @@ checksum = "6d945cbe78640ab719a73697b9bd250054ea82c60470754efea79c21d5fc1cd1"
 dependencies = [
  "dashmap",
  "getrandom 0.3.4",
+ "js-sys",
  "libc",
  "oxiri",
  "oxrdf",
@@ -1493,6 +1515,7 @@ version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06fa874d87eae638daae9b4e3198864fe2cce68589f227c0b2cf5b62b1530516"
 dependencies = [
+ "js-sys",
  "thiserror",
 ]
 
@@ -1855,6 +1878,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rayon"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
+dependencies = [
+ "either",
+ "rayon-core",
+]
+
+[[package]]
+name = "rayon-core"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
+dependencies = [
+ "crossbeam-deque",
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2125,6 +2168,24 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest",
+]
+
+[[package]]
+name = "shacl-rust"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ed2b87043c79e9c2d30f1e5a4a5866727413338041ec855b2f8c7201093d4be"
+dependencies = [
+ "log",
+ "oxigraph",
+ "oxsdatatypes",
+ "rayon",
+ "regex",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "sha2",
+ "spargebra",
 ]
 
 [[package]]
@@ -2577,6 +2638,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shacl-rust",
  "sqlx",
  "thiserror",
  "tokio",

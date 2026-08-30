@@ -11,6 +11,11 @@ use oxigraph::model::Quad;
 use std::collections::HashMap;
 
 pub const TYPE_SOFTWARE: &str = "https://schema.org/SoftwareApplication";
+/// Registry-internal discriminators. A Release is *also* a `schema:SoftwareApplication`
+/// (spec §4.2), so without these neither a count query nor a SHACL `sh:targetClass` can tell
+/// the two apart, and the Software shape would fire on every Release.
+pub const TYPE_TAR_SOFTWARE: &str = "https://w3id.org/tar/ns#Software";
+pub const TYPE_TAR_RELEASE: &str = "https://w3id.org/tar/ns#Release";
 pub const TYPE_SOURCE: &str = "https://schema.org/SoftwareSourceCode";
 pub const TYPE_RELEASE_PLAN: &str = "http://www.w3.org/ns/prov#Plan";
 pub const TYPE_CAPABILITY: &str = "https://w3id.org/tar/ns#Capability";
@@ -22,6 +27,7 @@ pub fn software_quads(base: &str, iri: &str, input: &SoftwareIn, actor: &str, cr
     let mut n = Node::local(iri);
     n.a(TYPE_SOFTWARE);
     n.a(TYPE_SOURCE);
+    n.a(TYPE_TAR_SOFTWARE);
     n.text(ns::SCHEMA, "name", &input.name);
     n.opt_text(ns::TAR, "tagline", &input.tagline);
     n.opt_text(ns::SCHEMA, "description", &input.description);
@@ -75,6 +81,7 @@ pub fn release_quads(base: &str, iri: &str, software_iri: &str, input: &ReleaseI
     let mut n = Node::local(iri);
     n.a(TYPE_SOFTWARE);
     n.a(TYPE_RELEASE_PLAN);
+    n.a(TYPE_TAR_RELEASE);
     n.text(ns::SCHEMA, "softwareVersion", &input.version);
     n.opt_datetime(ns::SCHEMA, "datePublished", &input.date_published);
     n.opt_text(ns::TAR, "containerImage", &input.container_image);

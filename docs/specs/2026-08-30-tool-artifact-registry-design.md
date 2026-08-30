@@ -273,7 +273,7 @@ deployment is one container and one volume.
 | Cost | Mitigation |
 |---|---|
 | Oxigraph is single-writer; no clustering | Catalogue-scale workload. Writes are advertisements, not a data plane. Deployment is 1 replica by design (§10). |
-| No relational constraints on the graph | SHACL shapes ship with the registry and validate every write before commit (`TAR_SHACL_VALIDATE_WRITES`, default on). Dogfoods `shacl-manager`'s shapes. |
+| No relational constraints on the graph | SHACL shapes ship with the registry and validate every write before commit (`TAR_SHACL_VALIDATE_WRITES`, default on), enforced by the [`shacl-rust`](https://github.com/ensaremirerol/shacl-rust) engine. Dogfoods `shacl-manager`'s shapes. |
 | SPARQL pagination is awkward | The REST API owns pagination via SQLite-backed keyset cursors; SPARQL is for ad-hoc analytical use, not the UI. |
 | Ceiling if an estate outgrows embedded storage | All graph access sits behind a `GraphStore` trait. A `RemoteSparqlStore` implementation (Fuseki / QLever / GraphDB) is a config switch, not a rewrite. This is a v1 structural requirement, not a v2 aspiration. |
 
@@ -725,7 +725,7 @@ Full screen inventory, routes, component list, API contracts per screen, and sta
 | Q3 | Retention and GC for stale peer stubs. | Currently TTL-refreshed forever. Do stubs for a peer that has been unreachable for 90 days get dropped, tombstoned, or kept? |
 | Q4 | Multi-tenancy inside one registry. | Out of scope for v1 (§1.2). Confirm no IDS use case needs it before that ossifies — retrofitting tenancy onto named graphs is expensive. |
 | Q5 | Should `Capability` eventually be a SHACL shape rather than an `ArtifactType` chip? | Far more precise matchmaking ("consumes graphs conforming to *this* shape"). Natural v2, and `shacl-manager` already has the machinery. |
-| Q6 | Is SHACL write-validation blocking or advisory? | Spec assumes blocking (`422`). Advisory may be better for adoption — a half-described artifact is more useful than a rejected one. |
+| Q6 | Is SHACL write-validation blocking or advisory? | **Answered in the prototype: severity decides.** `sh:Violation` blocks with `422`; `sh:Warning` is recorded and never blocks, which is how "no licence declared" and "no distribution" are handled. `TAR_SHACL_VALIDATE_WRITES=false` downgrades violations to warnings for an estate that prefers a half-described artifact to a rejected one. |
 | Q7 | Project licence and repository home. | Assumed Apache-2.0 under `MaastrichtU-IDS`, matching siblings. Confirm. |
 | Q8 | Rate limiting and abuse controls for a public instance. | Not designed yet. Needed before any registry is exposed to the open internet with `TAR_PUBLIC_READ=true`. |
 | Q9 | `TAR_BASE_IRI` change after data exists. | A rebase migration is named in §10.5 but not specified. Needed before the first production deployment moves domain. |

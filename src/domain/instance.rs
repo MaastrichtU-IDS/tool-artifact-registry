@@ -13,12 +13,14 @@ use oxigraph::model::Quad;
 use std::collections::HashMap;
 
 pub const TYPE_SOFTWARE_AGENT: &str = "http://www.w3.org/ns/prov#SoftwareAgent";
+pub const TYPE_TAR_INSTANCE: &str = "https://w3id.org/tar/ns#Instance";
 pub const TYPE_DATA_SERVICE: &str = "http://www.w3.org/ns/dcat#DataService";
 
 pub fn instance_quads(base: &str, iri: &str, input: &InstanceIn, actor: &str, software: Option<&str>) -> Vec<Quad> {
     let mut quads = Vec::new();
     let mut n = Node::local(iri);
     n.a(TYPE_SOFTWARE_AGENT);
+    n.a(TYPE_TAR_INSTANCE);
     // Only a deployment that serves an endpoint is a dcat:DataService (spec §4.2). An
     // Instance without one is a laptop or a batch job, and that is normal (handoff §5.3).
     if input.endpoint_url.as_deref().is_some_and(|s| !s.is_empty()) {

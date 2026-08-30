@@ -74,11 +74,27 @@ async fn advertise(
             "credential names Instance {instance_iri}, which this registry does not know"
         )));
     }
-    shacl::enforce(shacl::validate_run(&instance_iri, &input.run), state.config.shacl_validate_writes)?;
-    for a in &input.artifacts {
-        if a.iri.is_none() {
-            shacl::enforce(shacl::validate_artifact("urn:tar:new-artifact", a), state.config.shacl_validate_writes)?;
+    // Validate up front, on throwaway candidate quads, rather than on the transaction just
+    // before it commits: the loop below writes idempotency and resolution rows to SQLite as it
+    // goes, and a rejection after that would leave a claim recorded for a run that never
+    // existed.
+    {
+        let mut candidate = rundom::run_quads(
+            &ids::mint(state.base(), Kind::Run),
+            &input.run,
+            &instance_iri,
+            &principal.subject,
+        );
+        for a in input.artifacts.iter().filter(|a| a.iri.is_none()) {
+            candidate.extend(artdom::artifact_quads(
+                state.base(),
+                &ids::mint(state.base(), Kind::Artifact),
+                a,
+                &principal.subject,
+                None,
+            ));
         }
+        shacl::enforce(state.shapes.validate_quads(&candidate), state.config.shacl_validate_writes)?;
     }
 
     // Resolve or mint the Run. A second advertisement for the same CI attempt attaches to the

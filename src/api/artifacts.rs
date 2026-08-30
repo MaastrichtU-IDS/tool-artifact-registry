@@ -129,9 +129,10 @@ pub async fn create(
         principal.require_scope(crate::auth::SCOPE_ADVERTISE_PRODUCE)?;
     }
     let iri = ids::mint(state.base(), Kind::Artifact);
-    shacl::enforce(shacl::validate_artifact(&iri, &input), state.config.shacl_validate_writes)?;
+    let quads = dom::artifact_quads(state.base(), &iri, &input, &principal.subject, None);
+    shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes)?;
     let mut tx = GraphTx::new();
-    tx.extend(dom::artifact_quads(state.base(), &iri, &input, &principal.subject, None));
+    tx.extend(quads);
     state.store.apply(tx).map_err(AppError::from)?;
     if let Some(k) = &input.external_key {
         let _ = state.ops.remember_artifact(k, &iri).await;

@@ -59,6 +59,11 @@ file come from and who used it?"* afterwards.
 curl 'localhost:8080/api/v1/capabilities?produces=http://edamontology.org/data_2048'
 ```
 
+**Writes are validated by real SHACL.** `shapes/tar-shapes.ttl` is the rule set, enforced by
+`shacl-rust` before anything is committed. A rejected write returns `422` with the engine's
+`sh:ValidationReport` in Turtle, plus a `tar:jsonField` per result so a form can attach the
+error to the input that caused it. Changing what the API accepts is an edit to a Turtle file.
+
 **FAIR is not open.** `tar:availability = metadata-only` means the artifact is findable,
 described, and provably not retrievable: no `downloadURL` exists at all, the UI renders no
 download affordance, and the Signposting headers omit `rel="item"` so a machine can tell "no
@@ -217,13 +222,14 @@ redacted.
 
 Honest list of where the prototype departs from the spec, or stops short of it.
 
-1. **SHACL validation is a hand-written subset.** The shapes in `shapes/tar-shapes.ttl` are the
-   normative description and are loaded into `<urn:tar:shapes>`, but the write path enforces a
-   hand-coded subset of them (cardinality, node kind, the §6.1 enumerations) because there is
-   no mature SHACL engine in Rust. The *contract* is the spec's: a rejected write returns `422`
-   with a `sh:ValidationReport` in Turtle. Swapping in a real engine changes nothing above
-   `src/shacl.rs`. This also answers spec Q6 provisionally: violations block, warnings never
-   do, and `TAR_SHACL_VALIDATE_WRITES=false` downgrades violations to warnings.
+1. **Write validation is checked against the candidate record alone**, not the whole graph, so
+   constraints that would need the rest of the store — `sh:class` on a referenced node, say —
+   are not evaluated. That is the price of validating before committing rather than after.
+   Validation itself is real SHACL: `shapes/tar-shapes.ttl` is enforced by the
+   [`shacl-rust`](https://github.com/ensaremirerol/shacl-rust) engine, and editing that file
+   changes what the API accepts with no Rust change. This also answers spec Q6: severity
+   decides — `sh:Violation` blocks, `sh:Warning` never does, and
+   `TAR_SHACL_VALIDATE_WRITES=false` downgrades violations to warnings.
 2. **Distributions and capabilities are minted as IRIs, not blank nodes** (spec §4.5 shows blank
    nodes). They are addressable and citable that way. `GraphStore::describe` returns them with
    their parent, so a record still reads as one document.

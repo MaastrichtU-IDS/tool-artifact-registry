@@ -149,9 +149,8 @@ pub async fn create(
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
     let iri = ids::mint(state.base(), Kind::Software);
-    let report = shacl::validate_software(&iri, &input);
-    shacl::enforce(report, state.config.shacl_validate_writes)?;
     let quads = dom::software_quads(state.base(), &iri, &input, &principal.subject, None);
+    shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes)?;
     let mut tx = GraphTx::new();
     tx.extend(quads);
     state.store.apply(tx).map_err(AppError::from)?;
@@ -179,9 +178,8 @@ pub async fn patch(
         return Err(AppError::not_found(format!("no software at {iri}")));
     }
     let created = Props::from_quads(&iri, &existing).str(ns::DCT, "created");
-    let report = shacl::validate_software(&iri, &input);
-    shacl::enforce(report, state.config.shacl_validate_writes)?;
     let tx = dom::replace_software(state.base(), &iri, &input, &principal.subject, created);
+    shacl::enforce(state.shapes.validate_quads(&tx.insert), state.config.shacl_validate_writes)?;
     state.store.apply(tx).map_err(AppError::from)?;
     let _ = state
         .ops
@@ -244,12 +242,11 @@ pub async fn create_release(
     if !state.store.exists(&software_iri).map_err(AppError::from)? {
         return Err(AppError::not_found(format!("no software at {software_iri}")));
     }
-    if input.version.trim().is_empty() {
-        return Err(AppError::bad_request("a release needs a version"));
-    }
     let iri = ids::mint(state.base(), Kind::Release);
+    let quads = dom::release_quads(state.base(), &iri, &software_iri, &input, &principal.subject);
+    shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes)?;
     let mut tx = GraphTx::new();
-    tx.extend(dom::release_quads(state.base(), &iri, &software_iri, &input, &principal.subject));
+    tx.extend(quads);
     state.store.apply(tx).map_err(AppError::from)?;
     let _ = state
         .ops
@@ -284,12 +281,13 @@ pub async fn put_capability_on(
     if existing.is_empty() {
         return Err(AppError::not_found(format!("nothing at {subject}")));
     }
-    shacl::enforce(shacl::validate_capability(subject, input), state.config.shacl_validate_writes)?;
     let props = Props::from_quads(subject, &existing);
     let cap_iri = props.iri(ns::TAR, "hasCapability").unwrap_or_else(|| ids::mint(state.base(), Kind::Capability));
+    let cap_quads = dom::capability_quads(&cap_iri, input);
+    shacl::enforce(state.shapes.validate_quads(&cap_quads), state.config.shacl_validate_writes)?;
     let mut tx = GraphTx::new();
     tx.replace_subject(&cap_iri, ns::G_LOCAL);
-    tx.extend(dom::capability_quads(&cap_iri, input));
+    tx.extend(cap_quads);
     let mut n = crate::rdf::Node::local(subject);
     n.link(ns::TAR, "hasCapability", &cap_iri);
     tx.extend(n.finish());

@@ -1,24 +1,26 @@
-//! Write validation and SHACL validation reports (spec §5.3, §7.9).
+//! Write validation (spec §5.3, §7.9).
 //!
-//! ## What this is, and is not
+//! The shapes in `shapes/tar-shapes.ttl` are enforced, not decorative: every write is turned
+//! into candidate triples, validated against those shapes by the [`shacl-rust`] engine, and
+//! committed only if it conforms. A rejected write returns `422` with a `sh:ValidationReport`
+//! in Turtle — the same report format `shacl-manager` emits, so tooling is shared.
 //!
-//! The shapes that describe the model ship in `shapes/tar-shapes.ttl` and are loaded into
-//! `<urn:tar:shapes>`, so they are queryable, downloadable and dogfoodable by
-//! `shacl-manager`. What runs on the write path in this prototype is a hand-written subset of
-//! the same constraints — cardinality, node kind, and the enumerations of §6.1 — because
-//! there is no mature SHACL engine in Rust yet. The *contract* is the spec's: a rejected
-//! write returns `422` with a `sh:ValidationReport` in Turtle, which is what tooling and the
-//! form-error mapping in the UI depend on. Swapping the subset for a full engine (or a call
-//! into `shacl-manager`) changes nothing above this module.
+//! Because the shapes file *is* the rule set, changing what the API accepts is an edit to that
+//! file; no Rust changes with it.
 //!
-//! Spec Q6 asks whether validation is blocking or advisory. Here: violations block,
-//! warnings never do, and `TAR_SHACL_VALIDATE_WRITES=false` downgrades violations to
-//! warnings for an estate that would rather have a half-described artifact than none.
+//! Spec Q6 asks whether validation is blocking or advisory. Answer: severity decides.
+//! `sh:Violation` blocks, `sh:Warning` never does, and `TAR_SHACL_VALIDATE_WRITES=false`
+//! downgrades violations to warnings for an estate that would rather have a half-described
+//! artifact than none.
+//!
+//! [`shacl-rust`]: https://github.com/ensaremirerol/shacl-rust
 
-use crate::domain::artifact::{AUTH_METHODS, AVAILABILITIES, PROTOCOLS};
-use crate::domain::run::STATUSES;
-use crate::model::*;
 use crate::ns;
+use anyhow::{Context, Result};
+use oxigraph::model::{Graph, Quad, Term, TermRef, Triple};
+use shacl_rust::validation::dataset::ValidationDataset;
+use shacl_rust::{parse_shapes, validate, vocab::sh, Path, PathElement};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -30,28 +32,15 @@ pub enum Severity {
 pub struct Finding {
     pub severity: Severity,
     pub focus: String,
-    /// `sh:resultPath` — the UI maps this back to a form field (handoff §5.7).
+    /// `sh:resultPath`, when the constraint has one.
     pub path: String,
-    pub constraint: &'static str,
+    pub constraint: String,
     pub message: String,
-    /// Dotted JSON pointer into the request body, so the form does not have to guess.
+    /// Dotted path into the request body, so the form does not have to guess which input the
+    /// report is about (handoff §5.7).
     pub field: String,
-}
-
-impl Finding {
-    fn violation(focus: &str, path: &str, field: &str, constraint: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            severity: Severity::Violation,
-            focus: focus.into(),
-            path: path.into(),
-            constraint,
-            message: message.into(),
-            field: field.into(),
-        }
-    }
-    fn warning(focus: &str, path: &str, field: &str, constraint: &'static str, message: impl Into<String>) -> Self {
-        Self { severity: Severity::Warning, ..Self::violation(focus, path, field, constraint, message) }
-    }
+    /// The offending value, when the engine reports one.
+    pub value: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -70,7 +59,10 @@ impl Report {
         self.findings.iter().filter(|f| f.severity == Severity::Violation)
     }
     pub fn summary(&self) -> String {
-        let v: Vec<String> = self.violations().map(|f| format!("{}: {}", f.field, f.message)).collect();
+        let v: Vec<String> = self
+            .violations()
+            .map(|f| if f.field.is_empty() { f.message.clone() } else { format!("{}: {}", f.field, f.message) })
+            .collect();
         if v.is_empty() {
             "no violations".into()
         } else {
@@ -78,7 +70,11 @@ impl Report {
         }
     }
 
-    /// Serialise as a `sh:ValidationReport` in Turtle — the same shape `shacl-manager` emits.
+    /// Serialise as a `sh:ValidationReport` in Turtle.
+    ///
+    /// Written out here rather than handed straight from the engine so that each result also
+    /// carries `tar:jsonField` — the hint the UI uses to attach an error to an input. It is an
+    /// additional triple on a standard report, so a plain SHACL consumer ignores it.
     pub fn to_turtle(&self) -> String {
         let mut s = String::from(
             "@prefix sh:     <http://www.w3.org/ns/shacl#> .\n\
@@ -105,9 +101,18 @@ impl Report {
             } else {
                 s.push_str(&format!("        sh:focusNode \"{}\" ;\n", escape(&f.focus)));
             }
-            s.push_str(&format!("        sh:resultPath <{}> ;\n", f.path));
-            s.push_str(&format!("        sh:sourceConstraintComponent sh:{} ;\n", f.constraint));
-            s.push_str(&format!("        tar:jsonField \"{}\" ;\n", escape(&f.field)));
+            if !f.path.is_empty() {
+                s.push_str(&format!("        sh:resultPath <{}> ;\n", f.path));
+            }
+            if !f.constraint.is_empty() {
+                s.push_str(&format!("        sh:sourceConstraintComponent sh:{} ;\n", f.constraint));
+            }
+            if let Some(v) = &f.value {
+                s.push_str(&format!("        sh:value \"{}\" ;\n", escape(v)));
+            }
+            if !f.field.is_empty() {
+                s.push_str(&format!("        tar:jsonField \"{}\" ;\n", escape(&f.field)));
+            }
             s.push_str(&format!("        sh:resultMessage \"{}\"\n    ] ", escape(&f.message)));
         }
         s.push_str(".\n");
@@ -119,363 +124,197 @@ fn escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
 }
 
-fn is_iri(s: &str) -> bool {
-    s.starts_with("http://") || s.starts_with("https://") || s.starts_with("urn:")
+/// The parsed shape set, held in application state so the Turtle is read once at boot.
+///
+/// The triples are kept rather than the parsed `Shape`s because a `Shape` borrows the graph of
+/// the dataset it was parsed against, and each validation gets a fresh dataset holding that
+/// write's candidate data. Rebuilding a ~150-triple graph per write is not worth optimising.
+pub struct Shapes {
+    triples: Vec<Triple>,
 }
 
-fn in_set(value: &str, allowed: &[&str]) -> bool {
-    allowed.contains(&value)
-}
-
-// ------------------------------------------------------------------ shapes
-
-pub fn validate_software(focus: &str, input: &SoftwareIn) -> Report {
-    let mut r = Report::default();
-    if input.name.trim().is_empty() {
-        r.findings.push(Finding::violation(
-            focus,
-            &format!("{}name", ns::SCHEMA),
-            "name",
-            "MinCountConstraintComponent",
-            "Software needs a name",
-        ));
+impl Shapes {
+    pub fn parse(turtle: &str) -> Result<Self> {
+        let graph = shacl_rust::rdf::read_graph_from_string(turtle, "ttl")
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .context("parsing shapes/tar-shapes.ttl")?;
+        let triples: Vec<Triple> = graph.iter().map(|t| t.into_owned()).collect();
+        anyhow::ensure!(!triples.is_empty(), "the shapes graph is empty");
+        Ok(Self { triples })
     }
-    for (value, path, field) in [
-        (&input.homepage, "url", "homepage"),
-        (&input.code_repository, "codeRepository", "code_repository"),
-        (&input.documentation, "softwareHelp", "documentation"),
-    ] {
-        if let Some(v) = value.as_deref().filter(|v| !v.is_empty()) {
-            if !is_iri(v) {
-                r.findings.push(Finding::violation(
-                    focus,
-                    &format!("{}{path}", ns::SCHEMA),
-                    field,
-                    "NodeKindConstraintComponent",
-                    format!("{field} must be an absolute IRI, got {v:?}"),
-                ));
+
+    fn graph(&self) -> Graph {
+        self.triples.iter().cloned().collect()
+    }
+
+    /// Validate one write's candidate quads.
+    ///
+    /// The data graph is the candidate record alone, not the whole store: a write is checked
+    /// for being well-formed in itself. Constraints that would need the rest of the graph —
+    /// `sh:class` on a referenced node, say — are therefore not evaluated here, which is the
+    /// price of validating before committing rather than after.
+    pub fn validate_quads<'q>(&self, quads: impl IntoIterator<Item = &'q Quad>) -> Report {
+        let data: Vec<Triple> = quads
+            .into_iter()
+            .map(|q| Triple::new(q.subject.clone(), q.predicate.clone(), q.object.clone()))
+            .collect();
+        self.validate_triples(data)
+    }
+
+    pub fn validate_triples(&self, data: Vec<Triple>) -> Report {
+        let field_hints = field_hints(&data);
+        let data_graph: Graph = data.into_iter().collect();
+        let dataset = match ValidationDataset::from_graphs(data_graph, self.graph()) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!(error = %e, "could not build the validation dataset");
+                return Report::default();
+            }
+        };
+        let shapes = match parse_shapes(dataset.shapes_graph()) {
+            Ok(s) => s,
+            Err(e) => {
+                // A broken shapes file must not silently wave writes through.
+                tracing::error!(error = %e, "shapes failed to parse; rejecting the write");
+                return Report {
+                    findings: vec![Finding {
+                        severity: Severity::Violation,
+                        focus: "urn:tar:shapes".into(),
+                        path: String::new(),
+                        constraint: "ShapesGraphError".into(),
+                        message: format!("the registry's SHACL shapes could not be parsed: {e}"),
+                        field: String::new(),
+                        value: None,
+                    }],
+                };
+            }
+        };
+
+        let report = validate(&dataset, &shapes);
+        let mut findings = Vec::new();
+        for r in report.get_results() {
+            let path = r.result_path().and_then(first_predicate).unwrap_or_default();
+            let focus = r.focus_node().to_string();
+            let focus_iri = focus.trim_start_matches('<').trim_end_matches('>').to_string();
+            findings.push(Finding {
+                severity: if r.severity() == sh::VIOLATION { Severity::Violation } else { Severity::Warning },
+                field: field_for(&path, &focus_iri, &field_hints),
+                path,
+                constraint: r
+                    .source_constraint_component()
+                    .map(|c| c.as_str().rsplit(['#', '/']).next().unwrap_or_default().to_string())
+                    .unwrap_or_default(),
+                // The engine emits a generic message plus whatever sh:message the shape gave;
+                // the shape's wording is the one worth showing.
+                message: best_message(r.messages()),
+                value: r.value().map(|v| match v {
+                    TermRef::Literal(l) => l.value().to_string(),
+                    other => other.to_string(),
+                }),
+                focus: focus_iri,
+            });
+        }
+        findings.sort_by(|a, b| a.field.cmp(&b.field).then_with(|| a.message.cmp(&b.message)));
+        Report { findings }
+    }
+}
+
+fn first_predicate(path: &Path<'_>) -> Option<String> {
+    path.get_elements().first().and_then(|e| match e {
+        PathElement::Iri(n) | PathElement::Inverse(n) => Some(n.as_str().to_string()),
+        _ => None,
+    })
+}
+
+/// The engine emits the constraint's own description first and the shape's `sh:message` after
+/// it — see `build_validation_result`: "Include all constraint-specific messages, then
+/// shape-level messages." The shape's wording is the one written for a person, so take the
+/// last; with only one message there is no shape-level wording and the built-in is all we have.
+fn best_message(messages: &[String]) -> String {
+    messages.last().cloned().unwrap_or_else(|| "constraint violated".into())
+}
+
+/// Focus IRI -> field prefix, derived from the candidate data itself so that a violation on a
+/// nested Distribution reports `distributions[1].auth_method` rather than a bare predicate.
+fn field_hints(data: &[Triple]) -> HashMap<String, String> {
+    let mut hints = HashMap::new();
+    let distribution_pred = format!("{}distribution", ns::DCAT);
+    let mut by_parent: HashMap<String, Vec<String>> = HashMap::new();
+    for t in data {
+        if t.predicate.as_str() == distribution_pred {
+            if let Term::NamedNode(n) = &t.object {
+                by_parent.entry(t.subject.to_string()).or_default().push(n.as_str().to_string());
             }
         }
     }
-    if let Some(l) = input.license.as_deref().filter(|v| !v.is_empty()) {
-        if !is_iri(l) {
-            r.findings.push(Finding::violation(
-                focus,
-                &format!("{}license", ns::DCT),
-                "license",
-                "NodeKindConstraintComponent",
-                "license must be an SPDX IRI such as https://spdx.org/licenses/Apache-2.0",
-            ));
-        }
-    } else {
-        r.findings.push(Finding::warning(
-            focus,
-            &format!("{}license", ns::DCT),
-            "license",
-            "MinCountConstraintComponent",
-            "no licence declared — FAIR R1.1 asks for one",
-        ));
-    }
-    if let Some(k) = input.kind.as_deref().filter(|v| !v.is_empty()) {
-        if !in_set(k, &["service", "library", "cli", "workflow"]) {
-            r.findings.push(Finding::violation(
-                focus,
-                &format!("{}kind", ns::TAR),
-                "kind",
-                "InConstraintComponent",
-                format!("kind must be one of service, library, cli, workflow — got {k:?}"),
-            ));
+    for dists in by_parent.values() {
+        for (i, d) in dists.iter().enumerate() {
+            hints.insert(d.clone(), format!("distributions[{i}]"));
         }
     }
-    for (i, t) in input.edam_topics.iter().enumerate() {
-        if !is_iri(t) {
-            r.findings.push(Finding::violation(
-                focus,
-                &format!("{}subject", ns::DCT),
-                &format!("edam_topics[{i}]"),
-                "NodeKindConstraintComponent",
-                format!("topic must be an IRI, got {t:?}"),
-            ));
-        }
-    }
-    if let Some(c) = &input.capability {
-        r.findings.extend(validate_capability(focus, c).findings);
-    }
-    r
+    hints
 }
 
-pub fn validate_capability(focus: &str, c: &CapabilityIn) -> Report {
-    let mut r = Report::default();
-    for (list, path, field) in [(&c.produces, "produces", "capability.produces"), (&c.consumes, "consumes", "capability.consumes")] {
-        for (i, t) in list.iter().enumerate() {
-            if !is_iri(t) {
-                r.findings.push(Finding::violation(
-                    focus,
-                    &format!("{}{path}", ns::TAR),
-                    &format!("{field}[{i}]"),
-                    "NodeKindConstraintComponent",
-                    format!("an ArtifactType must be an IRI (EDAM recommended), got {t:?}"),
-                ));
-            }
-        }
+/// Map a constraint's `sh:resultPath` onto the JSON field the caller sent.
+fn field_for(path: &str, focus: &str, hints: &HashMap<String, String>) -> String {
+    let local = |ns_: &str, name: &str| format!("{ns_}{name}");
+    let base = [
+        (local(ns::SCHEMA, "name"), "name"),
+        (local(ns::TAR, "tagline"), "tagline"),
+        (local(ns::SCHEMA, "description"), "description"),
+        (local(ns::SCHEMA, "url"), "homepage"),
+        (local(ns::SCHEMA, "codeRepository"), "code_repository"),
+        (local(ns::SCHEMA, "softwareHelp"), "documentation"),
+        (local(ns::SCHEMA, "softwareVersion"), "version"),
+        (local(ns::DCT, "license"), "license"),
+        (local(ns::TAR, "kind"), "kind"),
+        (local(ns::TAR, "maturity"), "maturity"),
+        (local(ns::DCT, "subject"), "edam_topics"),
+        (local(ns::SCHEMA, "keywords"), "keywords"),
+        (local(ns::RDFS, "label"), "label"),
+        (local(ns::TAR, "instanceOf"), "software"),
+        (local(ns::TAR, "runsRelease"), "release"),
+        (local(ns::DCAT, "endpointURL"), "endpoint_url"),
+        (local(ns::DCAT, "endpointDescription"), "endpoint_description"),
+        (local(ns::TAR, "jurisdiction"), "jurisdiction"),
+        (local(ns::TAR, "oidcClientId"), "oidc_client_id"),
+        (local(ns::TAR, "oidcIssuer"), "oidc_issuer"),
+        (local(ns::TAR, "allowedScope"), "allowed_scopes"),
+        (local(ns::TAR, "produces"), "capability.produces"),
+        (local(ns::TAR, "consumes"), "capability.consumes"),
+        (local(ns::DCT, "title"), "title"),
+        (local(ns::DCT, "conformsTo"), "conforms_to"),
+        (local(ns::DCAT, "keyword"), "keywords"),
+        (local(ns::PROV, "wasDerivedFrom"), "was_derived_from"),
+        (local(ns::DCT, "isVersionOf"), "is_version_of"),
+        (local(ns::DCAT, "distribution"), "distributions"),
+        (local(ns::DCAT, "accessURL"), "access_url"),
+        (local(ns::DCAT, "downloadURL"), "download_url"),
+        (local(ns::DCAT, "byteSize"), "byte_size"),
+        (local(ns::DCAT, "mediaType"), "media_type"),
+        (local(ns::TAR, "accessProtocol"), "access_protocol"),
+        (local(ns::TAR, "authMethod"), "auth_method"),
+        (local(ns::TAR, "availability"), "availability"),
+        (local(ns::TAR, "accessRequestURL"), "access_request_url"),
+        (local(ns::PROV, "startedAtTime"), "run.started_at"),
+        (local(ns::PROV, "endedAtTime"), "run.ended_at"),
+        (local(ns::TAR, "status"), "run.status"),
+        (local(ns::TAR, "atInstance"), "run.instance"),
+    ]
+    .into_iter()
+    .find(|(iri, _)| iri == path)
+    .map(|(_, field)| field.to_string());
+
+    match (hints.get(focus), base) {
+        // A violation on a nested distribution is reported against the input that carried it.
+        (Some(prefix), Some(field)) => format!("{prefix}.{field}"),
+        (Some(prefix), None) => prefix.clone(),
+        (None, Some(field)) => field,
+        (None, None) => String::new(),
     }
-    r
 }
 
-pub fn validate_instance(focus: &str, input: &InstanceIn) -> Report {
-    let mut r = Report::default();
-    if input.label.trim().is_empty() {
-        r.findings.push(Finding::violation(
-            focus,
-            &format!("{}label", ns::RDFS),
-            "label",
-            "MinCountConstraintComponent",
-            "Instance needs a label",
-        ));
-    }
-    if let Some(e) = input.endpoint_url.as_deref().filter(|v| !v.is_empty()) {
-        if !is_iri(e) {
-            r.findings.push(Finding::violation(
-                focus,
-                &format!("{}endpointURL", ns::DCAT),
-                "endpoint_url",
-                "NodeKindConstraintComponent",
-                "endpoint_url must be an absolute IRI",
-            ));
-        }
-    }
-    if input.software.is_none() && input.release.is_none() {
-        r.findings.push(Finding::violation(
-            focus,
-            &format!("{}instanceOf", ns::TAR),
-            "software",
-            "MinCountConstraintComponent",
-            "an Instance must name the Software it deploys, or the Release it runs",
-        ));
-    }
-    if let Some(a) = input.availability.as_deref().filter(|v| !v.is_empty()) {
-        if !in_set(a, &AVAILABILITIES) {
-            r.findings.push(Finding::violation(
-                focus,
-                &format!("{}availability", ns::TAR),
-                "availability",
-                "InConstraintComponent",
-                format!("availability must be one of {}", AVAILABILITIES.join(", ")),
-            ));
-        }
-    }
-    for (i, s) in input.allowed_scopes.iter().enumerate() {
-        if !crate::auth::ALL_SCOPES.contains(&s.as_str()) {
-            r.findings.push(Finding::violation(
-                focus,
-                &format!("{}allowedScope", ns::TAR),
-                &format!("allowed_scopes[{i}]"),
-                "InConstraintComponent",
-                format!("unknown scope {s:?}; known scopes are {}", crate::auth::ALL_SCOPES.join(", ")),
-            ));
-        }
-    }
-    if input.oidc_issuer.is_some() && input.oidc_client_id.is_none() {
-        r.findings.push(Finding::violation(
-            focus,
-            &format!("{}oidcClientId", ns::TAR),
-            "oidc_client_id",
-            "MinCountConstraintComponent",
-            "an OIDC issuer without a client id binds nothing — give the client id this deployment authenticates with",
-        ));
-    }
-    if let Some(c) = &input.capability {
-        r.findings.extend(validate_capability(focus, c).findings);
-    }
-    r
-}
-
-pub fn validate_artifact(focus: &str, input: &ArtifactIn) -> Report {
-    let mut r = Report::default();
-    if input.title.as_deref().unwrap_or("").trim().is_empty() {
-        r.findings.push(Finding::violation(
-            focus,
-            &format!("{}title", ns::DCT),
-            "title",
-            "MinCountConstraintComponent",
-            "an Artifact needs a title",
-        ));
-    }
-    if input.conforms_to.as_deref().unwrap_or("").is_empty() {
-        r.findings.push(Finding::warning(
-            focus,
-            &format!("{}conformsTo", ns::DCT),
-            "conforms_to",
-            "MinCountConstraintComponent",
-            "no ArtifactType declared — the artifact will not appear in capability matchmaking",
-        ));
-    } else if !is_iri(input.conforms_to.as_deref().unwrap_or("")) {
-        r.findings.push(Finding::violation(
-            focus,
-            &format!("{}conformsTo", ns::DCT),
-            "conforms_to",
-            "NodeKindConstraintComponent",
-            "conforms_to must be an IRI (EDAM recommended)",
-        ));
-    }
-    for (i, d) in input.was_derived_from.iter().enumerate() {
-        if !is_iri(d) {
-            r.findings.push(Finding::violation(
-                focus,
-                &format!("{}wasDerivedFrom", ns::PROV),
-                &format!("was_derived_from[{i}]"),
-                "NodeKindConstraintComponent",
-                "lineage links must be IRIs — a foreign registry's IRI is fine and is the point",
-            ));
-        }
-    }
-    if input.distributions.is_empty() {
-        r.findings.push(Finding::warning(
-            focus,
-            &format!("{}distribution", ns::DCAT),
-            "distributions",
-            "MinCountConstraintComponent",
-            "no distribution: this artifact is metadata-only, which is valid but must be deliberate (spec §6.2)",
-        ));
-    }
-    for (i, d) in input.distributions.iter().enumerate() {
-        r.findings.extend(validate_distribution(focus, d, i).findings);
-    }
-    r
-}
-
-fn validate_distribution(focus: &str, d: &DistributionIn, i: usize) -> Report {
-    let mut r = Report::default();
-    let f = |name: &str| format!("distributions[{i}].{name}");
-    let availability = d.availability.as_deref().unwrap_or("public");
-    if !in_set(availability, &AVAILABILITIES) {
-        r.findings.push(Finding::violation(
-            focus,
-            &format!("{}availability", ns::TAR),
-            &f("availability"),
-            "InConstraintComponent",
-            format!("availability must be one of {}", AVAILABILITIES.join(", ")),
-        ));
-    }
-    if let Some(p) = d.access_protocol.as_deref().filter(|v| !v.is_empty()) {
-        if !in_set(p, &PROTOCOLS) {
-            r.findings.push(Finding::violation(
-                focus,
-                &format!("{}accessProtocol", ns::TAR),
-                &f("access_protocol"),
-                "InConstraintComponent",
-                format!("access_protocol must be one of {}", PROTOCOLS.join(", ")),
-            ));
-        }
-    }
-    if let Some(m) = d.auth_method.as_deref().filter(|v| !v.is_empty()) {
-        if !in_set(m, &AUTH_METHODS) {
-            r.findings.push(Finding::violation(
-                focus,
-                &format!("{}authMethod", ns::TAR),
-                &f("auth_method"),
-                "InConstraintComponent",
-                format!("auth_method must be one of {}", AUTH_METHODS.join(", ")),
-            ));
-        }
-    }
-    if availability == "metadata-only" {
-        if d.download_url.as_deref().is_some_and(|v| !v.is_empty()) {
-            r.findings.push(Finding::violation(
-                focus,
-                &format!("{}downloadURL", ns::DCAT),
-                &f("download_url"),
-                "MaxCountConstraintComponent",
-                "a metadata-only distribution carries no downloadURL (spec §6.2)",
-            ));
-        }
-        if d.access_request_url.as_deref().unwrap_or("").is_empty() {
-            r.findings.push(Finding::warning(
-                focus,
-                &format!("{}accessRequestURL", ns::TAR),
-                &f("access_request_url"),
-                "MinCountConstraintComponent",
-                "metadata-only without an access_request_url leaves no way to ask for the data",
-            ));
-        }
-    } else if d.access_url.as_deref().unwrap_or("").is_empty() && d.download_url.as_deref().unwrap_or("").is_empty() {
-        r.findings.push(Finding::violation(
-            focus,
-            &format!("{}accessURL", ns::DCAT),
-            &f("access_url"),
-            "MinCountConstraintComponent",
-            "a distribution needs an access_url or a download_url unless it is metadata-only",
-        ));
-    }
-    if availability != "public" && d.access_request_url.as_deref().unwrap_or("").is_empty() {
-        r.findings.push(Finding::warning(
-            focus,
-            &format!("{}accessRequestURL", ns::TAR),
-            &f("access_request_url"),
-            "MinCountConstraintComponent",
-            "restricted or embargoed data should say where access is requested (FAIR A1.2)",
-        ));
-    }
-    if let Some(c) = &d.checksum {
-        if c.value.trim().is_empty() {
-            r.findings.push(Finding::violation(
-                focus,
-                &format!("{}checksumValue", ns::SPDX),
-                &f("checksum.value"),
-                "MinCountConstraintComponent",
-                "a checksum needs a value",
-            ));
-        }
-    }
-    r
-}
-
-pub fn validate_run(focus: &str, input: &RunIn) -> Report {
-    let mut r = Report::default();
-    if let Some(s) = input.status.as_deref().filter(|v| !v.is_empty()) {
-        if !in_set(s, &STATUSES) {
-            r.findings.push(Finding::violation(
-                focus,
-                &format!("{}status", ns::TAR),
-                "run.status",
-                "InConstraintComponent",
-                format!("status must be one of {}", STATUSES.join(", ")),
-            ));
-        }
-    }
-    for (v, field, path) in [
-        (&input.started_at, "run.started_at", "startedAtTime"),
-        (&input.ended_at, "run.ended_at", "endedAtTime"),
-    ] {
-        if let Some(t) = v.as_deref().filter(|x| !x.is_empty()) {
-            if chrono::DateTime::parse_from_rfc3339(t).is_err() {
-                r.findings.push(Finding::violation(
-                    focus,
-                    &format!("{}{path}", ns::PROV),
-                    field,
-                    "DatatypeConstraintComponent",
-                    format!("{field} must be an RFC 3339 timestamp, got {t:?}"),
-                ));
-            }
-        }
-    }
-    if let (Some(s), Some(e)) = (&input.started_at, &input.ended_at) {
-        if let (Ok(s), Ok(e)) = (chrono::DateTime::parse_from_rfc3339(s), chrono::DateTime::parse_from_rfc3339(e)) {
-            if e < s {
-                r.findings.push(Finding::violation(
-                    focus,
-                    &format!("{}endedAtTime", ns::PROV),
-                    "run.ended_at",
-                    "LessThanConstraintComponent",
-                    "a run cannot end before it starts",
-                ));
-            }
-        }
-    }
-    r
-}
-
-/// Turn a report into the `422` of spec §7.9, or pass the write through.
+/// Turn a report into the `422` of spec §7.9, or let the write through.
 pub fn enforce(report: Report, blocking: bool) -> Result<Report, crate::error::AppError> {
     if blocking && !report.conforms() {
         let summary = report.summary();
@@ -487,27 +326,85 @@ pub fn enforce(report: Report, blocking: bool) -> Result<Report, crate::error::A
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{artifact as artdom, instance as instdom, run as rundom, software as swdom};
+    use crate::model::*;
+
+    fn shapes() -> Shapes {
+        Shapes::parse(crate::seed::SHAPES_TTL).expect("the shipped shapes must parse")
+    }
+
+    const BASE: &str = "https://reg.test.example";
+
+    fn software(input: SoftwareIn) -> Report {
+        let quads = swdom::software_quads(BASE, &format!("{BASE}/software/x"), &input, "urn:test", None);
+        shapes().validate_quads(&quads)
+    }
+
+    fn artifact(input: ArtifactIn) -> Report {
+        let quads = artdom::artifact_quads(BASE, &format!("{BASE}/artifact/x"), &input, "urn:test", None);
+        shapes().validate_quads(&quads)
+    }
+
+    #[test]
+    fn the_shipped_shapes_parse() {
+        let s = shapes();
+        assert!(!s.triples.is_empty());
+        // A conforming record produces no violations at all.
+        let r = software(SoftwareIn {
+            name: "shacl-manager".into(),
+            license: Some("https://spdx.org/licenses/Apache-2.0".into()),
+            kind: Some("service".into()),
+            ..Default::default()
+        });
+        assert!(r.conforms(), "{:?}", r.findings);
+        assert!(r.is_empty(), "a complete record should not even warn: {:?}", r.findings);
+    }
 
     #[test]
     fn a_nameless_software_is_rejected() {
-        let r = validate_software("urn:new", &SoftwareIn::default());
+        let r = software(SoftwareIn::default());
         assert!(!r.conforms());
-        assert!(r.to_turtle().contains("sh:ValidationReport"));
-        assert!(r.to_turtle().contains("sh:conforms false"));
-        assert!(r.to_turtle().contains("MinCountConstraintComponent"));
+        assert!(r.violations().any(|f| f.field == "name"), "{:?}", r.findings);
+        let ttl = r.to_turtle();
+        assert!(ttl.contains("a sh:ValidationReport"));
+        assert!(ttl.contains("sh:conforms false"));
+        assert!(ttl.contains("sh:resultPath <https://schema.org/name>"));
+        assert!(ttl.contains("MinCountConstraintComponent"));
+    }
+
+    #[test]
+    fn a_shapes_own_message_is_what_the_caller_sees() {
+        // Not the engine's "Value does not have node kind: IRI".
+        let r = software(SoftwareIn {
+            name: "x".into(),
+            code_repository: Some("not-an-iri".into()),
+            ..Default::default()
+        });
+        let f = r.violations().find(|f| f.field == "code_repository").expect("repo violation");
+        assert_eq!(f.message, "code_repository must be an absolute IRI", "{:?}", r.findings);
     }
 
     #[test]
     fn a_missing_licence_warns_but_does_not_block() {
-        let input = SoftwareIn { name: "shacl-manager".into(), ..Default::default() };
-        let r = validate_software("urn:new", &input);
-        assert!(r.conforms(), "missing licence must not block a write");
-        assert!(r.findings.iter().any(|f| f.severity == Severity::Warning));
+        let r = software(SoftwareIn { name: "shacl-manager".into(), ..Default::default() });
+        assert!(r.conforms(), "missing licence must not block a write: {:?}", r.findings);
+        let warning = r.findings.iter().find(|f| f.field == "license").expect("a warning about the licence");
+        assert_eq!(warning.severity, Severity::Warning);
+        assert!(warning.message.contains("FAIR R1.1"), "the shape's own wording should survive: {warning:?}");
+    }
+
+    #[test]
+    fn enum_values_from_the_spec_are_enforced() {
+        let r = software(SoftwareIn { name: "x".into(), kind: Some("teapot".into()), ..Default::default() });
+        let f = r.violations().find(|f| f.field == "kind").expect("kind violation");
+        assert_eq!(f.constraint, "InConstraintComponent");
+        assert_eq!(f.value.as_deref(), Some("teapot"));
+        assert!(f.message.contains("service, library, cli, workflow"));
     }
 
     #[test]
     fn metadata_only_must_not_carry_a_download_url() {
-        let input = ArtifactIn {
+        let r = artifact(ArtifactIn {
             title: Some("masked replica".into()),
             conforms_to: Some("http://edamontology.org/data_2600".into()),
             distributions: vec![DistributionIn {
@@ -516,33 +413,104 @@ mod tests {
                 ..Default::default()
             }],
             ..Default::default()
-        };
-        let r = validate_artifact("urn:new", &input);
-        assert!(!r.conforms());
-        assert!(r.violations().any(|f| f.field == "distributions[0].download_url"));
+        });
+        // The write path strips a downloadURL from a metadata-only distribution, so the shape
+        // has nothing to fire on — the model makes the illegal state unrepresentable.
+        assert!(r.conforms(), "{:?}", r.findings);
+
+        // Fed the illegal shape directly, the constraint does fire.
+        let mut dist = crate::rdf::Node::local(&format!("{BASE}/distribution/x"));
+        dist.a(artdom::TYPE_DISTRIBUTION);
+        dist.text(ns::TAR, "availability", "metadata-only");
+        dist.link(ns::DCAT, "downloadURL", "https://example.org/leaked.ttl");
+        let r = shapes().validate_quads(&dist.finish());
+        assert!(!r.conforms(), "a metadata-only distribution with bytes must be rejected");
+        assert!(
+            r.violations().any(|f| f.message.contains("carries no downloadURL")),
+            "{:?}",
+            r.findings
+        );
     }
 
     #[test]
-    fn enum_values_from_the_spec_are_enforced() {
-        let input = ArtifactIn {
-            title: Some("x".into()),
+    fn a_distribution_must_say_where_the_bytes_are() {
+        let r = artifact(ArtifactIn {
+            title: Some("report".into()),
             conforms_to: Some("http://edamontology.org/data_2048".into()),
-            distributions: vec![DistributionIn {
-                access_url: Some("https://example.org".into()),
-                access_protocol: Some("carrier-pigeon".into()),
-                ..Default::default()
-            }],
+            distributions: vec![DistributionIn { availability: Some("public".into()), ..Default::default() }],
             ..Default::default()
-        };
-        let r = validate_artifact("urn:new", &input);
-        assert!(r.violations().any(|f| f.field == "distributions[0].access_protocol"));
+        });
+        assert!(!r.conforms(), "{:?}", r.findings);
+        assert!(r.violations().any(|f| f.message.contains("access_url or a download_url")), "{:?}", r.findings);
+    }
+
+    #[test]
+    fn a_violation_on_a_distribution_names_which_one() {
+        let r = artifact(ArtifactIn {
+            title: Some("report".into()),
+            conforms_to: Some("http://edamontology.org/data_2048".into()),
+            distributions: vec![
+                DistributionIn { access_url: Some("https://a.example".into()), ..Default::default() },
+                DistributionIn {
+                    access_url: Some("https://b.example".into()),
+                    access_protocol: Some("carrier-pigeon".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let f = r.violations().find(|f| f.field.ends_with("access_protocol")).expect("protocol violation");
+        assert_eq!(f.field, "distributions[1].access_protocol", "the report must name the offending input");
+    }
+
+    #[test]
+    fn an_instance_must_name_its_software() {
+        let quads = instdom::instance_quads(
+            BASE,
+            &format!("{BASE}/instance/x"),
+            &InstanceIn { label: "laptop".into(), ..Default::default() },
+            "urn:test",
+            None,
+        );
+        let r = shapes().validate_quads(&quads);
+        assert!(r.violations().any(|f| f.field == "software"), "{:?}", r.findings);
+    }
+
+    #[test]
+    fn an_unknown_scope_is_rejected() {
+        let quads = instdom::instance_quads(
+            BASE,
+            &format!("{BASE}/instance/x"),
+            &InstanceIn {
+                label: "shacl.ids".into(),
+                software: Some(format!("{BASE}/software/1")),
+                allowed_scopes: vec!["advertise:produce".into(), "take:over:the:world".into()],
+                ..Default::default()
+            },
+            "urn:test",
+            None,
+        );
+        let r = shapes().validate_quads(&quads);
+        let f = r.violations().find(|f| f.field == "allowed_scopes").expect("scope violation");
+        assert_eq!(f.value.as_deref(), Some("take:over:the:world"));
+    }
+
+    #[test]
+    fn a_run_must_be_attributed_and_carry_a_known_status() {
+        let quads = rundom::run_quads(
+            &format!("{BASE}/run/x"),
+            &RunIn { status: Some("exploded".into()), ..Default::default() },
+            &format!("{BASE}/instance/1"),
+            "urn:test",
+        );
+        let r = shapes().validate_quads(&quads);
+        let f = r.violations().find(|f| f.field == "run.status").expect("status violation");
+        assert!(f.message.contains("success, failed, running, aborted"));
     }
 
     #[test]
     fn advisory_mode_lets_a_bad_write_through() {
-        let r = validate_software("urn:new", &SoftwareIn::default());
-        assert!(enforce(r, false).is_ok());
-        let r = validate_software("urn:new", &SoftwareIn::default());
-        assert!(enforce(r, true).is_err());
+        assert!(enforce(software(SoftwareIn::default()), false).is_ok());
+        assert!(enforce(software(SoftwareIn::default()), true).is_err());
     }
 }

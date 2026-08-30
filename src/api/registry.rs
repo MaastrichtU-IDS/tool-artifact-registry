@@ -91,17 +91,17 @@ pub async fn whoami(principal: Principal) -> AppResult<impl IntoResponse> {
 
 fn entity_counts(state: &AppState) -> AppResult<serde_json::Value> {
     let mut out = serde_json::Map::new();
-    // A Release is also a `schema:SoftwareApplication` (spec §4.2), so the type alone would
-    // count releases as software. The discriminating property is what the list queries use.
-    for (name, type_iri, required) in [
-        ("software", crate::domain::software::TYPE_SOFTWARE, "schema:name"),
-        ("releases", crate::domain::software::TYPE_SOFTWARE, "schema:softwareVersion"),
-        ("instances", crate::domain::instance::TYPE_SOFTWARE_AGENT, "rdfs:label"),
-        ("artifacts", crate::domain::artifact::TYPE_DATASET, "dct:isVersionOf"),
-        ("runs", crate::domain::run::TYPE_ACTIVITY, "tar:status"),
+    // A Release is also a `schema:SoftwareApplication` (spec §4.2); the tar: marker types are
+    // what tell them apart, here and in the SHACL targets.
+    for (name, type_iri) in [
+        ("software", crate::domain::software::TYPE_TAR_SOFTWARE),
+        ("releases", crate::domain::software::TYPE_TAR_RELEASE),
+        ("instances", crate::domain::instance::TYPE_TAR_INSTANCE),
+        ("artifacts", crate::domain::artifact::TYPE_DATASET),
+        ("runs", crate::domain::run::TYPE_ACTIVITY),
     ] {
         let q = format!(
-            "{p}\nSELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{ GRAPH ?g {{ ?s a <{type_iri}> ; {required} ?v }} }}",
+            "{p}\nSELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{ GRAPH ?g {{ ?s a <{type_iri}> }} }}",
             p = ns::PREFIXES
         );
         let n = state

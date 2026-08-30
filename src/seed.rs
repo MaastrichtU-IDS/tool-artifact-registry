@@ -17,6 +17,8 @@ use std::sync::Arc;
 /// The full EDAM ontology is not vendored: this is the working subset for IDS artifacts,
 /// and any other IRI still works because `ArtifactType` is any IRI (D11).
 pub const VOCAB_TTL: &str = include_str!("../shapes/vocab.ttl");
+/// The shape set enforced on every write (spec §5.3). Also loaded into `<urn:tar:shapes>` so
+/// it is queryable and downloadable by any SHACL processor.
 pub const SHAPES_TTL: &str = include_str!("../shapes/tar-shapes.ttl");
 
 pub fn load_vocab(state: &AppState) -> Result<usize> {

@@ -142,10 +142,11 @@ pub async fn create(
         input.release = Some(ids::iri_for(state.base(), Kind::Release, &r));
     }
     let iri = ids::mint(state.base(), Kind::Instance);
-    shacl::enforce(shacl::validate_instance(&iri, &input), state.config.shacl_validate_writes)?;
     let software = resolve_software_for(&state, &input)?;
+    let quads = dom::instance_quads(state.base(), &iri, &input, &principal.subject, software.as_deref());
+    shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes)?;
     let mut tx = GraphTx::new();
-    tx.extend(dom::instance_quads(state.base(), &iri, &input, &principal.subject, software.as_deref()));
+    tx.extend(quads);
     state.store.apply(tx).map_err(AppError::from)?;
     let _ = state
         .ops
@@ -178,12 +179,10 @@ pub async fn patch(
     if let Some(r) = input.release.clone() {
         input.release = Some(ids::iri_for(state.base(), Kind::Release, &r));
     }
-    shacl::enforce(shacl::validate_instance(&iri, &input), state.config.shacl_validate_writes)?;
     let software = resolve_software_for(&state, &input)?;
-    state
-        .store
-        .apply(dom::replace_instance(state.base(), &iri, &input, &principal.subject, software.as_deref()))
-        .map_err(AppError::from)?;
+    let tx = dom::replace_instance(state.base(), &iri, &input, &principal.subject, software.as_deref());
+    shacl::enforce(state.shapes.validate_quads(&tx.insert), state.config.shacl_validate_writes)?;
+    state.store.apply(tx).map_err(AppError::from)?;
     let _ = state
         .ops
         .audit(Some(&principal.subject), principal.actor_kind(), "instance.update", Some(&iri), None, None)

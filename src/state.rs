@@ -3,6 +3,7 @@
 use crate::auth::jwt::JwtVerifier;
 use crate::config::Config;
 use crate::ops::Ops;
+use crate::shacl::Shapes;
 use crate::store::{GraphStore, OxigraphStore};
 use std::sync::Arc;
 
@@ -11,6 +12,8 @@ pub struct AppState {
     pub store: Arc<dyn GraphStore>,
     pub ops: Ops,
     pub jwt: JwtVerifier,
+    /// The shape set every write is validated against (spec §5.3).
+    pub shapes: Shapes,
     pub http: reqwest::Client,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub version: &'static str,
@@ -37,6 +40,9 @@ impl AppState {
         let timeout = config.peer_resolve_timeout;
         Self {
             jwt: JwtVerifier::new(timeout),
+            // A registry that cannot parse its own shapes would accept anything, so this
+            // fails loudly at construction rather than quietly at the first write.
+            shapes: Shapes::parse(crate::seed::SHAPES_TTL).expect("the shipped SHACL shapes must parse"),
             http: reqwest::Client::builder()
                 .timeout(timeout)
                 .user_agent(concat!("tool-artifact-registry/", env!("CARGO_PKG_VERSION")))

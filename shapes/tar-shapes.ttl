@@ -1,9 +1,11 @@
 # SHACL shapes for write validation (spec §5.3, §7.9), loaded into <urn:tar:shapes>.
 #
-# These are the normative description of a valid record. The prototype enforces a
-# hand-written subset of them on the write path (see src/shacl.rs) because there is no mature
-# SHACL engine in Rust yet; the shapes are shipped, queryable and downloadable so that
-# shacl-manager — or any SHACL processor — can validate a dump of this registry directly.
+# These are enforced, not decorative: every write is validated against this file by the
+# `shacl-rust` engine before it is committed, and a rejected write returns `422` with the
+# engine's own sh:ValidationReport. Editing this file changes what the API accepts — no Rust
+# code needs to change with it.
+#
+# Severity is the policy switch: sh:Violation blocks a write, sh:Warning never does.
 
 @prefix sh:     <http://www.w3.org/ns/shacl#> .
 @prefix tar:    <https://w3id.org/tar/ns#> .
@@ -14,59 +16,113 @@
 @prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
 
+# Targets are the tar: marker classes, not schema:SoftwareApplication: a Release carries that
+# type too (spec §4.2), so targeting it would fire the Software shape on every Release.
+
 tar:SoftwareShape a sh:NodeShape ;
-    sh:targetClass schema:SoftwareApplication ;
+    sh:targetClass tar:Software ;
     sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ;
                   sh:message "Software needs exactly one name" ] ;
-    sh:property [ sh:path schema:codeRepository ; sh:nodeKind sh:IRI ; sh:maxCount 1 ] ;
+    sh:property [ sh:path schema:codeRepository ; sh:nodeKind sh:IRI ; sh:maxCount 1 ;
+                  sh:message "code_repository must be an absolute IRI" ] ;
+    sh:property [ sh:path schema:url ; sh:nodeKind sh:IRI ; sh:maxCount 1 ;
+                  sh:message "homepage must be an absolute IRI" ] ;
+    sh:property [ sh:path schema:softwareHelp ; sh:nodeKind sh:IRI ; sh:maxCount 1 ;
+                  sh:message "documentation must be an absolute IRI" ] ;
     sh:property [ sh:path dct:license ; sh:nodeKind sh:IRI ; sh:maxCount 1 ;
-                  sh:severity sh:Warning ; sh:minCount 1 ;
-                  sh:message "FAIR R1.1 asks for a clear licence" ] ;
-    sh:property [ sh:path tar:kind ; sh:in ( "service" "library" "cli" "workflow" ) ] ;
-    sh:property [ sh:path dct:subject ; sh:nodeKind sh:IRI ] .
+                  sh:message "license must be an SPDX IRI such as https://spdx.org/licenses/Apache-2.0" ] ;
+    sh:property [ sh:path dct:license ; sh:minCount 1 ; sh:severity sh:Warning ;
+                  sh:message "no licence declared — FAIR R1.1 asks for one" ] ;
+    sh:property [ sh:path tar:kind ; sh:in ( "service" "library" "cli" "workflow" ) ;
+                  sh:message "kind must be one of service, library, cli, workflow" ] ;
+    sh:property [ sh:path dct:subject ; sh:nodeKind sh:IRI ;
+                  sh:message "an EDAM topic must be an IRI" ] .
+
+tar:ReleaseShape a sh:NodeShape ;
+    sh:targetClass tar:Release ;
+    sh:property [ sh:path schema:softwareVersion ; sh:minCount 1 ; sh:maxCount 1 ;
+                  sh:message "a Release needs a version" ] ;
+    sh:property [ sh:path dct:isVersionOf ; sh:minCount 1 ; sh:nodeKind sh:IRI ;
+                  sh:message "a Release must name the Software it is a version of" ] .
 
 tar:CapabilityShape a sh:NodeShape ;
     sh:targetClass tar:Capability ;
-    sh:property [ sh:path tar:produces ; sh:nodeKind sh:IRI ] ;
-    sh:property [ sh:path tar:consumes ; sh:nodeKind sh:IRI ] .
+    sh:property [ sh:path tar:produces ; sh:nodeKind sh:IRI ;
+                  sh:message "an ArtifactType must be an IRI (EDAM recommended)" ] ;
+    sh:property [ sh:path tar:consumes ; sh:nodeKind sh:IRI ;
+                  sh:message "an ArtifactType must be an IRI (EDAM recommended)" ] .
 
 tar:InstanceShape a sh:NodeShape ;
-    sh:targetClass prov:SoftwareAgent ;
+    sh:targetClass tar:Instance ;
     sh:property [ sh:path rdfs:label ; sh:minCount 1 ; sh:maxCount 1 ;
                   sh:message "an Instance needs a label" ] ;
     sh:property [ sh:path tar:instanceOf ; sh:minCount 1 ; sh:nodeKind sh:IRI ;
-                  sh:message "an Instance must name the Software it deploys" ] ;
-    sh:property [ sh:path dcat:endpointURL ; sh:nodeKind sh:IRI ; sh:maxCount 1 ] ;
-    sh:property [ sh:path tar:availability ; sh:in ( "public" "restricted" "embargoed" "metadata-only" ) ] ;
-    sh:property [ sh:path tar:oidcClientId ; sh:datatype xsd:string ;
-                  sh:description "binds a workload identity to this deployment" ] .
+                  sh:message "an Instance must name the Software it deploys, or the Release it runs" ] ;
+    sh:property [ sh:path dcat:endpointURL ; sh:nodeKind sh:IRI ; sh:maxCount 1 ;
+                  sh:message "endpoint_url must be an absolute IRI" ] ;
+    sh:property [ sh:path tar:availability ; sh:in ( "public" "restricted" "embargoed" "metadata-only" ) ;
+                  sh:message "availability must be one of public, restricted, embargoed, metadata-only" ] ;
+    sh:property [ sh:path tar:allowedScope ;
+                  sh:in ( "advertise:produce" "advertise:consume" "register:software"
+                          "register:instance" "read:private" "admin:*" ) ;
+                  sh:message "unknown scope — see the scopes this registry defines in /.well-known/tar-registry" ] ;
+    # An OIDC issuer with no client id binds nothing.
+    sh:not [ sh:and ( [ sh:path tar:oidcIssuer ; sh:minCount 1 ]
+                      [ sh:not [ sh:path tar:oidcClientId ; sh:minCount 1 ] ] ) ] ;
+    sh:message "an OIDC issuer without a client id binds nothing — give the client id this deployment authenticates with" .
 
 tar:ArtifactShape a sh:NodeShape ;
     sh:targetClass dcat:Dataset ;
     sh:property [ sh:path dct:title ; sh:minCount 1 ; sh:maxCount 1 ;
                   sh:message "an Artifact needs a title" ] ;
-    sh:property [ sh:path dct:conformsTo ; sh:nodeKind sh:IRI ; sh:severity sh:Warning ; sh:minCount 1 ;
-                  sh:message "without an ArtifactType this artifact cannot take part in capability matchmaking" ] ;
-    sh:property [ sh:path prov:wasDerivedFrom ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path dct:conformsTo ; sh:nodeKind sh:IRI ; sh:maxCount 1 ;
+                  sh:message "conforms_to must be an IRI (EDAM recommended)" ] ;
+    sh:property [ sh:path dct:conformsTo ; sh:minCount 1 ; sh:severity sh:Warning ;
+                  sh:message "no ArtifactType declared — this artifact will not appear in capability matchmaking" ] ;
+    sh:property [ sh:path prov:wasDerivedFrom ; sh:nodeKind sh:IRI ;
+                  sh:message "a lineage link must be an IRI — a foreign registry's IRI is fine, and is the point" ] ;
     sh:property [ sh:path dct:isVersionOf ; sh:nodeKind sh:IRI ; sh:maxCount 1 ] ;
-    sh:property [ sh:path dcat:distribution ; sh:severity sh:Warning ; sh:minCount 1 ;
-                  sh:message "no distribution: the artifact is metadata-only, which must be deliberate" ] .
+    sh:property [ sh:path dcat:distribution ; sh:minCount 1 ; sh:severity sh:Warning ;
+                  sh:message "no distribution: this artifact is metadata-only, which is valid but must be deliberate (spec §6.2)" ] .
 
 tar:DistributionShape a sh:NodeShape ;
     sh:targetClass dcat:Distribution ;
     sh:property [ sh:path tar:availability ; sh:minCount 1 ; sh:maxCount 1 ;
-                  sh:in ( "public" "restricted" "embargoed" "metadata-only" ) ] ;
-    sh:property [ sh:path tar:accessProtocol ; sh:in ( "https" "s3" "sparql" "oci" "ipfs" "file" ) ] ;
-    sh:property [ sh:path tar:authMethod ; sh:in ( "none" "apikey" "oauth2" "basic" "signed-url" ) ] ;
-    sh:property [ sh:path dcat:byteSize ; sh:datatype xsd:integer ] ;
-    # A metadata-only distribution carries no downloadURL at all (spec §6.2).
+                  sh:in ( "public" "restricted" "embargoed" "metadata-only" ) ;
+                  sh:message "availability must be one of public, restricted, embargoed, metadata-only" ] ;
+    sh:property [ sh:path tar:accessProtocol ; sh:in ( "https" "s3" "sparql" "oci" "ipfs" "file" ) ;
+                  sh:message "access_protocol must be one of https, s3, sparql, oci, ipfs, file" ] ;
+    sh:property [ sh:path tar:authMethod ; sh:in ( "none" "apikey" "oauth2" "basic" "signed-url" ) ;
+                  sh:message "auth_method must be one of none, apikey, oauth2, basic, signed-url" ] ;
+    sh:property [ sh:path dcat:byteSize ; sh:datatype xsd:integer ;
+                  sh:message "byte_size must be an integer" ] .
+
+# A metadata-only distribution carries no downloadURL at all (spec §6.2). Expressed as its own
+# node shape so the violation carries this message rather than a generic sh:not one.
+tar:MetadataOnlyShape a sh:NodeShape ;
+    sh:targetClass dcat:Distribution ;
     sh:not [ sh:and ( [ sh:path tar:availability ; sh:hasValue "metadata-only" ]
-                      [ sh:path dcat:downloadURL ; sh:minCount 1 ] ) ] .
+                      [ sh:path dcat:downloadURL ; sh:minCount 1 ] ) ] ;
+    sh:message "a metadata-only distribution carries no downloadURL — the absence is the model (spec §6.2)" .
+
+# A distribution that is not metadata-only has to say where the bytes are.
+tar:ReachableShape a sh:NodeShape ;
+    sh:targetClass dcat:Distribution ;
+    sh:not [ sh:and ( [ sh:not [ sh:path tar:availability ; sh:hasValue "metadata-only" ] ]
+                      [ sh:path dcat:accessURL ; sh:maxCount 0 ]
+                      [ sh:path dcat:downloadURL ; sh:maxCount 0 ] ) ] ;
+    sh:message "a distribution needs an access_url or a download_url unless it is metadata-only" .
 
 tar:RunShape a sh:NodeShape ;
     sh:targetClass prov:Activity ;
-    sh:property [ sh:path prov:startedAtTime ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:dateTime ] ;
-    sh:property [ sh:path prov:endedAtTime ; sh:maxCount 1 ; sh:datatype xsd:dateTime ] ;
-    sh:property [ sh:path tar:status ; sh:in ( "success" "failed" "running" "aborted" ) ] ;
+    sh:property [ sh:path prov:startedAtTime ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:dateTime ;
+                  sh:message "run.started_at must be an RFC 3339 timestamp" ] ;
+    sh:property [ sh:path prov:endedAtTime ; sh:maxCount 1 ; sh:datatype xsd:dateTime ;
+                  sh:message "run.ended_at must be an RFC 3339 timestamp" ] ;
+    sh:property [ sh:path prov:endedAtTime ; sh:minExclusive 0 ;
+                  sh:lessThan prov:startedAtTime ; sh:severity sh:Warning ;
+                  sh:message "a run should not end before it starts" ] ;
+    sh:property [ sh:path tar:status ; sh:in ( "success" "failed" "running" "aborted" ) ;
+                  sh:message "status must be one of success, failed, running, aborted" ] ;
     sh:property [ sh:path tar:atInstance ; sh:minCount 1 ; sh:nodeKind sh:IRI ;
                   sh:message "a Run must be attributed to the Instance that performed it" ] .

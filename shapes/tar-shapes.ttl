@@ -46,8 +46,8 @@ tar:SoftwareShape a sh:NodeShape ;
                   sh:message "no licence declared — FAIR R1.1 asks for one" ] ;
     # kind lives on schema:applicationCategory since the 2026-08-30 vocabulary audit;
     # the duplicate tar:kind triple is no longer written.
-    sh:property [ sh:path schema:applicationCategory ; sh:in ( "service" "library" "cli" "workflow" ) ;
-                  sh:message "kind must be one of service, library, cli, workflow" ] ;
+    sh:property [ sh:path schema:applicationCategory ; sh:in ( "service" "library" "cli" "desktop" "workflow" ) ;
+                  sh:message "kind must be one of service, library, cli, desktop, workflow" ] ;
     sh:property [ sh:path dct:subject ; sh:nodeKind sh:IRI ;
                   sh:message "an EDAM topic must be an IRI" ] .
 

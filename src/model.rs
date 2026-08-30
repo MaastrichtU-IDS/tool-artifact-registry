@@ -109,7 +109,12 @@ pub struct SoftwareIn {
     pub readme_base_url: Option<String>,
     #[serde(default)]
     pub license: Option<String>,
-    /// `service` | `library` | `cli` | `workflow`
+    /// `service` | `library` | `cli` | `desktop` | `workflow`
+    ///
+    /// `desktop` covers an application that runs on someone's machine with a GUI and no
+    /// endpoint. Without it, such a tool had to be filed as `cli`, which said something false
+    /// about its interface. Note that `schema:applicationCategory`, which carries this, is
+    /// free text in schema.org — the closed list is ours, and this is the cost of closing it.
     #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]

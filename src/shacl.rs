@@ -401,7 +401,7 @@ mod tests {
         let f = r.violations().find(|f| f.field == "kind").expect("kind violation");
         assert_eq!(f.constraint, "InConstraintComponent");
         assert_eq!(f.value.as_deref(), Some("teapot"));
-        assert!(f.message.contains("service, library, cli, workflow"));
+        assert!(f.message.contains("service, library, cli, desktop, workflow"));
     }
 
     #[test]

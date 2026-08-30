@@ -121,3 +121,18 @@ documented in `shapes/vocab.ttl` with the reason no standard term fits.
    DCAT-AP harvester walking `dcat:resource` from the catalog finds deployments but not the
    datasets themselves; adding `dcat:dataset` edges on artifact registration would complete
    the DCAT catalog picture at one triple per artifact.
+
+
+## Addendum: `kind` gained a `desktop` value
+
+Registering RDFCraft — a Nuitka-packaged executable that opens a local `pywebview` window —
+showed the `kind` list had no honest value for it. `service` was wrong (it is not hosted),
+`library` was wrong (it is an application, not something you import), `workflow` was wrong, and
+`cli` asserted a command-line interface it does not have. `desktop` was added.
+
+Worth recording why this bit: `schema:applicationCategory`, which now carries this value, is
+**free text** in schema.org. The closed `sh:in` list is ours, not the vocabulary's. Closing an
+open term buys validation and costs expressiveness, and every value we failed to anticipate
+becomes a write the registry rejects for no good reason. `capability` deliberately went the
+other way with a free-IRI escape hatch (D11); `kind` has none, and that asymmetry is a
+deliberate trade rather than an oversight — but it is one to revisit if a third case appears.

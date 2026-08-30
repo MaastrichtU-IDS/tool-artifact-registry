@@ -214,7 +214,10 @@ pub fn release_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Release {
         date_published: p.str(ns::SCHEMA, "datePublished"),
         container_image: p.str(ns::TAR, "containerImage"),
         image_digest: p.str(ns::TAR, "imageDigest"),
-        changelog: p.iri(ns::SCHEMA, "releaseNotes"),
+        // schema:releaseNotes ranges over Text as well as URL, and the write path stores a
+        // non-IRI value as a literal. Reading only IRIs meant prose release notes were kept in
+        // the graph and never shown — present but invisible, which is the worst of both.
+        changelog: p.iri(ns::SCHEMA, "releaseNotes").or_else(|| p.str(ns::SCHEMA, "releaseNotes")),
         install_command: p.str(ns::TAR, "installCommand"),
         software: p.iri(ns::DCT, "isVersionOf"),
         software_name: None,

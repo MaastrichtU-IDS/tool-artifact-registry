@@ -4,7 +4,7 @@ import { ApiError, api } from '../lib/api'
 import { useSession } from '../lib/session'
 import { ProblemJsonError, Skeleton } from '../components/common'
 
-const KINDS = ['service', 'library', 'cli', 'workflow']
+const KINDS = ['service', 'library', 'cli', 'desktop', 'workflow']
 
 /** Sectioned to mirror the model: identity → links → licence and party → topics → capability
  *  (handoff §5.7). Validation failures come back as a SHACL report and are mapped to fields. */

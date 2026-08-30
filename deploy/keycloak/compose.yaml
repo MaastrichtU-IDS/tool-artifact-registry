@@ -1,0 +1,47 @@
+# A Keycloak for local development of the registry's OIDC paths.
+#
+#   docker compose -f deploy/keycloak/compose.yaml up -d
+#
+# The realm in ./realm-tar.json is imported on first start, so this is reproducible rather
+# than click-configured: realm roles, a public PKCE client for the UI, a service-account
+# client for a workload, and four users. See README.md next to this file.
+#
+# Dev-mode Keycloak: in-memory H2, HTTP only, no proxy headers. Never for anything real.
+
+name: tar-keycloak
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: tar-keycloak
+    command:
+      - start-dev
+      - --import-realm
+      - --http-port=8090
+    environment:
+      # Bootstrap admin for the Keycloak console at http://127.0.0.1:8090/admin
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # The issuer the registry and the browser must BOTH be able to reach, byte for byte:
+      # a token's `iss` is compared against TAR_OIDC_ISSUER as a string.
+      KC_HOSTNAME: http://127.0.0.1:8090
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "127.0.0.1:8090:8090"
+      - "127.0.0.1:9090:9000"
+    volumes:
+      - ./realm-tar.json:/opt/keycloak/data/import/realm-tar.json:ro
+    healthcheck:
+      # The image has no curl; Keycloak ships a JRE, and bash can speak enough HTTP.
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"status": "UP"' <&3
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 15s

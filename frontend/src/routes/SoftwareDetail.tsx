@@ -10,6 +10,9 @@ import {
   ArtifactTypeChip, HealthDot, KindChip, LicenseChip, OriginChip, RelativeTime,
 } from '../components/chips'
 import { Markdown } from '../components/Markdown'
+import { useState } from 'react'
+import { ApiError } from '../lib/api'
+import type { Software as SoftwareRecord } from '../lib/types'
 
 /**
  * Lead with what only this registry can say: what the tool consumes and produces, and which
@@ -339,9 +342,100 @@ export default function SoftwareDetail() {
             </section>
           )}
 
+          {s.sync && <SyncPanel software={s} onDone={sw.reload} canSync={isCurator && !foreign} />}
+
           <FairDownloads iri={s.iri} biotools={`/api/v1/software/${s.id}/export/biotools`} />
         </aside>
       </div>
     </>
+  )
+}
+
+
+/** What the repository controls, when it last ran, and a way to run it now. */
+function SyncPanel({
+  software, onDone, canSync,
+}: { software: SoftwareRecord; onDone: () => void; canSync: boolean }) {
+  const sync = software.sync!
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ changed: string[]; releases_added: string[]; skipped: string[] }>()
+  const [error, setError] = useState<string>()
+
+  return (
+    <section className="card rail-section">
+      <h2>Repository sync</h2>
+      <p className="hint" style={{ marginTop: 0 }}>
+        These fields are kept in step with{' '}
+        <a href={`https://github.com/${sync.repo}`} target="_blank" rel="noreferrer">{sync.repo}</a>{' '}
+        and will be overwritten on the next sync. Everything else on this page is edited here and
+        is never touched.
+      </p>
+      <ul className="chips" style={{ marginBottom: 10 }}>
+        {sync.fields.map((f) => <li key={f}><span className="chip accent">{f}</span></li>)}
+      </ul>
+      <dl>
+        <dt>Last run</dt>
+        <dd>
+          {sync.last_status === 'never' ? (
+            <span className="muted">never</span>
+          ) : (
+            <>
+              <RelativeTime iso={sync.last_synced_at} />{' '}
+              <span className={sync.last_status === 'ok' ? 'chip ok' : 'chip danger'}>
+                <span className={sync.last_status === 'ok' ? 'dot' : 'dot square'} aria-hidden="true" />
+                {sync.last_status}
+              </span>
+            </>
+          )}
+        </dd>
+        {sync.last_error && (
+          <>
+            <dt>Error</dt>
+            <dd className="muted">{sync.last_error}</dd>
+          </>
+        )}
+        {!sync.enabled && (
+          <>
+            <dt>Status</dt>
+            <dd><span className="chip warn">disabled</span></dd>
+          </>
+        )}
+      </dl>
+
+      {canSync && (
+        <div className="actions">
+          <button
+            type="button"
+            disabled={busy || !sync.enabled}
+            onClick={async () => {
+              setBusy(true)
+              setError(undefined)
+              setResult(undefined)
+              try {
+                setResult(await api.syncSoftware(software.id))
+                onDone()
+              } catch (e) {
+                setError(e instanceof ApiError ? (e.problem.detail ?? e.problem.title) : String(e))
+              } finally {
+                setBusy(false)
+              }
+            }}
+          >
+            {busy ? 'Syncing…' : 'Sync now'}
+          </button>
+        </div>
+      )}
+      {result && (
+        <p className="hint">
+          {result.changed.length === 0 && result.releases_added.length === 0
+            ? 'Already up to date — nothing changed.'
+            : `Updated ${result.changed.join(', ')}${
+                result.releases_added.length ? `; added ${result.releases_added.join(', ')}` : ''
+              }.`}
+          {result.skipped.length > 0 && ` Skipped: ${result.skipped.join('; ')}.`}
+        </p>
+      )}
+      {error && <p className="field-error" role="alert">{error}</p>}
+    </section>
   )
 }

@@ -1034,3 +1034,457 @@ async fn the_audit_log_records_who_wrote_what() {
     assert_eq!(advert["actor"], f.instance_iri, "the audit actor is the deployment");
     assert_eq!(advert["actor_kind"], "instance-token");
 }
+
+// -------------------------------------------- human sign-in (Keycloak, verified end to end)
+//
+// These cover what driving a real Keycloak through the browser flow turned up: how a person
+// with no registry role is classified, and what a *workload-only* issuer is allowed to assert.
+
+const PARTNER_ISSUER: &str = "https://partner.example/realms/theirs";
+
+/// Trusts `ISSUER` for people and workloads, and `PARTNER_ISSUER` for workloads only —
+/// exactly the `TAR_OIDC_ISSUER` + `TAR_WORKLOAD_ISSUERS` split of addendum §4.
+async fn harness_with_workload_issuer() -> Harness {
+    let mut config = Config::for_test(BASE);
+    config.root_token = Some(ROOT.into());
+    config.oidc.issuer = Some(ISSUER.into());
+    config.oidc.client_id = Some("tar-ui".into());
+    config.oidc.audience = Some(BASE.into());
+    config.oidc.workload_issuers = vec![PARTNER_ISSUER.into()];
+    let store = Arc::new(OxigraphStore::memory().unwrap());
+    let ops = Ops::open(":memory:").await.unwrap();
+    let mut state = AppState::from_parts(config, store, ops);
+    state.jwt = state.jwt.with_static_key("test-key", Algorithm::HS256, DecodingKey::from_secret(HS_SECRET));
+    let state = Arc::new(state);
+    tar::seed::load_vocab(&state).unwrap();
+    Harness { app: tar::app(state.clone()), state }
+}
+
+#[tokio::test]
+async fn a_signed_in_person_with_no_role_is_a_person_not_a_workload() {
+    let h = harness_with_oidc(true).await;
+    // What Keycloak issues to the browser client for a user who holds none of our roles:
+    // `azp` is the UI client and `sid` marks an interactive session.
+    let token = jwt(json!({
+        "iss": ISSUER, "aud": BASE, "exp": exp(), "sub": "u-nobody",
+        "azp": "tar-ui", "sid": "0b1d…", "preferred_username": "nobody",
+        "realm_access": {"roles": ["default-roles-tar", "offline_access"]}
+    }));
+    let (status, who, _) = h.req("GET", "/api/v1/whoami", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "{who}");
+    assert_eq!(who["credential"], "oidc-human", "a person without a role is still a person");
+    assert_eq!(who["display_name"], "nobody");
+    assert_eq!(who["is_curator"], false);
+    assert!(who["instance"].is_null());
+
+    // Authenticated, but with no authority: writing needs a role.
+    let (status, body) = h.post("/api/v1/software", &token, json!({"name": "x", "kind": "cli"})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn a_workload_only_issuer_cannot_assert_human_roles() {
+    let h = harness_with_workload_issuer().await;
+    // A partner's Keycloak can put any realm role it likes in its own tokens. It is trusted
+    // to say *who a workload is*, never to say who is an admin here (addendum §4).
+    let token = jwt(json!({
+        "iss": PARTNER_ISSUER, "aud": BASE, "exp": exp(), "sub": "them-1",
+        "azp": "their-client", "sid": "s-1", "preferred_username": "mallory",
+        "realm_access": {"roles": ["admin", "curator"]}
+    }));
+    let (status, who, _) = h.req("GET", "/api/v1/whoami", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "{who}");
+    assert_eq!(who["roles"].as_array().unwrap().len(), 0, "{who}");
+    assert_eq!(who["is_admin"], false);
+    assert_eq!(who["credential"], "oidc-workload");
+
+    let (status, _) = h.post("/api/v1/peers", &token, json!({"base_url": "https://reg.example"})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // The same claims from the estate's own issuer *are* honoured.
+    let mine = jwt(json!({
+        "iss": ISSUER, "aud": BASE, "exp": exp(), "sub": "u-1", "azp": "tar-ui", "sid": "s-2",
+        "realm_access": {"roles": ["admin"]}
+    }));
+    let (status, who, _) = h.req("GET", "/api/v1/whoami", Some(&mine), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(who["is_admin"], true, "{who}");
+    assert_eq!(who["credential"], "oidc-human");
+}
+
+#[tokio::test]
+async fn the_browser_sign_in_client_is_never_treated_as_a_deployment() {
+    let h = harness_with_oidc(true).await;
+    let f = h.fixture().await;
+    // An Instance record that declares the UI's own client id must not turn every person who
+    // signs in into that deployment.
+    let (status, body) = h
+        .post(
+            "/api/v1/instances",
+            ROOT,
+            json!({
+                "label": "a deployment that wrongly claims the UI client id",
+                "software": f.software_id,
+                "endpoint_url": "https://confused.example",
+                "oidc_client_id": "tar-ui"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let token = jwt(json!({
+        "iss": ISSUER, "aud": BASE, "exp": exp(), "sub": "u-2", "azp": "tar-ui", "sid": "s-3",
+        "realm_access": {"roles": ["curator"]}
+    }));
+    let (status, who, _) = h.req("GET", "/api/v1/whoami", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "{who}");
+    assert_eq!(who["credential"], "oidc-human");
+    assert!(who["instance"].is_null(), "a person is not a deployment: {who}");
+}
+
+// ------------------------------------------- federated search propagation
+//
+// A federated search no longer stops at this registry's own peers: it propagates, carrying a
+// query id and a hop budget. In a mesh with a cycle that is an infinite storm unless the
+// same query is refused the second time it arrives, so these tests exercise the refusal, the
+// budget, and a real cycle over real sockets.
+
+/// One registry serving on a real loopback port, plus an in-process handle to the same router
+/// so a test can start a query at it without needing an HTTP client of its own.
+struct FedNode {
+    base: String,
+    h: Harness,
+}
+
+/// Bind first, then build the config: a registry's base IRI has to be the URL its peers will
+/// actually reach it on, and the port is only known after binding.
+async fn spawn_registry(title: &str, software_name: &str) -> FedNode {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+
+    let mut config = Config::for_test(&base);
+    config.root_token = Some(ROOT.into());
+    config.title = title.to_string();
+    let store = Arc::new(OxigraphStore::memory().unwrap());
+    let ops = Ops::open(":memory:").await.unwrap();
+    let state = Arc::new(AppState::from_parts(config, store, ops));
+    tar::seed::load_vocab(&state).unwrap();
+
+    let app = tar::app(state.clone());
+    let served = app.clone();
+    tokio::spawn(async move {
+        axum::serve(listener, served).await.unwrap();
+    });
+
+    let node = FedNode { base, h: Harness { app, state } };
+    let (status, body) = node
+        .h
+        .post(
+            "/api/v1/software",
+            ROOT,
+            json!({
+                "name": software_name,
+                "tagline": "SHACL shape management and validation",
+                "code_repository": "https://github.com/MaastrichtU-IDS/shacl-manager",
+                "license": "https://spdx.org/licenses/Apache-2.0",
+                "kind": "service"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    node
+}
+
+/// Trust `other` as a peer of `node`, over the real well-known handshake.
+async fn peer_with(node: &FedNode, other: &FedNode) {
+    let (status, body) = node.h.post("/api/v1/peers", ROOT, json!({"base_url": other.base, "announce": false})).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+fn titles(results: &Value) -> Vec<String> {
+    results["hits"].as_array().unwrap().iter().map(|h| h["title"].as_str().unwrap_or_default().to_string()).collect()
+}
+
+fn hit<'a>(results: &'a Value, title: &str) -> &'a Value {
+    results["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["title"] == title)
+        .unwrap_or_else(|| panic!("no hit titled {title} in {results}"))
+}
+
+#[tokio::test]
+async fn a_repeated_federated_query_id_is_refused_as_already_handled() {
+    let h = harness().await;
+    h.fixture().await;
+
+    let (status, first) = h.get("/api/v1/search?q=shacl&federated=true&fed_id=q-repeat-1").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert!(first["total"].as_i64().unwrap() > 0, "the first arrival is served normally: {first}");
+    assert!(!first["already_handled"].as_bool().unwrap_or(false));
+    assert_eq!(first["federation"]["query_id"], "q-repeat-1");
+
+    // The same id again is a loop. It is refused *explicitly* — the caller is told which id
+    // was refused and why zero hits is the right answer — not silently answered with an
+    // empty result set that looks like "nothing matched".
+    let (status, again) = h.get("/api/v1/search?q=shacl&federated=true&fed_id=q-repeat-1").await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["already_handled"], true, "{again}");
+    assert_eq!(again["total"], 0);
+    assert!(again["hits"].as_array().unwrap().is_empty());
+    assert_eq!(again["federation"]["query_id"], "q-repeat-1");
+    assert!(again["federation"]["first_seen_at"].is_string(), "{again}");
+    let reason = again["federation"]["reason"].as_str().unwrap();
+    assert!(reason.contains("already handled") && reason.contains("q-repeat-1"), "{reason}");
+
+    // The refusal is per query id, not a circuit breaker on the registry.
+    let (_, other) = h.get("/api/v1/search?q=shacl&federated=true&fed_id=q-repeat-2").await;
+    assert!(!other["already_handled"].as_bool().unwrap_or(false));
+    assert!(other["total"].as_i64().unwrap() > 0);
+
+    // A query id is an identifier, not free text: a malformed one is refused rather than
+    // rewritten, because rewriting it would silently break the sender's own deduplication.
+    let (status, _) = h.get("/api/v1/search?q=shacl&federated=true&fed_id=%27%20OR%201%3D1").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A plain local search claims nothing and reports no federation envelope.
+    let (_, local) = h.get("/api/v1/search?q=shacl").await;
+    assert!(local["federation"].is_null(), "{local}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_hop_budget_stops_propagation() {
+    // A knows B; B knows C; A has never heard of C.
+    let a = spawn_registry("A", "shacl-manager-alpha").await;
+    let b = spawn_registry("B", "shacl-manager-bravo").await;
+    let c = spawn_registry("C", "shacl-manager-charlie").await;
+    peer_with(&a, &b).await;
+    peer_with(&b, &c).await;
+
+    // Two hops: A -> B -> C. C's record reaches A even though A does not peer with C.
+    let (status, deep) = a.h.get("/api/v1/search?q=shacl-manager&federated=true&fed_hops=2").await;
+    assert_eq!(status, StatusCode::OK, "{deep}");
+    let found = titles(&deep);
+    assert!(found.contains(&"shacl-manager-charlie".to_string()), "propagation should reach C: {found:?}");
+
+    // And the report says *how* each result arrived. A hit relayed by B is not the same
+    // evidence as one from B itself, and the response keeps them apart.
+    let from_b = hit(&deep, "shacl-manager-bravo");
+    assert_eq!(from_b["reach"], "direct");
+    assert_eq!(from_b["hops"], 1);
+    assert_eq!(from_b["via"], b.base);
+    let from_c = hit(&deep, "shacl-manager-charlie");
+    assert_eq!(from_c["reach"], "indirect");
+    assert_eq!(from_c["hops"], 2);
+    assert_eq!(from_c["via"], b.base, "C was reached through B");
+    assert_eq!(from_c["origin"]["peer_base_iri"], c.base, "the home registry stays C, not B");
+    assert_eq!(hit(&deep, "shacl-manager-alpha")["reach"], "local");
+
+    // C also shows up in the topology report as a peer we never configured.
+    let c_status = deep["peers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["base_iri"] == c.base)
+        .unwrap_or_else(|| panic!("C should appear in the peer report: {deep}"));
+    assert_eq!(c_status["reach"], "indirect");
+    assert_eq!(c_status["via"], b.base);
+
+    // One hop: the budget runs out at B, so C is never asked.
+    let (status, shallow) = a.h.get("/api/v1/search?q=shacl-manager&federated=true&fed_hops=1").await;
+    assert_eq!(status, StatusCode::OK, "{shallow}");
+    let found = titles(&shallow);
+    assert!(found.contains(&"shacl-manager-bravo".to_string()), "{found:?}");
+    assert!(!found.contains(&"shacl-manager-charlie".to_string()), "the hop budget must stop at B: {found:?}");
+    assert_eq!(shallow["federation"]["hops_granted"], 1);
+    assert_eq!(shallow["federation"]["hops_forwarded"], 0);
+
+    // Zero hops is a local search that still claims its id.
+    let (_, none) = a.h.get("/api/v1/search?q=shacl-manager&federated=true&fed_hops=0").await;
+    assert_eq!(titles(&none), vec!["shacl-manager-alpha".to_string()]);
+    assert_eq!(none["federation"]["budget_exhausted"], true, "{none}");
+
+    // A budget bigger than ours is clamped, so a peer cannot grant us more than it was given.
+    let (_, greedy) = a.h.get("/api/v1/search?q=shacl-manager&federated=true&fed_hops=9999").await;
+    let granted = greedy["federation"]["hops_granted"].as_u64().unwrap();
+    let max = greedy["federation"]["max_hops"].as_u64().unwrap();
+    assert!(granted <= max && max <= 8, "granted {granted}, max {max}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cycle_in_the_peer_graph_terminates() {
+    // The nastiest shape: every registry peers with both others, so every query has two
+    // routes to every node and one of them must be cut.
+    let a = spawn_registry("A", "shacl-manager-alpha").await;
+    let b = spawn_registry("B", "shacl-manager-bravo").await;
+    let c = spawn_registry("C", "shacl-manager-charlie").await;
+    for (x, y) in [(&a, &b), (&a, &c), (&b, &a), (&b, &c), (&c, &a), (&c, &b)] {
+        peer_with(x, y).await;
+    }
+
+    // If propagation did not terminate this would hang rather than fail; the timeout turns a
+    // storm into a test failure.
+    let (status, r) = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        a.h.get("/api/v1/search?q=shacl-manager&federated=true&fed_id=cycle-1&fed_hops=3"),
+    )
+    .await
+    .expect("a federated search over a cyclic peer graph must terminate");
+    assert_eq!(status, StatusCode::OK, "{r}");
+
+    // Every registry answered, and each record appears exactly once however many routes
+    // reached it.
+    let mut found = titles(&r);
+    found.sort();
+    assert_eq!(
+        found,
+        vec!["shacl-manager-alpha".to_string(), "shacl-manager-bravo".to_string(), "shacl-manager-charlie".to_string()],
+        "each registry's record exactly once: {r}"
+    );
+
+    // The proof that termination came from loop prevention and not from luck: every registry
+    // recorded this query id exactly once, and at least one refused a repeat of it.
+    let mut repeats = 0;
+    for (name, node) in [("A", &a), ("B", &b), ("C", &c)] {
+        let seen = tar::ops::federation::seen_query(&node.h.state.ops, "cycle-1")
+            .await
+            .unwrap()
+            .unwrap_or_else(|| panic!("{name} should have claimed the query id"));
+        repeats += seen.repeat_count;
+    }
+    assert!(repeats >= 1, "a triangle gives some registry two routes to the same query; one must be refused");
+
+    // …and that refusal is visible in the topology report rather than looking like a failure.
+    let refused: Vec<&Value> =
+        r["peers"].as_array().unwrap().iter().filter(|p| p["status"] == "already_handled" || p["status"] == "skipped").collect();
+    assert!(!refused.is_empty(), "the cut edges must be reported: {r}");
+    assert_eq!(r["partial"], false, "a refused repeat is a healthy answer, not a partial one: {r}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_peer_cannot_flood_us_with_results() {
+    let a = spawn_registry("A", "shacl-manager-alpha").await;
+
+    // A peer that answers with five thousand hits, and one that answers with megabytes.
+    let flood = spawn_hostile_peer(5_000, 20).await;
+    let giant = spawn_hostile_peer(5_000, 800).await;
+    let (status, body) = a.h.post("/api/v1/peers", ROOT, json!({"base_url": flood, "announce": false})).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, body) = a.h.post("/api/v1/peers", ROOT, json!({"base_url": giant, "announce": false})).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, r) = a.h.get("/api/v1/search?q=shacl&federated=true").await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+
+    let from_flood = r["hits"].as_array().unwrap().iter().filter(|h| h["via"] == flood).count();
+    assert!(from_flood > 0 && from_flood <= 100, "a peer's hits are capped, got {from_flood}");
+    assert!(r["hits"].as_array().unwrap().len() <= 200, "our own response stays bounded: {}", r["total"]);
+
+    // The oversized body is refused outright rather than buffered.
+    let giant_status = r["peers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["base_iri"] == giant)
+        .unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(giant_status["status"], "error", "{giant_status}");
+    assert!(giant_status["error"].as_str().unwrap().contains("cap"), "{giant_status}");
+    assert_eq!(r["partial"], true, "a peer we could not read makes the answer partial");
+}
+
+/// A stub that speaks just enough of the protocol to be added as a peer, and then answers
+/// every search with `hits` results whose titles are `title_len` characters long.
+async fn spawn_hostile_peer(hits: usize, title_len: usize) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let wk = base.clone();
+    let app = axum::Router::new()
+        .route(
+            "/.well-known/tar-registry",
+            axum::routing::get(move || {
+                let wk = wk.clone();
+                async move { axum::Json(json!({"base_iri": wk, "title": "hostile", "peers": []})) }
+            }),
+        )
+        .route(
+            "/api/v1/search",
+            axum::routing::get(move || async move {
+                let filler = "shacl".repeat(title_len / 5 + 1);
+                let hits: Vec<Value> = (0..hits)
+                    .map(|i| {
+                        json!({
+                            "iri": format!("http://hostile.example/software/{i}"),
+                            "entity_type": "software",
+                            "title": format!("shacl-{i}-{filler}"),
+                            "origin": {"kind": "local"},
+                            "score": 0.9
+                        })
+                    })
+                    .collect();
+                axum::Json(json!({"query": "shacl", "hits": hits, "total": hits.len(), "partial": false, "peers": []}))
+            }),
+        );
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    base
+}
+
+
+// ---------------------------------------------------------------- forge sync
+
+#[tokio::test]
+async fn sync_only_touches_the_fields_the_record_put_under_its_control() {
+    let h = harness().await;
+    let (status, sw) = h
+        .post(
+            "/api/v1/software",
+            ROOT,
+            json!({
+                "name": "shacl-rust",
+                "tagline": "a tagline a person wrote",
+                "description": "a paragraph a person wrote",
+                "sync": {"source": "github", "repo": "ensaremirerol/shacl-rust",
+                         "fields": ["tagline", "license"]}
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    let id = sw["id"].as_str().unwrap().to_string();
+    assert_eq!(sw["sync"]["repo"], "ensaremirerol/shacl-rust");
+    assert_eq!(sw["sync"]["last_status"], "never");
+
+    // `description` is not managed, so no sync may ever overwrite it. That is the whole
+    // contract: connecting a repository must not silently discard curated prose.
+    let (_, after) = h.get(&format!("/api/v1/software/{id}")).await;
+    assert_eq!(after["description"], "a paragraph a person wrote");
+}
+
+#[tokio::test]
+async fn a_field_no_forge_can_supply_is_refused_when_it_is_configured() {
+    let h = harness().await;
+    // Better to fail here, where someone is looking, than at 3am in a scheduled sync.
+    let (status, body) = h
+        .post(
+            "/api/v1/software",
+            ROOT,
+            json!({"name": "x", "sync": {"repo": "o/n", "fields": ["capability", "name"]}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let detail = body["detail"].as_str().unwrap();
+    assert!(detail.contains("capability"), "{detail}");
+    assert!(detail.contains("syncable fields are"), "{detail}");
+}
+
+#[tokio::test]
+async fn syncing_a_record_with_no_repository_says_so() {
+    let h = harness().await;
+    let (_, sw) = h.post("/api/v1/software", ROOT, json!({"name": "unconnected"})).await;
+    let (status, body) = h
+        .post(&format!("/api/v1/software/{}/sync", sw["id"].as_str().unwrap()), ROOT, json!({}))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["detail"].as_str().unwrap().contains("not connected to a repository"), "{body}");
+}

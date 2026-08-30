@@ -47,6 +47,7 @@ export default function InstanceDetail() {
                 <OriginChip origin={i.origin} />
                 {mayManage && !foreign && <Link className="chip" to={`/instances/${i.id}/edit`}>Edit</Link>}
                 {mayManage && !foreign && <Link className="chip" to={`/instances/${i.id}/tokens`}>Credentials</Link>}
+                {mayManage && !foreign && <Link className="chip" to={`/instances/${i.id}/subscriptions`}>Subscriptions</Link>}
               </div>
             </div>
             <p className="tagline">

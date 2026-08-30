@@ -125,6 +125,9 @@ async fn serve() -> Result<()> {
     if state.config.peer_resolve_enabled {
         tokio::spawn(api::peers::resolver_loop(state.clone()));
     }
+    // Webhook delivery, off the request path for the same reason peer resolution is: nothing a
+    // subscriber's endpoint does may be felt by the deployment that advertised.
+    tokio::spawn(api::subscriptions::delivery_loop(state.clone()));
 
     let app = tar::app(state.clone());
     let listener = tokio::net::TcpListener::bind(&listen).await.with_context(|| format!("binding {listen}"))?;

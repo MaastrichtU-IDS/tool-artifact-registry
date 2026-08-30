@@ -3,6 +3,10 @@
 //! Nothing in here is ever exposed through `/sparql`. Secrets do not belong in a queryable
 //! graph.
 
+pub mod federation;
+
+pub mod subscriptions;
+
 use anyhow::{Context, Result};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;

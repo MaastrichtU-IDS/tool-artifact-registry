@@ -12,8 +12,10 @@ pub mod runs;
 pub mod search;
 pub mod software;
 pub mod sparql;
+pub mod subscriptions;
 pub mod tokens;
 pub mod types;
+pub mod vocab;
 pub mod web;
 
 use crate::error::{AppError, AppResult};
@@ -42,11 +44,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/software/{id}/releases", get(software::list_releases).post(software::create_release))
         .route("/software/{id}/releases/{release_id}", delete(software::delete_release))
         .route("/software/{id}/capability", put(software::put_capability))
+        .route("/software/{id}/sync", post(software::sync))
         .route("/software/{id}/export/biotools", get(software::export_biotools))
         // capability matchmaking
         .route("/capabilities", get(search::capabilities))
         // local ArtifactTypes (D11)
         .route("/types", get(types::list).post(types::create))
+        .route("/vocab/search", get(vocab::search))
+        .route("/vocab/resolve", get(vocab::resolve))
         .route("/types/{id}", get(types::get))
         // instances
         .route("/instances", get(instances::list).post(instances::create))
@@ -56,6 +61,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/instances/{id}/artifacts", get(instances::artifacts))
         .route("/instances/{id}/tokens", get(tokens::list).post(tokens::create))
         .route("/instances/{id}/tokens/{token_id}", delete(tokens::revoke))
+        // subscriptions: standing interest in artifacts, owned by an Instance like its tokens
+        .route("/instances/{id}/subscriptions", get(subscriptions::list).post(subscriptions::create))
+        .route(
+            "/subscriptions/{sid}",
+            get(subscriptions::get).patch(subscriptions::patch).delete(subscriptions::delete),
+        )
+        // the pull path, for a subscriber that cannot receive an inbound connection
+        .route("/subscriptions/{sid}/deliveries", get(subscriptions::deliveries))
+        .route("/subscriptions/{sid}/deliveries/ack", post(subscriptions::ack))
         // artifacts and runs
         .route("/artifacts", get(artifacts::list).post(artifacts::create))
         .route("/artifacts/{id}", get(artifacts::get))

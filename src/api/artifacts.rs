@@ -139,6 +139,18 @@ pub async fn create(
     if let Some(k) = &input.external_key {
         let _ = state.ops.remember_artifact(k, &iri).await;
     }
+    // The other way an artifact appears. A curator's direct registration has no run and often
+    // no Instance behind the credential, so provenance filters on it cannot match — but a
+    // subscription for "any SHACL report" must still fire, or the feature would have a hole
+    // exactly where a backfilled historical artifact lands.
+    crate::api::subscriptions::notify_advertised(
+        &state,
+        principal.instance_iri.as_deref(),
+        None,
+        std::slice::from_ref(&iri),
+        crate::ops::subscriptions::ROLE_PRODUCED,
+    )
+    .await;
     let _ = state
         .ops
         .audit(Some(&principal.subject), principal.actor_kind(), "artifact.create", Some(&iri), input.title.as_deref(), None)

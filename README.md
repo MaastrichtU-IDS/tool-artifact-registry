@@ -173,6 +173,38 @@ OIDC authorisation code + PKCE against the same issuer; roles `reader` / `curato
 come from the token. When no issuer is configured, the UI hides sign-in and falls back to
 pasting a registry token.
 
+Only `TAR_OIDC_ISSUER` may assert those roles. An issuer listed in `TAR_WORKLOAD_ISSUERS` is
+trusted to say *which deployment* is calling and nothing else — a partner's Keycloak, a
+Kubernetes API server and GitHub Actions can all mint a token containing a realm role called
+`admin`, and honouring it would hand them this registry.
+
+### Trying sign-in locally
+
+A Keycloak with an importable realm — three roles, a PKCE public client, a service-account
+client, and four users with known passwords — lives in
+[`deploy/keycloak/`](deploy/keycloak/README.md).
+
+```bash
+docker compose -f deploy/keycloak/compose.yaml up -d
+
+export TAR_BASE_IRI=http://127.0.0.1:8099
+export TAR_LISTEN=127.0.0.1:8099
+export TAR_STATIC_DIR=frontend/dist
+export TAR_OIDC_ISSUER=http://127.0.0.1:8090/realms/tar
+export TAR_OIDC_CLIENT_ID=tar-ui
+./target/release/tar serve
+```
+
+Open <http://127.0.0.1:8099>, **Sign in → Continue with single sign-on**, and log in as
+`curator` / `curator-password` (or `registryadmin` / `admin-password`). The credentials are
+test values committed on purpose; the realm file is what makes the setup reproducible.
+
+The one thing that must line up is the **audience**: `TAR_OIDC_AUDIENCE` defaults to
+`TAR_BASE_IRI` and is required by default, so the Keycloak client needs an audience mapper
+adding that exact string — otherwise the token carries `aud: ["account"]` and sign-in
+completes at Keycloak and then fails here. The realm ships mappers for `127.0.0.1:8099` and
+`127.0.0.1:8098`; serve on any other origin and you must add one.
+
 ---
 
 ## Layout
@@ -240,9 +272,13 @@ Honest list of where the prototype departs from the spec, or stops short of it.
    and the filter exist.
 5. **Repo liveness metrics are not implemented** (spec §10.5 `TAR_FORGE_TOKEN`). Per the
    handoff, the UI degrades by omitting those cells rather than rendering zeros.
-6. **The OIDC browser sign-in flow has not been exercised against a live Keycloak.** The
-   workload path is covered by tests with a pinned signing key; the human PKCE flow is
-   standard but untested end to end.
+6. **Human sign-in is verified against a live Keycloak** ([`deploy/keycloak/`](deploy/keycloak/)):
+   a browser was driven through authorisation code + PKCE, and `curator` and `admin` realm
+   roles were confirmed to decide what the signed-in person may do (`POST /api/v1/software`
+   succeeds for a curator; `/api/v1/peers` is 403 for a curator and 200 for an admin). What is
+   *not* covered: token **refresh**. The access token is used until it expires (30 minutes in
+   the dev realm) and there is no silent renewal, so a long editing session ends in a 401 and
+   a re-sign-in. The refresh token is deliberately not stored in the browser.
 7. **Federated search fans out live** and is not deduplicated across peers beyond the origin
    chip.
 8. **Peer resolution fetches a whole Turtle document** into the peer graph rather than

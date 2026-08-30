@@ -114,13 +114,17 @@ pub struct SoftwareIn {
     pub readme_base_url: Option<String>,
     #[serde(default)]
     pub license: Option<String>,
-    /// `service` | `library` | `cli` | `desktop` | `workflow`
+    /// What the software *is*, as a set: `service`, `library`, `cli`, `desktop`, `workflow`.
     ///
-    /// `desktop` covers an application that runs on someone's machine with a GUI and no
-    /// endpoint. Without it, such a tool had to be filed as `cli`, which said something false
-    /// about its interface. Note that `schema:applicationCategory`, which carries this, is
-    /// free text in schema.org — the closed list is ours, and this is the cost of closing it.
+    /// A set rather than one value, because one program is routinely several of these at once
+    /// — a tool with a desktop build and a hosted deployment is both, and forcing a choice
+    /// makes the record lie about one of them. `schema:applicationCategory`, which carries
+    /// this, is free text and unrestricted in cardinality, so the set is the vocabulary's own
+    /// shape; only the allowed values are ours.
     #[serde(default)]
+    pub kinds: Vec<String>,
+    /// Accepted for compatibility with single-valued callers; folded into `kinds`.
+    #[serde(default, skip_serializing)]
     pub kind: Option<String>,
     #[serde(default)]
     pub maturity: Option<String>,
@@ -145,6 +149,76 @@ pub struct SoftwareIn {
     /// Optional capability declared inline at registration time.
     #[serde(default)]
     pub capability: Option<CapabilityIn>,
+    /// Keep parts of this record in step with a source repository.
+    #[serde(default)]
+    pub sync: Option<SyncIn>,
+}
+
+/// Which fields a forge owns, and where they come from.
+///
+/// The point of naming the fields is that sync must never silently overwrite something a
+/// person wrote. A field listed here is *managed*: sync overwrites it, and the UI says so. A
+/// field not listed is the curator's, and sync leaves it alone even when the repository has an
+/// obvious value for it. Anything else turns "connect the repo" into "lose my edits".
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct SyncIn {
+    /// Only `github` today. Named rather than assumed, because GitLab is the obvious next one
+    /// and a boolean `github: true` would have to be replaced rather than extended.
+    #[serde(default = "default_forge")]
+    pub source: String,
+    /// `owner/name`.
+    pub repo: String,
+    /// Any of: `tagline`, `description`, `readme`, `homepage`, `license`, `keywords`,
+    /// `maturity`, `releases`, `image`.
+    #[serde(default)]
+    pub fields: Vec<String>,
+    #[serde(default = "default_true_sync")]
+    pub enabled: bool,
+}
+
+fn default_forge() -> String {
+    "github".to_string()
+}
+fn default_true_sync() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SyncStatus {
+    pub source: String,
+    pub repo: String,
+    pub fields: Vec<String>,
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_synced_at: Option<String>,
+    /// `ok` | `error` | `never`
+    pub last_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// What the last run actually changed, so a sync is auditable rather than magic.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub last_changed: Vec<String>,
+}
+
+/// Fields a forge can supply. Anything outside this list is always the curator's.
+pub const SYNCABLE_FIELDS: [&str; 9] = [
+    "tagline", "description", "readme", "homepage", "license", "keywords", "maturity",
+    "releases", "image",
+];
+
+impl SoftwareIn {
+    /// The declared kinds, accepting either the set or the older single value, de-duplicated
+    /// and order-preserving.
+    pub fn resolved_kinds(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for k in self.kinds.iter().chain(self.kind.iter()) {
+            let k = k.trim();
+            if !k.is_empty() && !out.iter().any(|e| e == k) {
+                out.push(k.to_string());
+            }
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -173,11 +247,17 @@ pub struct Software {
     pub readme_base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
+    pub kinds: Vec<String>,
+    /// The first kind, for callers and UI that want one word. Absent when none is declared.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maturity: Option<String>,
     /// False when the software cannot be hosted — see `SoftwareIn::deployable`.
+    ///
+    /// Independent of `kinds`: a program can ship a desktop build *and* be hosted, and it is
+    /// then both `desktop` and `service` and deployable. What this flag governs is only
+    /// whether an instance of it may carry an endpoint.
     pub deployable: bool,
     pub edam_topics: Vec<TypeRef>,
     pub keywords: Vec<String>,
@@ -188,6 +268,8 @@ pub struct Software {
     pub publications: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capability: Option<Capability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync: Option<SyncStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_release: Option<Release>,
     pub instance_count: i64,
@@ -465,6 +547,41 @@ pub struct ArtifactIn {
     pub issued: Option<String>,
     #[serde(default)]
     pub publisher: Option<AgentIn>,
+    /// Who made this. Distinct from `publisher` (who released it) and from the credential the
+    /// advertisement arrived on (which the registry records itself as `prov:wasAttributedTo`
+    /// and no caller can forge). A person here can be an ORCID, and then the same researcher
+    /// is the same node across every registry that federates with this one.
+    #[serde(default)]
+    pub creators: Vec<AgentIn>,
+    #[serde(default)]
+    pub contributors: Vec<AgentIn>,
+    /// Who to ask about it, when that is not the publisher.
+    #[serde(default)]
+    pub contact: Option<AgentIn>,
+    #[serde(default)]
+    pub modified: Option<String>,
+    /// The artifact's own version string, distinct from the version *series* it belongs to.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// A human-facing page about it, as opposed to a distribution that yields the bytes.
+    #[serde(default)]
+    pub landing_page: Option<String>,
+    #[serde(default)]
+    pub documentation: Option<String>,
+    /// Where it came from, when that is not a registered artifact — a paper, a survey, a
+    /// database export that predates this registry.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// BCP 47, e.g. `en`, `nl`.
+    #[serde(default)]
+    pub language: Vec<String>,
+    /// Free text for now: a place name or a geographic IRI.
+    #[serde(default)]
+    pub spatial: Option<String>,
+    #[serde(default)]
+    pub temporal_start: Option<String>,
+    #[serde(default)]
+    pub temporal_end: Option<String>,
     #[serde(default)]
     pub was_derived_from: Vec<String>,
     #[serde(default)]
@@ -495,6 +612,31 @@ pub struct Artifact {
     pub issued: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub publisher: Option<AgentRef>,
+    pub creators: Vec<AgentRef>,
+    pub contributors: Vec<AgentRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact: Option<AgentRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub landing_page: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    pub language: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spatial: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporal_start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporal_end: Option<String>,
+    /// The credential the advertisement arrived on. Recorded by the registry, never supplied
+    /// by the caller — this is what makes attribution trustworthy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attributed_to: Option<String>,
     pub distributions: Vec<Distribution>,
     /// The strongest availability across distributions; `metadata-only` when there are none.
     pub availability: String,

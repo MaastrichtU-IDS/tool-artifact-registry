@@ -245,6 +245,13 @@ pub async fn principal_from_claims(
         .and_then(|v| v.as_str())
         .map(str::to_string);
 
+    // Only the estate's own provider (`TAR_OIDC_ISSUER`) may assert who is a curator or an
+    // admin here. `TAR_WORKLOAD_ISSUERS` is, in the words of addendum §4, "accepted for
+    // workload tokens only, never for browser sign-in" — a partner's Keycloak, a Kubernetes
+    // API server or GitHub Actions can all put a realm role called `admin` in a token, and
+    // honouring it would hand them this registry.
+    let home_issuer = cfg.issuer.as_deref().map(|i| i.trim_end_matches('/')) == Some(issuer);
+
     // Candidate workload identities, most specific first.
     let mut candidates: Vec<String> = Vec::new();
     for path in [cfg.client_claim.as_str(), "azp", "client_id", "clientId"] {
@@ -254,23 +261,33 @@ pub async fn principal_from_claims(
             }
         }
     }
-    if !sub.is_empty() {
+    // The browser sign-in client is a person's client, never a deployment's. Keeping it out
+    // of the candidate list stops an Instance record that (mistakenly or maliciously)
+    // declares `tar:oidcClientId "tar-ui"` from turning every signed-in person into that
+    // deployment.
+    let ui_client = cfg.client_id.as_deref().filter(|_| home_issuer);
+    let is_ui_client = ui_client.is_some_and(|c| candidates.first().is_some_and(|f| f == c));
+    if is_ui_client {
+        candidates.clear();
+    } else if !sub.is_empty() {
         candidates.push(sub.clone());
     }
 
     // Roles: Keycloak realm roles, plus client roles for our own client id.
     let mut roles: BTreeSet<Role> = BTreeSet::new();
     let mut role_strings: Vec<String> = Vec::new();
-    if let Some(v) = claim_path(claims, &cfg.roles_claim) {
-        role_strings.extend(string_list(v));
-    }
-    if let Some(client) = &cfg.client_id {
-        if let Some(v) = claim_path(claims, &format!("resource_access.{client}.roles")) {
+    if home_issuer {
+        if let Some(v) = claim_path(claims, &cfg.roles_claim) {
             role_strings.extend(string_list(v));
         }
-    }
-    if let Some(v) = claims.get("roles") {
-        role_strings.extend(string_list(v));
+        if let Some(client) = &cfg.client_id {
+            if let Some(v) = claim_path(claims, &format!("resource_access.{client}.roles")) {
+                role_strings.extend(string_list(v));
+            }
+        }
+        if let Some(v) = claims.get("roles") {
+            role_strings.extend(string_list(v));
+        }
     }
     for r in &role_strings {
         if let Some(role) = Role::parse(r) {
@@ -316,25 +333,37 @@ pub async fn principal_from_claims(
         });
     }
 
-    // No Instance claims this client id. If the token carries human roles, it is a person.
-    if !roles.is_empty() {
-        return Ok(Principal {
-            credential: CredentialKind::OidcHuman,
-            instance_iri: None,
-            subject: if sub.is_empty() { candidates.first().cloned().unwrap_or_default() } else { sub },
-            display_name: name,
-            scopes: token_scopes,
-            roles,
-            issuer: Some(issuer.to_string()),
-        });
-    }
+    // No Instance claims this client id, so this is a person or an unregistered workload.
+    //
+    // Roles alone are not the test. A signed-in user who holds none of `reader`/`curator`/
+    // `admin` is still a person, and calling them `oidc-workload` in `whoami` and in the
+    // audit log is simply wrong — it also sends them looking for an Instance to register
+    // when what they actually need is a role. Two signals say "person": the token was issued
+    // to the browser sign-in client, or it carries a user session id (`sid`), which Keycloak
+    // puts on interactive logins and never on a `client_credentials` token.
+    let is_person =
+        !roles.is_empty() || (home_issuer && (is_ui_client || claims.get("sid").is_some()));
 
-    // Verified, but nothing here is bound to it. Authenticated with no authority — the error
-    // when it tries to write names exactly what an admin has to do about it.
+    // A person is their `sub`. An unbound workload is its *client id*: that is the string an
+    // admin has to copy into `tar:oidcClientId` to make it work, and addendum §3.2 promises
+    // `whoami` is the first thing you curl when a CI job gets a 403. Reporting Keycloak's
+    // service-account UUID there sent people looking for the wrong value.
+    let subject = if is_person {
+        if sub.is_empty() { candidates.first().cloned().unwrap_or_default() } else { sub }
+    } else {
+        candidates.first().cloned().filter(|c| !c.is_empty()).unwrap_or(sub)
+    };
+
     Ok(Principal {
-        credential: CredentialKind::OidcWorkload,
+        credential: if is_person {
+            CredentialKind::OidcHuman
+        } else {
+            // Verified, but nothing here is bound to it. Authenticated with no authority —
+            // the error when it tries to write names what an admin has to do about it.
+            CredentialKind::OidcWorkload
+        },
         instance_iri: None,
-        subject: if sub.is_empty() { candidates.first().cloned().unwrap_or_default() } else { sub },
+        subject,
         display_name: name,
         scopes: token_scopes,
         roles,

@@ -4,6 +4,7 @@ import { ApiError, api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { useSession } from '../lib/session'
 import { ProblemJsonError, Skeleton } from '../components/common'
+import { TermPicker } from '../components/TermPicker'
 
 const SCOPES = ['advertise:produce', 'advertise:consume', 'register:software', 'register:instance', 'read:private']
 
@@ -21,6 +22,9 @@ export default function InstanceForm() {
     description: '', oidc_client_id: '', oidc_issuer: '',
   })
   const [scopes, setScopes] = useState<string[]>(['advertise:produce', 'advertise:consume'])
+  // An instance may narrow what its software declares (spec §7.3); left empty it inherits.
+  const [consumes, setConsumes] = useState<string[]>([])
+  const [produces, setProduces] = useState<string[]>([])
   const [loading, setLoading] = useState(editing)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<Error>()
@@ -43,6 +47,8 @@ export default function InstanceForm() {
         oidc_issuer: i.oidc_issuer ?? '',
       })
       if (i.allowed_scopes.length) setScopes(i.allowed_scopes)
+      setConsumes((i.capability?.consumes ?? []).map((t) => t.iri))
+      setProduces((i.capability?.produces ?? []).map((t) => t.iri))
       setLoading(false)
     }).catch((e) => { setError(e as Error); setLoading(false) })
   }, [id])
@@ -84,6 +90,7 @@ export default function InstanceForm() {
       oidc_client_id: form.oidc_client_id || undefined,
       oidc_issuer: form.oidc_issuer || undefined,
       allowed_scopes: scopes,
+      capability: consumes.length || produces.length ? { consumes, produces } : undefined,
     }
     try {
       const saved = editing ? await api.updateInstance(id!, body) : await api.createInstance(body)
@@ -214,6 +221,29 @@ export default function InstanceForm() {
           ))}
           <p className="hint">Applied when the presented token carries no scope this registry recognises.</p>
         </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Capability narrowing</legend>
+        <p className="hint" style={{ marginTop: 0 }}>
+          Optional. A deployment may handle less than its software can — an instance configured
+          for one format, say. Leave both empty and it inherits the software's declaration.
+        </p>
+        <TermPicker
+          id="inst-consumes"
+          label="Consumes here"
+          branch="data"
+          value={consumes}
+          onChange={setConsumes}
+          hint="Narrower than the software's declaration, not wider."
+        />
+        <TermPicker
+          id="inst-produces"
+          label="Produces here"
+          branch="data"
+          value={produces}
+          onChange={setProduces}
+        />
       </fieldset>
 
       <div className="actions">

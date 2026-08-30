@@ -56,6 +56,22 @@ export interface Release {
   origin: Origin
 }
 
+export interface SyncStatus {
+  source: string
+  repo: string
+  fields: string[]
+  enabled: boolean
+  last_synced_at?: string
+  last_status: 'ok' | 'error' | 'never'
+  last_error?: string
+  last_changed?: string[]
+}
+
+export const SYNCABLE_FIELDS = [
+  'tagline', 'description', 'readme', 'homepage', 'license', 'keywords', 'maturity',
+  'releases', 'image',
+] as const
+
 export interface Software {
   iri: string
   id: string
@@ -71,6 +87,9 @@ export interface Software {
   readme?: string
   readme_base_url?: string
   license?: string
+  /** What the software is, as a set — one program is routinely several of these. */
+  kinds: string[]
+  /** The first kind, for callers that want one word. */
   kind?: string
   maturity?: string
   deployable: boolean
@@ -80,6 +99,7 @@ export interface Software {
   contact?: AgentRef
   publications: string[]
   capability?: Capability
+  sync?: SyncStatus
   latest_release?: Release
   instance_count: number
   release_count: number
@@ -332,4 +352,83 @@ export interface ProblemJson {
   detail?: string
   report?: string
   report_media_type?: string
+}
+
+// --------------------------------------------------------------- subscriptions
+
+/**
+ * A standing interest in artifacts, owned by one deployment. OR within a field, AND across
+ * fields: `{conforms_to: [report, summary], availability: ['public']}` means "a report or a
+ * summary, that I can actually retrieve".
+ */
+export interface SubscriptionFilter {
+  conforms_to: string[]
+  software: string[]
+  instance: string[]
+  keywords: string[]
+  license: string[]
+  availability: Availability[]
+  q?: string
+  /** Empty means `['produced']` — a consume advertisement is a separate opt-in. */
+  roles: ('produced' | 'consumed')[]
+  exclude_own: boolean
+}
+
+export interface Subscription {
+  id: string
+  instance_iri: string
+  label?: string
+  filter: SubscriptionFilter
+  /** Absent means pull-only: the tool has no inbound endpoint and polls instead. */
+  webhook_url?: string
+  webhook_signed: boolean
+  enabled: boolean
+  /** `active` or `suspended` — suspended is a webhook switched off after repeated failure. */
+  delivery_state: 'active' | 'suspended'
+  consecutive_failures: number
+  cursor_seq: number
+  created_at: string
+  created_by?: string
+  updated_at?: string
+  last_match_at?: string
+  last_success_at?: string
+  last_error?: string
+  last_error_at?: string
+  last_polled_at?: string
+  pending_count: number
+  failed_count: number
+  dead_count: number
+  unacked_count: number
+  delivery_mode: 'webhook' | 'pull'
+  pull_url: string
+}
+
+export interface SubscriptionDelivery {
+  seq: number
+  id: string
+  subscription_id: string
+  artifact_iri: string
+  run_iri?: string
+  role: 'produced' | 'consumed'
+  matched_at: string
+  status: 'pending' | 'delivered' | 'failed' | 'dead'
+  attempts: number
+  last_attempt_at?: string
+  next_attempt_at?: string
+  last_error?: string
+  last_status?: number
+  delivered_at?: string
+  notification: { artifact?: Artifact | null; [k: string]: unknown }
+}
+
+export interface SubscriptionDetail {
+  subscription: Subscription
+  recent_deliveries: SubscriptionDelivery[]
+}
+
+/** The signing secret is present exactly once, on creation or rotation. */
+export interface SubscriptionCreated {
+  subscription: Subscription
+  secret?: string
+  shown_once: boolean
 }

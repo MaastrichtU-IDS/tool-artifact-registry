@@ -20,11 +20,14 @@ pub const VOCAB_TTL: &str = include_str!("../shapes/vocab.ttl");
 /// The shape set enforced on every write (spec §5.3). Also loaded into `<urn:tar:shapes>` so
 /// it is queryable and downloadable by any SHACL processor.
 pub const SHAPES_TTL: &str = include_str!("../shapes/tar-shapes.ttl");
+/// EDAM's topic and data branches, bundled so the pickers work offline. See `shapes/edam.ttl`.
+pub const EDAM_TTL: &str = include_str!("../shapes/edam.ttl");
 
 pub fn load_vocab(state: &AppState) -> Result<usize> {
     let a = state.store.load_turtle(VOCAB_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
     let b = state.store.load_turtle(SHAPES_TTL, ns::G_SHAPES, Some(&state.config.base_iri))?;
-    Ok(a + b)
+    let c = state.store.load_turtle(EDAM_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
+    Ok(a + b + c)
 }
 
 const EDAM: &str = "http://edamontology.org/";
@@ -190,9 +193,11 @@ pub async fn seed_ids_examples(state: &Arc<AppState>, with_runs: bool) -> Result
             readme: None,
             readme_base_url: None,
             deployable: None,
+            sync: None,
             download_url: Some(format!("{}/releases", s.repo)),
             license: Some("https://spdx.org/licenses/Apache-2.0".into()),
-            kind: Some(s.kind.into()),
+            kinds: vec![s.kind.into()],
+            kind: None,
             maturity: Some("active".into()),
             edam_topics: s.topics.clone(),
             keywords: s.keywords.iter().map(|k| k.to_string()).collect(),

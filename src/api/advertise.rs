@@ -203,6 +203,20 @@ async fn advertise(
     if !tx.is_empty() {
         state.store.apply(tx).map_err(AppError::from)?;
     }
+
+    // Standing interest, answered at the moment it is satisfied. This runs *after* the commit
+    // so a subscriber is never told about an artifact that failed to land, and it touches
+    // nothing but the local graph and SQLite — a match writes a queue row, never a socket, so
+    // a slow or dead subscriber cannot slow down the advertisement that triggered it (§9.3).
+    crate::api::subscriptions::notify_advertised(
+        &state,
+        Some(&instance_iri),
+        Some(&run_iri),
+        &artifact_iris,
+        role.as_str(),
+    )
+    .await;
+
     let _ = state
         .ops
         .audit(

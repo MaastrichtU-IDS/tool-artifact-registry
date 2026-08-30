@@ -1,6 +1,7 @@
 import type {
   Artifact, Lineage, Page, Peer, Run, RunSummary, SearchResults, Software, Instance,
   Release, TokenRecord, WellKnown, WhoAmI, ProblemJson,
+  Subscription, SubscriptionCreated, SubscriptionDelivery, SubscriptionDetail,
 } from './types'
 
 /// An error carrying the RFC 9457 problem document, so a form can map a SHACL report back to
@@ -77,6 +78,11 @@ export const api = {
   updateSoftware: (id: string, body: unknown) =>
     request<Software>(`/api/v1/software/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   listReleases: (id: string) => request<Page<Release>>(`/api/v1/software/${id}/releases`),
+  syncSoftware: (id: string) =>
+    request<{ changed: string[]; releases_added: string[]; skipped: string[] }>(
+      `/api/v1/software/${id}/sync`,
+      { method: 'POST' },
+    ),
   createRelease: (id: string, body: unknown) =>
     request<Release>(`/api/v1/software/${id}/releases`, { method: 'POST', body: JSON.stringify(body) }),
 
@@ -127,6 +133,35 @@ export const api = {
   addPeer: (base_url: string) =>
     request<Peer>('/api/v1/peers', { method: 'POST', body: JSON.stringify({ base_url }) }),
   removePeer: (id: string) => request<void>(`/api/v1/peers/${id}`, { method: 'DELETE' }),
+
+  // Subscriptions: "tell me when an artifact like this appears". Owned by an Instance and
+  // managed with that Instance's credential, exactly like its tokens.
+  listSubscriptions: (id: string) =>
+    request<{ items: Subscription[]; total: number; max_per_instance: number }>(
+      `/api/v1/instances/${id}/subscriptions`,
+    ),
+  createSubscription: (id: string, body: unknown) =>
+    request<SubscriptionCreated>(`/api/v1/instances/${id}/subscriptions`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  getSubscription: (sid: string) => request<SubscriptionDetail>(`/api/v1/subscriptions/${sid}`),
+  updateSubscription: (sid: string, body: unknown) =>
+    request<SubscriptionCreated>(`/api/v1/subscriptions/${sid}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteSubscription: (sid: string) =>
+    request<void>(`/api/v1/subscriptions/${sid}`, { method: 'DELETE' }),
+  /// The pull path — what a tool behind a firewall uses instead of a webhook.
+  subscriptionDeliveries: (sid: string, p: Record<string, string | undefined> = {}) =>
+    request<{
+      items: SubscriptionDelivery[]
+      cursor: number
+      next_cursor: number
+      remaining: number
+      acknowledged?: number
+    }>(`/api/v1/subscriptions/${sid}/deliveries${qs(p)}`),
 }
 
 /// The registry's IRI for a record is also its UI route (handoff §3), so links are just paths.

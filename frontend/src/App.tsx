@@ -9,6 +9,7 @@ import InstanceList from './routes/InstanceList'
 import InstanceDetail from './routes/InstanceDetail'
 import InstanceForm from './routes/InstanceForm'
 import Tokens from './routes/Tokens'
+import Subscriptions from './routes/Subscriptions'
 import ArtifactList from './routes/ArtifactList'
 import ArtifactDetail from './routes/ArtifactDetail'
 import RunList from './routes/RunList'
@@ -36,6 +37,7 @@ export default function App() {
           <Route path="/instance/:id" element={<InstanceDetail />} />
           <Route path="/instances/:id/edit" element={<InstanceForm />} />
           <Route path="/instances/:id/tokens" element={<Tokens />} />
+          <Route path="/instances/:id/subscriptions" element={<Subscriptions />} />
           <Route path="/artifacts" element={<ArtifactList />} />
           <Route path="/artifacts/:id" element={<ArtifactDetail />} />
           <Route path="/artifact/:id" element={<ArtifactDetail />} />
@@ -123,7 +125,9 @@ function SignIn() {
           {oidcAvailable ? (
             <>
               <p>
-                Sign in with {new URL(registry.auth.oidc.issuer!).hostname}. Your roles there
+                {/* host, not hostname: a dev Keycloak is 127.0.0.1:8090, and "127.0.0.1"
+                    alone names nothing. */}
+                Sign in with {new URL(registry.auth.oidc.issuer!).host}. Your roles there
                 (<code>curator</code>, <code>admin</code>) decide what you can change here.
               </p>
               <div className="actions">

@@ -375,6 +375,42 @@ mod tests {
     }
 
     #[test]
+    fn a_program_can_be_several_kinds_at_once() {
+        // A tool with a desktop build and a hosted deployment is both; forcing one would make
+        // the record wrong about the other.
+        let r = software(SoftwareIn {
+            name: "rdfcraft".into(),
+            kinds: vec!["desktop".into(), "service".into()],
+            license: Some("https://spdx.org/licenses/MIT".into()),
+            ..Default::default()
+        });
+        assert!(r.conforms(), "{:?}", r.findings);
+
+        // Each value is still checked against the list.
+        let r = software(SoftwareIn {
+            name: "rdfcraft".into(),
+            kinds: vec!["desktop".into(), "teapot".into()],
+            ..Default::default()
+        });
+        let f = r.violations().find(|f| f.field == "kind").expect("kind violation");
+        assert_eq!(f.value.as_deref(), Some("teapot"));
+    }
+
+    #[test]
+    fn the_older_single_kind_field_still_works() {
+        let input = SoftwareIn { name: "x".into(), kind: Some("cli".into()), ..Default::default() };
+        assert_eq!(input.resolved_kinds(), vec!["cli"]);
+        // And it does not duplicate when both are given.
+        let input = SoftwareIn {
+            name: "x".into(),
+            kinds: vec!["cli".into()],
+            kind: Some("cli".into()),
+            ..Default::default()
+        };
+        assert_eq!(input.resolved_kinds(), vec!["cli"]);
+    }
+
+    #[test]
     fn a_shapes_own_message_is_what_the_caller_sees() {
         // Not the engine's "Value does not have node kind: IRI".
         let r = software(SoftwareIn {

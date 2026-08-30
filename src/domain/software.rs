@@ -54,7 +54,7 @@ pub fn software_quads(base: &str, iri: &str, input: &SoftwareIn, actor: &str, cr
     // Audit 2026-08-30: schema:applicationCategory already carried the kind — the duplicate
     // tar:kind triple is gone. codemeta:developmentStatus is CodeMeta's term for exactly
     // this ("description of development status, e.g. active, inactive, suspended").
-    n.opt_text(ns::SCHEMA, "applicationCategory", &input.kind);
+    n.texts(ns::SCHEMA, "applicationCategory", &input.resolved_kinds());
     // codemeta:developmentStatus is declared `"@type": "@id"` in CodeMeta's context: its range
     // is an IRI from repostatus.org, not a string. Emitting a literal there would be a term
     // used against its own definition, which is worse than not using it — a consumer would try
@@ -90,6 +90,15 @@ pub fn software_quads(base: &str, iri: &str, input: &SoftwareIn, actor: &str, cr
             n.link(ns::CODEMETA, "maintainer", &ci);
         }
         quads.extend(cq);
+    }
+    if let Some(sync) = &input.sync {
+        let mut sn = Node::local(&format!("{iri}#sync"));
+        sn.a(&format!("{}RepositorySync", ns::TAR));
+        sn.text(ns::TAR, "syncSource", &sync.source);
+        sn.text(ns::TAR, "syncRepo", &sync.repo);
+        sn.texts(ns::TAR, "syncField", &sync.fields);
+        sn.boolean(ns::TAR, "syncEnabled", sync.enabled);
+        n.child(ns::TAR, "sync", sn);
     }
     if let Some(cap) = &input.capability {
         let cap_iri = ids::mint(base, Kind::Capability);
@@ -171,6 +180,11 @@ pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
     let capability = p
         .iri(ns::TAR, "hasCapability")
         .and_then(|c| capability_from(ctx, &c, "software"));
+    let mut kinds = p.strs(ns::SCHEMA, "applicationCategory");
+    if kinds.is_empty() {
+        kinds = p.strs(ns::TAR, "kind");
+    }
+    kinds.sort();
     Software {
         iri: iri.to_string(),
         id,
@@ -188,7 +202,8 @@ pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
         readme: p.str(ns::TAR, "readme"),
         readme_base_url: p.iri(ns::TAR, "readmeBaseURL"),
         license: p.iri(ns::DCT, "license"),
-        kind: p.str(ns::SCHEMA, "applicationCategory").or_else(|| p.str(ns::TAR, "kind")),
+        kind: kinds.first().cloned(),
+        kinds,
         maturity: p.str(ns::TAR, "maturity").or_else(|| {
             // Recover the literal from the IRI for records written by an older build.
             p.iri(ns::CODEMETA, "developmentStatus").and_then(|i| i.rsplit('#').next().map(str::to_string))
@@ -200,6 +215,19 @@ pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
         contact: ctx.opt_agent_ref(p.iri(ns::CODEMETA, "maintainer").or_else(|| p.iri(ns::TAR, "contact"))),
         publications: p.iris(ns::DCT, "references"),
         capability,
+        sync: p.node_keys(ns::TAR, "sync").first().and_then(|k| {
+            let sp = p.nested_for(k)?;
+            Some(SyncStatus {
+                source: sp.str(ns::TAR, "syncSource").unwrap_or_else(|| "github".into()),
+                repo: sp.str(ns::TAR, "syncRepo")?,
+                fields: sp.strs(ns::TAR, "syncField"),
+                enabled: sp.bool(ns::TAR, "syncEnabled").unwrap_or(true),
+                last_synced_at: sp.str(ns::TAR, "syncedAt"),
+                last_status: sp.str(ns::TAR, "syncStatus").unwrap_or_else(|| "never".into()),
+                last_error: sp.str(ns::TAR, "syncError"),
+                last_changed: sp.strs(ns::TAR, "syncChanged"),
+            })
+        }),
         latest_release: None,
         instance_count: 0,
         release_count: 0,

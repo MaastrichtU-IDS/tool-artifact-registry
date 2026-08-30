@@ -159,6 +159,9 @@ pub async fn create(
     Json(input): Json<SoftwareIn>,
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
+    if let Some(sync) = &input.sync {
+        crate::domain::forge::check_fields(&sync.fields)?;
+    }
     let iri = ids::mint(state.base(), Kind::Software);
     let quads = dom::software_quads(state.base(), &iri, &input, &principal.subject, None);
     shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes)?;
@@ -187,6 +190,9 @@ pub async fn patch(
     let existing = state.store.describe(&iri).map_err(AppError::from)?;
     if existing.is_empty() {
         return Err(AppError::not_found(format!("no software at {iri}")));
+    }
+    if let Some(sync) = &input.sync {
+        crate::domain::forge::check_fields(&sync.fields)?;
     }
     let created = Props::from_quads(&iri, &existing).str(ns::DCT, "created");
     let tx = dom::replace_software(state.base(), &iri, &input, &principal.subject, created);
@@ -270,6 +276,175 @@ pub async fn create_release(
     let quads = state.store.describe(&iri).map_err(AppError::from)?;
     let p = Props::from_quads(&iri, &quads);
     Ok((StatusCode::CREATED, Json(dom::release_from_props(&ctx, &iri, &p))))
+}
+
+/// Pull the managed fields from the source repository (`POST /api/v1/software/{id}/sync`).
+///
+/// Only fields the record named as managed are touched. Everything else is the curator's, and
+/// stays that way — see `domain::forge` for why that constraint is the whole point.
+pub async fn sync(
+    State(state): State<Arc<AppState>>,
+    principal: Principal,
+    Path(id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    principal.require_curator()?;
+    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let quads = state.store.describe(&iri).map_err(AppError::from)?;
+    if quads.is_empty() {
+        return Err(AppError::not_found(format!("no software at {iri}")));
+    }
+    let ctx = Ctx::new(&state).await?;
+    let existing = dom::load_software(&ctx, &iri)?;
+    let Some(cfg) = existing.sync.clone() else {
+        return Err(AppError::bad_request(
+            "this record is not connected to a repository — set `sync` on it first",
+        ));
+    };
+    if !cfg.enabled {
+        return Err(AppError::bad_request("sync is disabled for this record"));
+    }
+
+    // The signed-in curator's own GitHub token, when Keycloak brokered one, so the registry
+    // reads exactly what that person can read. Falls back to the registry-wide token.
+    // A curator's own brokered GitHub token would go here; until the Keycloak identity-provider
+    // wiring lands this is the registry-wide token, which is the weaker of the two options.
+    let token = crate::domain::forge::token_for(None);
+    let mut input = software_in_from(&existing);
+    let outcome = crate::domain::forge::sync_into(&state.http, &cfg.repo, &cfg.fields, token.as_deref(), &mut input)
+        .await
+        .map_err(|e| AppError::new(StatusCode::BAD_GATEWAY, "forge-unreachable", "Repository sync failed").detail(e));
+
+    let mut status = cfg.clone();
+    status.last_synced_at = Some(chrono::Utc::now().to_rfc3339());
+    let outcome = match outcome {
+        Ok(o) => {
+            status.last_status = "ok".into();
+            status.last_error = None;
+            status.last_changed = o.changed.clone();
+            o
+        }
+        Err(e) => {
+            // Record the failure on the record rather than only returning it, so a sync that
+            // has been quietly broken for a month is visible on the page.
+            status.last_status = "error".into();
+            status.last_error = e.detail.clone();
+            status.last_changed = Vec::new();
+            write_sync_status(&state, &iri, &status)?;
+            return Err(e);
+        }
+    };
+
+    input.sync = Some(crate::model::SyncIn {
+        source: cfg.source.clone(),
+        repo: cfg.repo.clone(),
+        fields: cfg.fields.clone(),
+        enabled: cfg.enabled,
+    });
+    let created = Props::from_quads(&iri, &quads).str(ns::DCT, "created");
+    let tx = dom::replace_software(state.base(), &iri, &input, &principal.subject, created);
+    shacl::enforce(state.shapes.validate_quads(&tx.insert), state.config.shacl_validate_writes)?;
+    state.store.apply(tx).map_err(AppError::from)?;
+    write_sync_status(&state, &iri, &status)?;
+
+    // Releases are separate records, so they are added rather than replaced: a version already
+    // registered is left alone, which keeps any local edits to it.
+    let mut added = Vec::new();
+    if !outcome.releases.is_empty() {
+        let known: Vec<String> = dom::list_releases(&ctx, &iri)?.into_iter().map(|r| r.version).collect();
+        for r in &outcome.releases {
+            if known.iter().any(|k| k == &r.version) {
+                continue;
+            }
+            let rel_iri = ids::mint(state.base(), Kind::Release);
+            let quads = dom::release_quads(state.base(), &rel_iri, &iri, r, &principal.subject);
+            if shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes).is_err() {
+                continue;
+            }
+            let mut tx = GraphTx::new();
+            tx.extend(quads);
+            state.store.apply(tx).map_err(AppError::from)?;
+            added.push(r.version.clone());
+        }
+    }
+
+    if !added.is_empty() {
+        status.last_changed.push("releases".into());
+        write_sync_status(&state, &iri, &status)?;
+    }
+    let _ = state
+        .ops
+        .audit(Some(&principal.subject), principal.actor_kind(), "software.sync", Some(&iri), Some(&cfg.repo), None)
+        .await;
+    let ctx = Ctx::new(&state).await?;
+    let mut changed = outcome.changed.clone();
+    if !added.is_empty() {
+        changed.push("releases".into());
+    }
+    Ok(Json(serde_json::json!({
+        "software": dom::load_software(&ctx, &iri)?,
+        "changed": changed,
+        "releases_added": added,
+        "skipped": outcome.skipped,
+    })))
+}
+
+/// Persist just the sync bookkeeping, without rewriting the record.
+fn write_sync_status(state: &AppState, iri: &str, status: &crate::model::SyncStatus) -> AppResult<()> {
+    let node = format!("{iri}#sync");
+    let mut tx = GraphTx::new();
+    for pred in ["syncedAt", "syncStatus", "syncError", "syncChanged"] {
+        tx.replace_property(&node, &format!("{}{pred}", ns::TAR), ns::G_LOCAL);
+    }
+    let mut n = crate::rdf::Node::local(&node);
+    n.opt_datetime(ns::TAR, "syncedAt", &status.last_synced_at);
+    n.text(ns::TAR, "syncStatus", &status.last_status);
+    n.opt_text(ns::TAR, "syncError", &status.last_error);
+    n.texts(ns::TAR, "syncChanged", &status.last_changed);
+    tx.extend(n.finish());
+    state.store.apply(tx).map_err(AppError::from)
+}
+
+/// Round-trip a stored record back into the input shape, so a sync edits rather than replaces.
+fn software_in_from(s: &crate::model::Software) -> SoftwareIn {
+    SoftwareIn {
+        name: s.name.clone(),
+        tagline: s.tagline.clone(),
+        description: s.description.clone(),
+        homepage: s.homepage.clone(),
+        code_repository: s.code_repository.clone(),
+        documentation: s.documentation.clone(),
+        download_url: s.download_url.clone(),
+        image: s.image.clone(),
+        screenshots: s.screenshots.clone(),
+        readme: s.readme.clone(),
+        readme_base_url: s.readme_base_url.clone(),
+        license: s.license.clone(),
+        kinds: s.kinds.clone(),
+        kind: None,
+        maturity: s.maturity.clone(),
+        deployable: Some(s.deployable),
+        edam_topics: s.edam_topics.iter().map(|t| t.iri.clone()).collect(),
+        keywords: s.keywords.clone(),
+        publisher: s.publisher.as_ref().map(agent_in),
+        contact: s.contact.as_ref().map(agent_in),
+        publications: s.publications.clone(),
+        capability: s.capability.as_ref().map(|c| crate::model::CapabilityIn {
+            produces: c.produces.iter().map(|t| t.iri.clone()).collect(),
+            consumes: c.consumes.iter().map(|t| t.iri.clone()).collect(),
+        }),
+        sync: None,
+    }
+}
+
+fn agent_in(a: &crate::model::AgentRef) -> crate::model::AgentIn {
+    crate::model::AgentIn {
+        iri: Some(a.iri.clone()),
+        name: a.name.clone(),
+        kind: a.kind.clone(),
+        identifier: a.identifier.clone(),
+        email: a.email.clone(),
+        homepage: a.homepage.clone(),
+    }
 }
 
 /// Withdraw a release (spec §7.2's soft-delete rule, applied to releases).

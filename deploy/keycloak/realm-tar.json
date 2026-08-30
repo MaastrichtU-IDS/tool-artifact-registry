@@ -1,0 +1,169 @@
+{
+  "realm": "tar",
+  "enabled": true,
+  "displayName": "Tool Artifact Registry (local dev)",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": false,
+  "accessTokenLifespan": 1800,
+  "ssoSessionIdleTimeout": 3600,
+  "ssoSessionMaxLifespan": 36000,
+  "roles": {
+    "realm": [
+      { "name": "reader", "description": "Read the registry, including records marked private." },
+      { "name": "curator", "description": "Register and edit software, releases and instances." },
+      { "name": "admin", "description": "Everything a curator can do, plus peers and tokens." }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "tar-ui",
+      "name": "Tool Artifact Registry — web UI",
+      "description": "Public client for the browser. Authorisation code + PKCE (S256), no secret.",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "rootUrl": "http://127.0.0.1:8099",
+      "baseUrl": "/",
+      "redirectUris": [
+        "http://127.0.0.1:8099/*",
+        "http://localhost:8099/*",
+        "http://127.0.0.1:8098/*",
+        "http://localhost:8098/*",
+        "http://127.0.0.1:5173/*",
+        "http://localhost:5173/*"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1:8099",
+        "http://localhost:8099",
+        "http://127.0.0.1:8098",
+        "http://localhost:8098",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://127.0.0.1:8099/*##http://127.0.0.1:8098/*##http://localhost:8099/*##http://localhost:8098/*",
+        "access.token.lifespan": "1800"
+      },
+      "defaultClientScopes": ["web-origins", "acr", "roles", "profile", "email", "basic"],
+      "optionalClientScopes": ["address", "phone", "offline_access", "microprofile-jwt"],
+      "protocolMappers": [
+        {
+          "name": "tar-audience-8099",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "http://127.0.0.1:8099",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "tar-audience-8098",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "http://127.0.0.1:8098",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "shacl-manager-demo",
+      "name": "shacl-manager (demo deployment)",
+      "description": "Confidential client with service accounts: the workload identity of an Instance. Put this client id in tar:oidcClientId on the Instance record.",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "shacl-manager-demo-secret",
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "tar-audience-8099",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "http://127.0.0.1:8099",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "tar-audience-8098",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "http://127.0.0.1:8098",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "curator",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Cora",
+      "lastName": "Curator",
+      "email": "curator@example.org",
+      "credentials": [{ "type": "password", "value": "curator-password", "temporary": false }],
+      "realmRoles": ["default-roles-tar", "reader", "curator"]
+    },
+    {
+      "username": "registryadmin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Ada",
+      "lastName": "Admin",
+      "email": "admin@example.org",
+      "credentials": [{ "type": "password", "value": "admin-password", "temporary": false }],
+      "realmRoles": ["default-roles-tar", "reader", "curator", "admin"]
+    },
+    {
+      "username": "reader",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Rob",
+      "lastName": "Reader",
+      "email": "reader@example.org",
+      "credentials": [{ "type": "password", "value": "reader-password", "temporary": false }],
+      "realmRoles": ["default-roles-tar", "reader"]
+    },
+    {
+      "username": "nobody",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Nora",
+      "lastName": "Nobody",
+      "email": "nobody@example.org",
+      "credentials": [{ "type": "password", "value": "nobody-password", "temporary": false }],
+      "realmRoles": ["default-roles-tar"]
+    }
+  ]
+}

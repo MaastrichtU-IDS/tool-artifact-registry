@@ -18,15 +18,26 @@ export default function AuthCallback() {
       setError(params.get('error_description') || oidcError)
       return
     }
-    if (!code || !registry?.auth?.oidc?.issuer || !registry.auth.oidc.client_id) return
-    completeOidcSignIn(registry.auth.oidc.issuer, registry.auth.oidc.client_id, code)
-      .then((token) => {
-        storeToken(token)
-        navigate(consumeReturnTo(), { replace: true })
-        // The session provider reads the stored token on mount.
-        window.location.reload()
+    if (!code) {
+      setError('This page is the sign-in landing point; it was reached without an authorisation code.')
+      return
+    }
+    if (!registry?.auth?.oidc?.issuer || !registry.auth.oidc.client_id) return
+    completeOidcSignIn(
+      registry.auth.oidc.issuer,
+      registry.auth.oidc.client_id,
+      code,
+      params.get('state'),
+    )
+      .then((tokens) => {
+        storeToken(tokens)
+        // A full load, not a client-side navigate: it drops the spent code out of the URL
+        // (and out of history) and remounts the session provider, which picks the stored
+        // token up. Navigating and *then* reloading raced, and could reload the callback
+        // URL — replaying a code the provider had already burned.
+        window.location.replace(consumeReturnTo())
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
   }, [params, registry, navigate])
 
   if (error) {

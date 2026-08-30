@@ -71,6 +71,31 @@ pub fn artifact_quads(base: &str, iri: &str, input: &ArtifactIn, actor: &str, ru
         }
         quads.extend(pq);
     }
+    for (agents, predicate) in [(&input.creators, "creator"), (&input.contributors, "contributor")] {
+        for a in agents {
+            let (iri, aq) = agent_quads(base, a);
+            if let Some(i) = iri {
+                n.link(ns::DCT, predicate, &i);
+            }
+            quads.extend(aq);
+        }
+    }
+    if let Some(c) = &input.contact {
+        let (iri, aq) = agent_quads(base, c);
+        if let Some(i) = iri {
+            n.link(ns::TAR, "contact", &i);
+        }
+        quads.extend(aq);
+    }
+    n.opt_datetime(ns::DCT, "modified", &input.modified);
+    n.opt_text(ns::DCAT, "version", &input.version);
+    n.opt_link(ns::DCAT, "landingPage", &input.landing_page);
+    n.opt_link(ns::FOAF, "page", &input.documentation);
+    n.opt_link(ns::DCT, "source", &input.source);
+    n.texts(ns::DCT, "language", &input.language);
+    n.opt_text(ns::DCT, "spatial", &input.spatial);
+    n.opt_datetime(ns::TAR, "temporalStart", &input.temporal_start);
+    n.opt_datetime(ns::TAR, "temporalEnd", &input.temporal_end);
     for d in &input.distributions {
         let d_iri = ids::mint(base, Kind::Distribution);
         quads.extend(distribution_quads(&d_iri, d));
@@ -176,6 +201,19 @@ pub fn artifact_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Artifact {
         keywords: p.strs(ns::DCAT, "keyword"),
         issued: p.str(ns::DCT, "issued"),
         publisher: ctx.opt_agent_ref(p.iri(ns::DCT, "publisher")),
+        creators: p.iris(ns::DCT, "creator").iter().map(|i| ctx.agent_ref(i)).collect(),
+        contributors: p.iris(ns::DCT, "contributor").iter().map(|i| ctx.agent_ref(i)).collect(),
+        contact: ctx.opt_agent_ref(p.iri(ns::TAR, "contact")),
+        modified: p.str(ns::DCT, "modified"),
+        version: p.str(ns::DCAT, "version"),
+        landing_page: p.iri(ns::DCAT, "landingPage"),
+        documentation: p.iri(ns::FOAF, "page"),
+        source: p.iri(ns::DCT, "source"),
+        language: p.strs(ns::DCT, "language"),
+        spatial: p.str(ns::DCT, "spatial"),
+        temporal_start: p.str(ns::TAR, "temporalStart"),
+        temporal_end: p.str(ns::TAR, "temporalEnd"),
+        attributed_to: p.iri(ns::PROV, "wasAttributedTo"),
         availability: overall_availability(&distributions),
         distributions,
         was_derived_from: p.iris(ns::PROV, "wasDerivedFrom"),

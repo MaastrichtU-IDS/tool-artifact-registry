@@ -189,6 +189,8 @@ pub async fn seed_ids_examples(state: &Arc<AppState>, with_runs: bool) -> Result
             screenshots: Vec::new(),
             readme: None,
             readme_base_url: None,
+            deployable: None,
+            download_url: Some(format!("{}/releases", s.repo)),
             license: Some("https://spdx.org/licenses/Apache-2.0".into()),
             kind: Some(s.kind.into()),
             maturity: Some("active".into()),
@@ -215,6 +217,7 @@ pub async fn seed_ids_examples(state: &Arc<AppState>, with_runs: bool) -> Result
             image_digest: None,
             changelog: Some(format!("{}/releases", s.repo)),
             install_command: Some(format!("docker pull {}", s.image)),
+            downloads: Vec::new(),
             capability: None,
         };
         tx.extend(swdom::release_quads(&base, &rel_iri, &sw_iri, &release, actor));

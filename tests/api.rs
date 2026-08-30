@@ -703,6 +703,55 @@ async fn lineage_walks_both_directions_and_marks_unresolved_cross_links() {
 // -------------------------------------------------------------- lifecycle
 
 #[tokio::test]
+async fn a_withdrawn_release_leaves_the_list_but_keeps_resolving() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    let (_, keep) = h
+        .post(&format!("/api/v1/software/{}/releases", f.software_id), ROOT, json!({"version": "2.1.0"}))
+        .await;
+    let (_, drop_me) = h
+        .post(&format!("/api/v1/software/{}/releases", f.software_id), ROOT, json!({"version": "2.1.0"}))
+        .await;
+    let (_, list) = h.get(&format!("/api/v1/software/{}/releases", f.software_id)).await;
+    assert_eq!(list["total"], 2, "a duplicate version is allowed in; withdrawing is how you fix it");
+
+    let (status, _, _) = h
+        .req(
+            "DELETE",
+            &format!("/api/v1/software/{}/releases/{}", f.software_id, drop_me["id"].as_str().unwrap()),
+            Some(ROOT),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, list) = h.get(&format!("/api/v1/software/{}/releases", f.software_id)).await;
+    assert_eq!(list["total"], 1);
+    assert_eq!(list["items"][0]["id"], keep["id"]);
+
+    // Withdrawn, not erased: an Instance may cite the IRI, so it still dereferences.
+    let req = Request::builder()
+        .uri(format!("/release/{}", drop_me["id"].as_str().unwrap()))
+        .header("accept", "text/turtle")
+        .body(Body::empty())
+        .unwrap();
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // And a release belonging to another software cannot be withdrawn through this path.
+    let (_, other) = h.post("/api/v1/software", ROOT, json!({"name": "other", "kind": "cli"})).await;
+    let (status, _, _) = h
+        .req(
+            "DELETE",
+            &format!("/api/v1/software/{}/releases/{}", other["id"].as_str().unwrap(), keep["id"].as_str().unwrap()),
+            Some(ROOT),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn a_tombstoned_record_still_resolves() {
     let h = harness().await;
     let f = h.fixture().await;

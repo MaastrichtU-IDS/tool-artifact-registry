@@ -93,6 +93,11 @@ pub struct SoftwareIn {
     pub code_repository: Option<String>,
     #[serde(default)]
     pub documentation: Option<String>,
+    /// Where to get it: a releases page, a download page, a package listing. For software that
+    /// cannot be hosted this is the most important link on the record, since "how do I run it"
+    /// has no endpoint to answer it.
+    #[serde(default)]
+    pub download_url: Option<String>,
     /// Logo or hero image. A pointer, never bytes: the registry stores no images (D1).
     #[serde(default)]
     pub image: Option<String>,
@@ -119,6 +124,14 @@ pub struct SoftwareIn {
     pub kind: Option<String>,
     #[serde(default)]
     pub maturity: Option<String>,
+    /// Whether this software can be hosted at an endpoint at all.
+    ///
+    /// A desktop application or a CLI runs on someone's machine; it still has Instances —
+    /// installations — because runs have to be attributable to something, but none of them can
+    /// have an `endpoint_url`, and calling them "deployments" misdescribes them. Defaults to
+    /// true; set it false and the registry refuses an endpoint on any instance of it.
+    #[serde(default)]
+    pub deployable: Option<bool>,
     #[serde(default)]
     pub edam_topics: Vec<String>,
     #[serde(default)]
@@ -150,6 +163,8 @@ pub struct Software {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub documentation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     pub screenshots: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -162,6 +177,8 @@ pub struct Software {
     pub kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub maturity: Option<String>,
+    /// False when the software cannot be hosted — see `SoftwareIn::deployable`.
+    pub deployable: bool,
     pub edam_topics: Vec<TypeRef>,
     pub keywords: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -188,6 +205,25 @@ pub struct Software {
 
 // ------------------------------------------------------------------- release
 
+/// One downloadable file of a release. A packaged application ships several — a Windows
+/// installer, a macOS bundle, a Linux package — and `container_image` cannot express any of
+/// them.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DownloadIn {
+    pub url: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Free text, as `schema:operatingSystem` is: "Windows", "macOS", "Linux".
+    #[serde(default)]
+    pub platform: Option<String>,
+    #[serde(default)]
+    pub byte_size: Option<i64>,
+    /// `public` | `restricted` | `embargoed` | `metadata-only`. Defaults to public: a release
+    /// asset you can name a URL for is normally one anyone can fetch.
+    #[serde(default)]
+    pub availability: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReleaseIn {
     pub version: String,
@@ -201,6 +237,8 @@ pub struct ReleaseIn {
     pub changelog: Option<String>,
     #[serde(default)]
     pub install_command: Option<String>,
+    #[serde(default)]
+    pub downloads: Vec<DownloadIn>,
     #[serde(default)]
     pub capability: Option<CapabilityIn>,
 }
@@ -220,6 +258,8 @@ pub struct Release {
     pub changelog: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub downloads: Vec<DownloadIn>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub software: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

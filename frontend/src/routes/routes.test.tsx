@@ -17,6 +17,7 @@ const software: Software = {
   edam_topics: [{ iri: 'http://edamontology.org/topic_3071', label: 'Data management', source: 'edam' }],
   keywords: ['shacl'],
   screenshots: [],
+  deployable: true,
   publications: [],
   capability: {
     iri: 'https://reg.test/capability/1',
@@ -165,6 +166,18 @@ describe('SoftwareDetail', () => {
     await screen.findByRole('heading', { name: 'shacl-manager (MUMC)' })
     expect(screen.getByText(/Cached from another registry/)).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Edit' })).not.toBeInTheDocument()
+  })
+
+  it('calls them installations, not deployments, when the software cannot be hosted', async () => {
+    vi.stubGlobal('fetch', stubFetch({
+      '/api/v1/software/01a/releases': emptyPage(),
+      '/api/v1/instances': emptyPage(),
+      '/api/v1/software/01a': { ...software, deployable: false },
+    }))
+    renderAt('/software/01a', <SoftwareDetail />, '/software/:id')
+    expect(await screen.findByText('Installations')).toBeInTheDocument()
+    expect(screen.getByText(/runs on a machine rather than being hosted/)).toBeInTheDocument()
+    expect(screen.queryByText('Deployments')).not.toBeInTheDocument()
   })
 
   it('shows the absence of a capability as information, not as a hidden block', async () => {

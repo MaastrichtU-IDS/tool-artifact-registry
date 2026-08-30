@@ -146,6 +146,10 @@ tar:health a rdf:Property ;
 
 # ---- software description -------------------------------------------------
 
+tar:deployable a rdf:Property ;
+    rdfs:label "deployable" ;
+    rdfs:comment "False when the software cannot be hosted at an endpoint — a desktop application or a CLI. Such software still has Instances, because a run has to be attributable to something, but those are installations and carry no dcat:endpointURL. Checked against schema.org (applicationCategory and the SoftwareApplication subtypes describe what a tool is, not whether it can be hosted), DOAP and ADMS: nothing expresses hostability, so this stays a tar: term." .
+
 tar:readme a rdf:Property ;
     rdfs:label "readme" ;
     rdfs:comment "The full README of a Software record, as inline Markdown. Kept: codemeta:readme is a URL pointing at a README file, not its content, and schema:text would claim the README is the text of the software record itself. The registry stores the content so the UI renders without a network call." .

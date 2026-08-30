@@ -18,8 +18,9 @@ export default function SoftwareForm() {
     name: '', tagline: '', description: '', homepage: '', code_repository: '', documentation: '',
     license: '', kind: '', maturity: '', keywords: '', edam_topics: '', publisher_name: '',
     publisher_id: '', consumes: '', produces: '',
-    image: '', screenshots: '', readme: '', readme_base_url: '',
+    image: '', screenshots: '', readme: '', readme_base_url: '', download_url: '',
   })
+  const [deployable, setDeployable] = useState(true)
   const [loading, setLoading] = useState(editing)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<Error>()
@@ -36,12 +37,14 @@ export default function SoftwareForm() {
         screenshots: s.screenshots.join('\n'),
         readme: s.readme ?? '',
         readme_base_url: s.readme_base_url ?? '',
+        download_url: s.download_url ?? '',
         maturity: s.maturity ?? '', keywords: s.keywords.join(', '),
         edam_topics: s.edam_topics.map((t) => t.iri).join('\n'),
         publisher_name: s.publisher?.name ?? '', publisher_id: s.publisher?.identifier ?? '',
         consumes: (s.capability?.consumes ?? []).map((t) => t.iri).join('\n'),
         produces: (s.capability?.produces ?? []).map((t) => t.iri).join('\n'),
       })
+      setDeployable(s.deployable)
       setLoading(false)
     }).catch((e) => { setError(e as Error); setLoading(false) })
   }, [id])
@@ -75,6 +78,8 @@ export default function SoftwareForm() {
       homepage: form.homepage || undefined,
       code_repository: form.code_repository || undefined,
       documentation: form.documentation || undefined,
+      download_url: form.download_url || undefined,
+      deployable,
       image: form.image || undefined,
       screenshots: lines(form.screenshots),
       readme: form.readme || undefined,
@@ -159,6 +164,27 @@ export default function SoftwareForm() {
           <label htmlFor="docs">Documentation</label>
           <input id="docs" value={form.documentation} onChange={set('documentation')} />
           {err('documentation')}
+        </div>
+        <div className={field('download_url')}>
+          <label htmlFor="download">Download</label>
+          <input id="download" value={form.download_url} onChange={set('download_url')}
+                 placeholder="https://github.com/OWNER/REPO/releases" />
+          <p className="hint">
+            Where to get it — a releases page, a package listing, an installer. For software that
+            cannot be hosted this is the link that matters most.
+          </p>
+          {err('download_url')}
+        </div>
+        <div className="field">
+          <label style={{ fontWeight: 400, display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={!deployable}
+                   onChange={(e) => setDeployable(!e.target.checked)} />
+            This software cannot be hosted — it runs on a machine
+          </label>
+          <p className="hint">
+            A desktop application or a CLI. Its instances are installations, and the registry
+            will refuse an endpoint on any of them.
+          </p>
         </div>
       </fieldset>
 

@@ -33,6 +33,14 @@ export interface Capability {
   declared_at: 'software' | 'release' | 'instance'
 }
 
+export interface Download {
+  url: string
+  label?: string
+  platform?: string
+  byte_size?: number
+  availability?: string
+}
+
 export interface Release {
   iri: string
   id: string
@@ -42,6 +50,7 @@ export interface Release {
   image_digest?: string
   changelog?: string
   install_command?: string
+  downloads?: Download[]
   software?: string
   capability?: Capability
   origin: Origin
@@ -56,6 +65,7 @@ export interface Software {
   homepage?: string
   code_repository?: string
   documentation?: string
+  download_url?: string
   image?: string
   screenshots: string[]
   readme?: string
@@ -63,6 +73,7 @@ export interface Software {
   license?: string
   kind?: string
   maturity?: string
+  deployable: boolean
   edam_topics: TypeRef[]
   keywords: string[]
   publisher?: AgentRef

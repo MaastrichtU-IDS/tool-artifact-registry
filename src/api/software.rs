@@ -272,6 +272,30 @@ pub async fn create_release(
     Ok((StatusCode::CREATED, Json(dom::release_from_props(&ctx, &iri, &p))))
 }
 
+/// Withdraw a release (spec §7.2's soft-delete rule, applied to releases).
+///
+/// A Release IRI can be cited — an Instance says which release it runs — so this tombstones
+/// rather than erases, and the IRI keeps resolving. Withdrawn releases drop out of the list so
+/// a mistaken or superseded one stops being offered.
+pub async fn delete_release(
+    State(state): State<Arc<AppState>>,
+    principal: Principal,
+    Path((id, release_id)): Path<(String, String)>,
+) -> AppResult<impl IntoResponse> {
+    principal.require_curator()?;
+    let software_iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::iri_for(state.base(), Kind::Release, &release_id);
+    let quads = state.store.describe(&iri).map_err(AppError::from)?;
+    if quads.is_empty() {
+        return Err(AppError::not_found(format!("no release at {iri}")));
+    }
+    if Props::from_quads(&iri, &quads).iri(ns::DCT, "isVersionOf").as_deref() != Some(software_iri.as_str()) {
+        return Err(AppError::not_found("that release does not belong to this software"));
+    }
+    tombstone(&state, &iri, &principal).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Declare produces[]/consumes[] at the Software layer (spec §7.3).
 pub async fn put_capability(
     State(state): State<Arc<AppState>>,

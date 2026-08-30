@@ -45,6 +45,7 @@ pub fn software_quads(base: &str, iri: &str, input: &SoftwareIn, actor: &str, cr
     n.opt_link(ns::SCHEMA, "url", &input.homepage);
     n.opt_link(ns::SCHEMA, "codeRepository", &input.code_repository);
     n.opt_link(ns::SCHEMA, "softwareHelp", &input.documentation);
+    n.opt_link(ns::SCHEMA, "downloadUrl", &input.download_url);
     n.opt_link(ns::SCHEMA, "image", &input.image);
     n.links(ns::SCHEMA, "screenshot", &input.screenshots);
     n.opt_text(ns::TAR, "readme", &input.readme);
@@ -60,6 +61,11 @@ pub fn software_quads(base: &str, iri: &str, input: &SoftwareIn, actor: &str, cr
     // to dereference "active". So the literal stays on tar:maturity as the authoritative value,
     // and the standard term is added only when the value names a repostatus concept.
     n.opt_text(ns::TAR, "maturity", &input.maturity);
+    // Only written when false: the default is "can be hosted", and a triple asserting the
+    // default on every record is noise a federating peer has to read and discard.
+    if input.deployable == Some(false) {
+        n.boolean(ns::TAR, "deployable", false);
+    }
     if let Some(iri) = input.maturity.as_deref().and_then(repostatus_iri) {
         n.link(ns::CODEMETA, "developmentStatus", &iri);
     }
@@ -115,6 +121,24 @@ pub fn release_quads(base: &str, iri: &str, software_iri: &str, input: &ReleaseI
     n.opt_text(ns::TAR, "imageDigest", &input.image_digest);
     n.opt_link(ns::SCHEMA, "releaseNotes", &input.changelog);
     n.opt_text(ns::TAR, "installCommand", &input.install_command);
+    // Release assets are dcat:Distributions: a distribution is "a way of obtaining a thing",
+    // which is exactly what a per-platform installer is. Reusing the term also means
+    // GraphStore::describe already returns them with their release, and DCAT-aware readers
+    // understand them without knowing anything about tar:.
+    for d in &input.downloads {
+        let mut a = Node::local(&ids::mint(base, Kind::Distribution));
+        a.a(super::artifact::TYPE_DISTRIBUTION);
+        a.link(ns::DCAT, "downloadURL", &d.url);
+        a.opt_text(ns::DCT, "title", &d.label);
+        a.opt_text(ns::SCHEMA, "operatingSystem", &d.platform);
+        a.opt_int(ns::DCAT, "byteSize", &d.byte_size);
+        let availability = d.availability.clone().unwrap_or_else(|| "public".into());
+        a.text(ns::TAR, "availability", &availability);
+        if let Some(rights) = super::artifact::access_right(&availability) {
+            a.link(ns::DCT, "accessRights", &rights);
+        }
+        n.child(ns::DCAT, "distribution", a);
+    }
     n.link(ns::DCT, "isVersionOf", software_iri);
     crate::rdf::attribution(&mut n, actor);
     if let Some(cap) = &input.capability {
@@ -158,6 +182,7 @@ pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
         homepage: p.iri(ns::SCHEMA, "url"),
         code_repository: p.iri(ns::SCHEMA, "codeRepository"),
         documentation: p.iri(ns::SCHEMA, "softwareHelp"),
+        download_url: p.iri(ns::SCHEMA, "downloadUrl"),
         image: p.iri(ns::SCHEMA, "image"),
         screenshots: p.iris(ns::SCHEMA, "screenshot"),
         readme: p.str(ns::TAR, "readme"),
@@ -168,6 +193,7 @@ pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
             // Recover the literal from the IRI for records written by an older build.
             p.iri(ns::CODEMETA, "developmentStatus").and_then(|i| i.rsplit('#').next().map(str::to_string))
         }),
+        deployable: p.bool(ns::TAR, "deployable").unwrap_or(true),
         edam_topics: ctx.type_refs(&p.iris(ns::DCT, "subject")),
         keywords: p.strs(ns::SCHEMA, "keywords"),
         publisher: ctx.opt_agent_ref(p.iri(ns::DCT, "publisher")),
@@ -219,6 +245,20 @@ pub fn release_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Release {
         // the graph and never shown — present but invisible, which is the worst of both.
         changelog: p.iri(ns::SCHEMA, "releaseNotes").or_else(|| p.str(ns::SCHEMA, "releaseNotes")),
         install_command: p.str(ns::TAR, "installCommand"),
+        downloads: p
+            .node_keys(ns::DCAT, "distribution")
+            .iter()
+            .filter_map(|k| {
+                let d = p.nested_for(k)?;
+                Some(DownloadIn {
+                    url: d.iri(ns::DCAT, "downloadURL")?,
+                    label: d.str(ns::DCT, "title"),
+                    platform: d.str(ns::SCHEMA, "operatingSystem"),
+                    byte_size: d.i64(ns::DCAT, "byteSize"),
+                    availability: d.str(ns::TAR, "availability"),
+                })
+            })
+            .collect(),
         software: p.iri(ns::DCT, "isVersionOf"),
         software_name: None,
         capability: p.iri(ns::TAR, "hasCapability").and_then(|c| capability_from(ctx, &c, "release")),
@@ -230,7 +270,10 @@ pub fn release_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Release {
 pub fn list_releases(ctx: &Ctx, software_iri: &str) -> AppResult<Vec<Release>> {
     let q = format!(
         r#"{p}
-SELECT ?r WHERE {{ GRAPH ?g {{ ?r dct:isVersionOf <{software_iri}> ; schema:softwareVersion ?v }} }}"#,
+SELECT ?r WHERE {{
+  GRAPH ?g {{ ?r dct:isVersionOf <{software_iri}> ; schema:softwareVersion ?v }}
+  FILTER NOT EXISTS {{ GRAPH ?g2 {{ ?r tar:tombstoned true }} }}
+}}"#,
         p = ns::PREFIXES
     );
     let rows = ctx.state.store.select(&q).map_err(AppError::from)?;

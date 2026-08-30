@@ -4,7 +4,7 @@ import { useAsync } from '../lib/useAsync'
 import { useSession } from '../lib/session'
 import {
   CiteBlock, CommandBlock, EmptyState, ErrorState, FairDownloads, ForeignNotice,
-  SignalBar, Skeleton, Tombstone,
+  SignalBar, Skeleton, Tombstone, formatBytes,
 } from '../components/common'
 import {
   ArtifactTypeChip, HealthDot, KindChip, LicenseChip, OriginChip, RelativeTime,
@@ -54,7 +54,8 @@ export default function SoftwareDetail() {
             <ul className="chips">
               {s.code_repository && <li><a className="chip" href={s.code_repository} target="_blank" rel="noreferrer">Repository ↗</a></li>}
               {s.documentation && <li><a className="chip" href={s.documentation} target="_blank" rel="noreferrer">Docs ↗</a></li>}
-              {s.homepage && s.homepage !== s.code_repository && <li><a className="chip" href={s.homepage} target="_blank" rel="noreferrer">Homepage ↗</a></li>}
+              {s.homepage && s.homepage !== s.code_repository && <li><a className="chip" href={s.homepage} target="_blank" rel="noreferrer">Website ↗</a></li>}
+              {s.download_url && <li><a className="chip accent" href={s.download_url} target="_blank" rel="noreferrer">⬇ Download ↗</a></li>}
             </ul>
           </div>
 
@@ -67,13 +68,39 @@ export default function SoftwareDetail() {
             ]}
           />
 
-          {s.latest_release?.install_command && (
+          {(s.latest_release?.install_command || (s.latest_release?.downloads?.length ?? 0) > 0 || s.download_url) && (
             <section className="card">
-              <h2>Use it</h2>
-              <CommandBlock command={s.latest_release.install_command} />
-              {s.latest_release.image_digest && (
+              <h2>Get it</h2>
+              {s.latest_release?.install_command && (
+                <CommandBlock command={s.latest_release.install_command} />
+              )}
+              {s.latest_release?.image_digest && (
                 <p className="hint">Digest {s.latest_release.image_digest}</p>
               )}
+              {(s.latest_release?.downloads?.length ?? 0) > 0 && (
+                <>
+                  <p className="hint" style={{ marginTop: s.latest_release?.install_command ? 12 : 0 }}>
+                    {s.latest_release!.version} builds
+                  </p>
+                  <ul className="chips">
+                    {s.latest_release!.downloads!.map((d) => (
+                      <li key={d.url}>
+                        <a className="chip accent" href={d.url}>
+                          ⬇ {d.platform ?? d.label ?? d.url.split('/').pop()}
+                          {d.byte_size ? <span className="muted"> {formatBytes(d.byte_size)}</span> : null}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {!s.latest_release?.install_command &&
+                (s.latest_release?.downloads?.length ?? 0) === 0 &&
+                s.download_url && (
+                  <p style={{ margin: 0 }}>
+                    <a href={s.download_url} target="_blank" rel="noreferrer">Downloads and releases ↗</a>
+                  </p>
+                )}
             </section>
           )}
 
@@ -122,11 +149,20 @@ export default function SoftwareDetail() {
           </section>
 
           <section className="card flush">
-            <h2>Instances</h2>
+            <h2>{s.deployable ? 'Deployments' : 'Installations'}</h2>
+            {!s.deployable && (
+              <p className="hint" style={{ padding: '0 16px' }}>
+                This software runs on a machine rather than being hosted, so it has installations
+                rather than deployments and none of them has an endpoint. Runs are still
+                attributed to the installation that performed them.
+              </p>
+            )}
             {instances.loading && <div style={{ padding: 16 }}><Skeleton rows={3} /></div>}
             {instances.data && instances.data.items.length === 0 && (
               <div style={{ padding: '0 16px 16px' }}>
-                <p className="muted">No deployment of this software is registered.</p>
+                <p className="muted">
+                  No {s.deployable ? 'deployment' : 'installation'} of this software is registered.
+                </p>
               </div>
             )}
             {instances.data && instances.data.items.length > 0 && (
@@ -134,7 +170,7 @@ export default function SoftwareDetail() {
                 <table>
                   <thead>
                     <tr>
-                      <th scope="col">Deployment</th>
+                      <th scope="col">{s.deployable ? 'Deployment' : 'Installation'}</th>
                       <th scope="col">Release</th>
                       <th scope="col">Health</th>
                       <th scope="col">Operator</th>

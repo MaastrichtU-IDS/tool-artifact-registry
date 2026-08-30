@@ -113,6 +113,35 @@ pub async fn get(
     Ok(resource_response(&state, &headers, &iri, &inst, sp, Repr::Json)?)
 }
 
+/// Reject an endpoint on an instance of software that cannot be hosted.
+///
+/// This cannot live in `shapes/tar-shapes.ttl`: the rule spans two records, and a write is
+/// validated against the candidate record alone (README "Known gaps" 1). So it is checked here,
+/// where the Software is already being looked up anyway.
+fn check_deployable(state: &AppState, software: Option<&str>, input: &InstanceIn) -> AppResult<()> {
+    let (Some(sw), Some(endpoint)) = (software, input.endpoint_url.as_deref().filter(|e| !e.is_empty()))
+    else {
+        return Ok(());
+    };
+    let quads = state.store.describe(sw).map_err(AppError::from)?;
+    let props = Props::from_quads(sw, &quads);
+    if props.bool(ns::TAR, "deployable") == Some(false) {
+        let name = props.str(ns::SCHEMA, "name").unwrap_or_else(|| sw.to_string());
+        return Err(AppError::new(
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "not-deployable",
+            "Endpoint on software that cannot be hosted",
+        )
+        .detail(format!(
+            "{name} is marked as not deployable — it runs on a machine rather than being hosted — \
+             so this instance is an installation and cannot have an endpoint. Remove \
+             endpoint_url ({endpoint}), or clear `deployable: false` on the software if that is wrong."
+        ))
+        .with("field", serde_json::json!("endpoint_url")));
+    }
+    Ok(())
+}
+
 fn resolve_software_for(state: &AppState, input: &InstanceIn) -> AppResult<Option<String>> {
     if let Some(sw) = input.software.as_deref().filter(|v| !v.is_empty()) {
         return Ok(Some(ids::iri_for(state.base(), Kind::Software, sw)));
@@ -143,6 +172,7 @@ pub async fn create(
     }
     let iri = ids::mint(state.base(), Kind::Instance);
     let software = resolve_software_for(&state, &input)?;
+    check_deployable(&state, software.as_deref(), &input)?;
     let quads = dom::instance_quads(state.base(), &iri, &input, &principal.subject, software.as_deref());
     shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes)?;
     let mut tx = GraphTx::new();
@@ -180,6 +210,7 @@ pub async fn patch(
         input.release = Some(ids::iri_for(state.base(), Kind::Release, &r));
     }
     let software = resolve_software_for(&state, &input)?;
+    check_deployable(&state, software.as_deref(), &input)?;
     let tx = dom::replace_instance(state.base(), &iri, &input, &principal.subject, software.as_deref());
     shacl::enforce(state.shapes.validate_quads(&tx.insert), state.config.shacl_validate_writes)?;
     state.store.apply(tx).map_err(AppError::from)?;

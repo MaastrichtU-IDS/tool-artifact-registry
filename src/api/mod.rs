@@ -40,6 +40,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/software", get(software::list).post(software::create))
         .route("/software/{id}", get(software::get).patch(software::patch).delete(software::soft_delete))
         .route("/software/{id}/releases", get(software::list_releases).post(software::create_release))
+        .route("/software/{id}/releases/{release_id}", delete(software::delete_release))
         .route("/software/{id}/capability", put(software::put_capability))
         .route("/software/{id}/export/biotools", get(software::export_biotools))
         // capability matchmaking

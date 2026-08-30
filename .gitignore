@@ -7,3 +7,4 @@ frontend/dist
 *.db-wal
 *.db-shm
 .env
+demo/.run/

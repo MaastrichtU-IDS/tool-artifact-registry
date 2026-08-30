@@ -16,7 +16,10 @@ pub const TYPE_ENTITY: &str = "http://www.w3.org/ns/prov#Entity";
 pub const TYPE_DISTRIBUTION: &str = "http://www.w3.org/ns/dcat#Distribution";
 
 pub const AVAILABILITIES: [&str; 4] = ["public", "restricted", "embargoed", "metadata-only"];
-pub const PROTOCOLS: [&str; 6] = ["https", "s3", "sparql", "oci", "ipfs", "file"];
+/// `http` is here deliberately. An intranet service or a local deployment really does serve
+/// over plain HTTP, and a vocabulary that cannot name it forces the record to omit the field —
+/// which loses exactly the fact worth knowing, that the transport is unencrypted.
+pub const PROTOCOLS: [&str; 7] = ["https", "http", "s3", "sparql", "oci", "ipfs", "file"];
 pub const AUTH_METHODS: [&str; 5] = ["none", "apikey", "oauth2", "basic", "signed-url"];
 
 /// The EU access-right authority concept for a `tar:availability` value (audit 2026-08-30).

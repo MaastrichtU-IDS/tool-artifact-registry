@@ -32,17 +32,25 @@ async fn deref(
     let iri = ids::iri_for(state.base(), kind, &id);
     let repr = pinned.unwrap_or_else(|| negotiate(&headers, Repr::Html));
 
-    if repr == Repr::Html {
-        // The SPA renders it; the route is the same URL (handoff §3).
-        return Ok(super::web::spa_response(&state).await);
-    }
-
     let quads = state.store.describe(&iri).map_err(AppError::from)?;
-    if quads.is_empty() {
+    if quads.is_empty() && repr != Repr::Html {
         return Err(AppError::not_found(format!("nothing at {iri}")));
     }
     let ctx = Ctx::new(&state).await?;
     let sp = signposting_for(&ctx, kind, &iri, &state);
+
+    if repr == Repr::Html {
+        // The SPA renders it; the route is the same URL (handoff §3). The Link headers ride
+        // along, because this is the representation a person shares and a machine then
+        // follows — omitting them here is omitting them where they matter most.
+        let mut resp = super::web::spa_response(&state).await;
+        if !quads.is_empty() {
+            if let Some(v) = sp.header_value() {
+                resp.headers_mut().insert(axum::http::header::LINK, v);
+            }
+        }
+        return Ok(resp);
+    }
 
     if repr == Repr::Json {
         let body = match kind {

@@ -169,7 +169,7 @@ pub async fn sync_into(
     };
     let branch = meta.default_branch.clone().unwrap_or_else(|| "main".into());
 
-    let mut set = |name: &str, current: &mut Option<String>, next: Option<String>, out: &mut SyncOutcome| {
+    let set = |name: &str, current: &mut Option<String>, next: Option<String>, out: &mut SyncOutcome| {
         let next = next.filter(|v| !v.trim().is_empty());
         if next.is_some() && next.as_deref() != current.as_deref() {
             *current = next;

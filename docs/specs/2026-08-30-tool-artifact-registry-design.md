@@ -305,7 +305,7 @@ for local authority; evicting a peer is `DROP GRAPH <urn:tar:peer:{id}>`.
 | `spdx:checksum` | SPDX | algorithm + value; `sha256` recommended |
 | `dct:license`, `dct:rights`, `odrl:hasPolicy` | DCTERMS / ODRL | |
 | `dcat:accessService` | DCAT | → a `dcat:DataService` (SPARQL endpoint, S3 bucket, OGC API) |
-| `tar:accessProtocol` | ours | `https` \| `s3` \| `sparql` \| `oci` \| `ipfs` \| `file` |
+| `tar:accessProtocol` | ours | `https` \| `http` \| `s3` \| `sparql` \| `oci` \| `ipfs` \| `file`. `http` was added after a deployment serving over plain HTTP had to omit the field entirely, which loses the one thing worth recording — that the transport is unencrypted. |
 | `tar:authMethod` | ours | `none` \| `apikey` \| `oauth2` \| `basic` \| `signed-url` |
 | `tar:availability` | ours | `public` \| `restricted` \| `embargoed` \| `metadata-only` |
 | `tar:accessRequestURL` | ours | Where to request access when not `public` |

@@ -1505,3 +1505,61 @@ async fn a_token_with_no_audience_at_all_is_rejected_when_an_audience_is_require
     let (status, body, _) = h.req("GET", "/api/v1/whoami", Some(&token), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
 }
+
+
+#[tokio::test]
+async fn the_html_representation_carries_signposting_too() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    // Spec §6.3 says "every artifact and software GET emits Signposting Link headers". HTML is
+    // the representation a person shares and a machine then follows, so it is the one that can
+    // least afford to omit them.
+    let req = Request::builder()
+        .uri(format!("/software/{}", f.software_id))
+        .header("accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+        .body(Body::empty())
+        .unwrap();
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get("content-type").unwrap(), "text/html; charset=utf-8");
+    let link = resp.headers().get("link").expect("Signposting on the HTML page").to_str().unwrap().to_string();
+    assert!(link.contains("rel=\"cite-as\""), "{link}");
+    assert!(link.contains("rel=\"describedby\""), "{link}");
+    assert!(link.contains("https://spdx.org/licenses/Apache-2.0>; rel=\"license\""), "{link}");
+
+    // A page for something that does not exist still renders (the SPA owns 404s), and simply
+    // has nothing to point at.
+    let req = Request::builder()
+        .uri("/software/01a00000-0000-7000-8000-000000000000")
+        .header("accept", "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers().get("link").is_none());
+}
+
+#[tokio::test]
+async fn plain_http_is_a_nameable_access_protocol() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    // An intranet service really does serve over http. Refusing the value would force the
+    // record to omit the field and lose the fact that the transport is unencrypted.
+    let (status, out) = h
+        .post(
+            "/api/v1/advertise/produced",
+            &f.token,
+            json!({"run": {"external_key": "http-1"}, "artifacts": [{
+                "title": "a graph on an intranet host",
+                "conforms_to": "http://edamontology.org/data_2600",
+                "distributions": [{
+                    "download_url": "http://intranet.example.internal/g.ttl",
+                    "access_protocol": "http",
+                    "availability": "restricted",
+                    "access_request_url": "https://example.org/access"
+                }]
+            }]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{out}");
+}

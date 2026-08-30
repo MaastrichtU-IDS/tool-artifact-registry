@@ -1,0 +1,52 @@
+# The demo stack: the registry, plus an object store for the demo's own web assets.
+#
+# The two storage roles in this demo are deliberately separate:
+#
+#   assets (here)          tool logos, screenshots, README files. Plain web objects that the
+#                          registry *points at*. The registry never stores bytes (spec D1),
+#                          so these are ordinary URLs on a Software record.
+#
+#   OntoExplorer's MinIO   raw ontology files it has ingested. Those are not assets — they are
+#   (not in this file)     Artifacts, with provenance, checksums and an s3:// distribution.
+#                          OntoExplorer runs its own; the demo records where the objects live.
+
+name: tar-demo
+
+services:
+  registry:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      TAR_BASE_IRI: ${TAR_BASE_IRI:-http://localhost:8080}
+      TAR_ROOT_TOKEN: ${TAR_ROOT_TOKEN:-demo-root-token-change-me-please}
+      TAR_TITLE: IDS Tool Artifact Registry
+      TAR_OPERATOR: Maastricht University — Institute of Data Science
+      TAR_PEER_RESOLVE_ENABLED: "false"
+    ports: ["8080:8080"]
+    volumes: ["registry-data:/data"]
+    healthcheck:
+      test: ["CMD", "/tar", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # The demo's asset store. Anonymous read on one bucket, so the browser can load the images
+  # the registry references without the registry proxying anything.
+  assets:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-minioadmin}
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["assets-data:/data"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  registry-data:
+  assets-data:

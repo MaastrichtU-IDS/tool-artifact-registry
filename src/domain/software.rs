@@ -34,6 +34,8 @@ pub fn software_quads(base: &str, iri: &str, input: &SoftwareIn, actor: &str, cr
     n.opt_link(ns::SCHEMA, "url", &input.homepage);
     n.opt_link(ns::SCHEMA, "codeRepository", &input.code_repository);
     n.opt_link(ns::SCHEMA, "softwareHelp", &input.documentation);
+    n.opt_link(ns::SCHEMA, "image", &input.image);
+    n.links(ns::SCHEMA, "screenshot", &input.screenshots);
     n.opt_link(ns::DCT, "license", &input.license);
     n.opt_text(ns::TAR, "kind", &input.kind);
     n.opt_text(ns::SCHEMA, "applicationCategory", &input.kind);
@@ -129,6 +131,8 @@ pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
         homepage: p.iri(ns::SCHEMA, "url"),
         code_repository: p.iri(ns::SCHEMA, "codeRepository"),
         documentation: p.iri(ns::SCHEMA, "softwareHelp"),
+        image: p.iri(ns::SCHEMA, "image"),
+        screenshots: p.iris(ns::SCHEMA, "screenshot"),
         license: p.iri(ns::DCT, "license"),
         kind: p.str(ns::TAR, "kind").or_else(|| p.str(ns::SCHEMA, "applicationCategory")),
         maturity: p.str(ns::TAR, "maturity"),

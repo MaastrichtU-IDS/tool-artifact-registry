@@ -53,6 +53,10 @@ pub struct GraphTx {
     /// `(subject IRI, graph IRI)` — all quads with this subject in this graph are removed,
     /// following blank-node closure.
     pub delete_subjects: Vec<(String, String)>,
+    /// `(subject IRI, predicate IRI, graph IRI)` — removes just that property, so a value can
+    /// be replaced rather than accumulated. A run advertised as `running` and later as
+    /// `success` must end up with one status, not both.
+    pub delete_properties: Vec<(String, String, String)>,
 }
 
 impl GraphTx {
@@ -71,8 +75,13 @@ impl GraphTx {
         self.delete_subjects.push((subject.to_string(), graph.to_string()));
         self
     }
+    /// Drop every value of one property so an insert in the same transaction replaces it.
+    pub fn replace_property(&mut self, subject: &str, predicate: &str, graph: &str) -> &mut Self {
+        self.delete_properties.push((subject.to_string(), predicate.to_string(), graph.to_string()));
+        self
+    }
     pub fn is_empty(&self) -> bool {
-        self.insert.is_empty() && self.delete_subjects.is_empty()
+        self.insert.is_empty() && self.delete_subjects.is_empty() && self.delete_properties.is_empty()
     }
 }
 

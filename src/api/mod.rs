@@ -13,6 +13,7 @@ pub mod search;
 pub mod software;
 pub mod sparql;
 pub mod tokens;
+pub mod types;
 pub mod web;
 
 use crate::error::{AppError, AppResult};
@@ -43,6 +44,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/software/{id}/export/biotools", get(software::export_biotools))
         // capability matchmaking
         .route("/capabilities", get(search::capabilities))
+        // local ArtifactTypes (D11)
+        .route("/types", get(types::list).post(types::create))
+        .route("/types/{id}", get(types::get))
         // instances
         .route("/instances", get(instances::list).post(instances::create))
         .route("/instances/{id}", get(instances::get).patch(instances::patch).delete(instances::soft_delete))

@@ -113,7 +113,18 @@ export default function SoftwareList() {
         )}
 
         {data?.items.map((sw) => (
-          <Link className="row-card" to={`/software/${sw.id}`} key={sw.iri}>
+          <Link className={sw.image ? 'row-card with-thumb' : 'row-card'} to={`/software/${sw.id}`} key={sw.iri}>
+            {sw.image && (
+              <img
+                className="thumb"
+                src={sw.image}
+                alt=""
+                loading="lazy"
+                /* A dead image URL must not leave a broken-image glyph in the row. */
+                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none' }}
+              />
+            )}
+            <div className="row-body">
             <div className="spread">
               <h3>{sw.name}</h3>
               <OriginChip origin={sw.origin} interactive={false} />
@@ -126,6 +137,7 @@ export default function SoftwareList() {
               {sw.runs_30d > 0 && <span className="chip plain">{sw.runs_30d} runs/30d</span>}
               {sw.edam_topics.slice(0, 2).map((t) => <ArtifactTypeChip key={t.iri} type={t} interactive={false} />)}
               {sw.tombstoned && <span className="chip warn">withdrawn</span>}
+            </div>
             </div>
           </Link>
         ))}

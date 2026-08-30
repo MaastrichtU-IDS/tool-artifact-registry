@@ -93,6 +93,12 @@ pub struct SoftwareIn {
     pub code_repository: Option<String>,
     #[serde(default)]
     pub documentation: Option<String>,
+    /// Logo or hero image. A pointer, never bytes: the registry stores no images (D1).
+    #[serde(default)]
+    pub image: Option<String>,
+    /// Further screenshots, in display order.
+    #[serde(default)]
+    pub screenshots: Vec<String>,
     #[serde(default)]
     pub license: Option<String>,
     /// `service` | `library` | `cli` | `workflow`
@@ -130,6 +136,9 @@ pub struct Software {
     pub code_repository: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub documentation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    pub screenshots: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

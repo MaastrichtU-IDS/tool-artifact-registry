@@ -165,6 +165,30 @@ export default function SoftwareDetail() {
             )}
           </section>
 
+          {(s.image || s.screenshots.length > 0) && (
+            <section className="card">
+              <h2>Screenshots</h2>
+              <div className="shots">
+                {[s.image, ...s.screenshots].filter(Boolean).map((src) => (
+                  <a key={src} href={src} target="_blank" rel="noreferrer">
+                    <img
+                      src={src}
+                      alt={`${s.name} screenshot`}
+                      loading="lazy"
+                      onError={(e) => {
+                        const fig = (e.currentTarget as HTMLImageElement).closest('a')
+                        if (fig) (fig as HTMLElement).style.display = 'none'
+                      }}
+                    />
+                  </a>
+                ))}
+              </div>
+              <p className="hint">
+                Images are referenced, never stored here — the registry holds pointers, not bytes.
+              </p>
+            </section>
+          )}
+
           {s.description && (
             <section className="card">
               <h2>Description</h2>

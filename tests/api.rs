@@ -274,6 +274,55 @@ async fn advertising_produced_records_lineage_and_is_idempotent() {
 }
 
 #[tokio::test]
+async fn a_later_advertisement_replaces_a_runs_outcome_rather_than_adding_to_it() {
+    let h = harness().await;
+    let f = h.fixture().await;
+
+    // A CI job advertises its inputs while still running…
+    let (status, started) = h
+        .post(
+            "/api/v1/advertise/consumed",
+            &f.token,
+            json!({"run": {"external_key": "ci/42", "status": "running",
+                           "started_at": "2026-08-30T10:31:00Z"},
+                   "artifacts": [{"iri": "https://reg.mumc.nl/artifact/01J7Z"}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{started}");
+    let run_id = started["run"].as_str().unwrap().rsplit('/').next().unwrap().to_string();
+
+    let (_, run) = h.get(&format!("/api/v1/runs/{run_id}")).await;
+    assert_eq!(run["status"], "running");
+
+    // …and reports the outcome on the same run key when it finishes.
+    h.post(
+        "/api/v1/advertise/produced",
+        &f.token,
+        json!({"run": {"external_key": "ci/42", "status": "success",
+                       "ended_at": "2026-08-30T10:31:04Z"},
+               "artifacts": []}),
+    )
+    .await;
+
+    let (_, run) = h.get(&format!("/api/v1/runs/{run_id}")).await;
+    assert_eq!(run["status"], "success", "the outcome must replace the earlier state");
+    assert_eq!(run["ended_at"], "2026-08-30T10:31:04Z");
+    assert_eq!(run["duration_seconds"], 4);
+
+    // The graph must hold exactly one status, or every reader has to guess which is current.
+    let quads = h
+        .state
+        .store
+        .describe(started["run"].as_str().unwrap())
+        .expect("run quads");
+    let n = quads
+        .iter()
+        .filter(|q| q.predicate.as_str() == "https://w3id.org/tar/ns#status")
+        .count();
+    assert_eq!(n, 1, "expected one tar:status triple, found {n}");
+}
+
+#[tokio::test]
 async fn consuming_accepts_a_bare_foreign_iri_and_never_blocks_on_the_network() {
     let h = harness().await;
     let f = h.fixture().await;

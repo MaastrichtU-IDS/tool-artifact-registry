@@ -137,6 +137,22 @@ impl GraphStore for OxigraphStore {
                 t.remove(q.as_ref());
             }
         }
+        for (subject, predicate, graph) in &tx.delete_properties {
+            let s = Self::subject_ref(subject)?;
+            let pred = Self::subject_ref(predicate)?;
+            let g = Self::subject_ref(graph)?;
+            let doomed: Vec<Quad> = t
+                .quads_for_pattern(
+                    Some(NamedOrBlankNodeRef::from(s.as_ref())),
+                    Some(pred.as_ref()),
+                    None,
+                    Some(GraphNameRef::NamedNode(g.as_ref())),
+                )
+                .collect::<Result<Vec<_>, _>>()?;
+            for q in doomed {
+                t.remove(q.as_ref());
+            }
+        }
         for q in &tx.insert {
             t.insert(q.as_ref());
         }

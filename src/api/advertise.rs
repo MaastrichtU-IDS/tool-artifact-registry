@@ -111,13 +111,7 @@ async fn advertise(
     let mut created_any = false;
     let run_iri = match existing_run {
         Some(iri) => {
-            // Update terminal state if this advertisement carries it.
-            if run_input.ended_at.is_some() || run_input.status.is_some() {
-                let mut n = Node::local(&iri);
-                n.opt_datetime(ns::PROV, "endedAtTime", &run_input.ended_at);
-                n.opt_text(ns::TAR, "status", &run_input.status);
-                tx.extend(n.finish());
-            }
+            update_run_outcome(&mut tx, &iri, &run_input);
             iri
         }
         None => {
@@ -228,6 +222,27 @@ async fn advertise(
     ))
 }
 
+/// Apply a later advertisement's outcome to a run that already exists.
+///
+/// The status and end time are *replaced*, not added: a run advertised first as `running` and
+/// then as `success` must end up with one of each, or every reader has to guess which of two
+/// values in the graph is current.
+pub fn update_run_outcome(tx: &mut GraphTx, run_iri: &str, run: &RunIn) {
+    if run.ended_at.is_none() && run.status.is_none() {
+        return;
+    }
+    let mut n = Node::local(run_iri);
+    if run.ended_at.is_some() {
+        tx.replace_property(run_iri, &format!("{}endedAtTime", ns::PROV), ns::G_LOCAL);
+        n.opt_datetime(ns::PROV, "endedAtTime", &run.ended_at);
+    }
+    if run.status.is_some() {
+        tx.replace_property(run_iri, &format!("{}status", ns::TAR), ns::G_LOCAL);
+        n.opt_text(ns::TAR, "status", &run.status);
+    }
+    tx.extend(n.finish());
+}
+
 /// A stable identity for an artifact that carries none of its own: the run it belongs to plus
 /// what the producer said about it. Two identical advertisements of the same step collapse;
 /// two genuinely different artifacts in one run do not.
@@ -254,10 +269,7 @@ pub async fn ensure_run(
 ) -> AppResult<String> {
     if let Some(key) = run.external_key.as_deref().filter(|k| !k.is_empty()) {
         if let Some(iri) = state.ops.run_for_key(key, instance_iri).await.map_err(AppError::from)? {
-            let mut n = Node::local(&iri);
-            n.opt_datetime(ns::PROV, "endedAtTime", &run.ended_at);
-            n.opt_text(ns::TAR, "status", &run.status);
-            tx.extend(n.finish());
+            update_run_outcome(tx, &iri, run);
             return Ok(iri);
         }
     }

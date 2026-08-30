@@ -16,6 +16,7 @@ const software: Software = {
   kind: 'service',
   edam_topics: [{ iri: 'http://edamontology.org/topic_3071', label: 'Data management', source: 'edam' }],
   keywords: ['shacl'],
+  screenshots: [],
   publications: [],
   capability: {
     iri: 'https://reg.test/capability/1',

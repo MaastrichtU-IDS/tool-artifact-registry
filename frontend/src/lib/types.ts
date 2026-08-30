@@ -56,6 +56,8 @@ export interface Software {
   homepage?: string
   code_repository?: string
   documentation?: string
+  image?: string
+  screenshots: string[]
   license?: string
   kind?: string
   maturity?: string

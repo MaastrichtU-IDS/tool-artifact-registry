@@ -168,6 +168,11 @@ export default function ArtifactDetail() {
   )
 }
 
+/** Schemes a browser will actually dereference from an anchor. */
+function browserFollowable(url: string): boolean {
+  return /^https?:\/\//i.test(url)
+}
+
 function DistributionCard({ d }: { d: Distribution }) {
   const metadataOnly = d.availability === 'metadata-only'
   return (
@@ -187,10 +192,26 @@ function DistributionCard({ d }: { d: Distribution }) {
           </p>
         </div>
       ) : (
-        <ul className="chips" style={{ marginBottom: 8 }}>
-          {d.download_url && <li><a className="chip accent" href={d.download_url}>⬇ Download</a></li>}
-          {d.access_url && <li><a className="chip" href={d.access_url} target="_blank" rel="noreferrer">Access page ↗</a></li>}
-        </ul>
+        <>
+          <ul className="chips" style={{ marginBottom: 8 }}>
+            {/* A browser cannot follow s3://, ipfs:// or file://. Offering a link that does
+                nothing is worse than showing the URI the client actually needs. */}
+            {d.download_url && browserFollowable(d.download_url) && (
+              <li><a className="chip accent" href={d.download_url}>⬇ Download</a></li>
+            )}
+            {d.access_url && browserFollowable(d.access_url) && (
+              <li><a className="chip" href={d.access_url} target="_blank" rel="noreferrer">Access page ↗</a></li>
+            )}
+          </ul>
+          {d.download_url && !browserFollowable(d.download_url) && (
+            <div style={{ marginBottom: 8 }}>
+              <p className="hint" style={{ marginTop: 0 }}>
+                Fetch this with a {d.access_protocol ?? 'protocol'} client, not a browser:
+              </p>
+              <CopyField value={d.download_url} label={`${d.access_protocol ?? ''} object URI`} />
+            </div>
+          )}
+        </>
       )}
 
       {d.access_request_url && (

@@ -1488,3 +1488,20 @@ async fn syncing_a_record_with_no_repository_says_so() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body["detail"].as_str().unwrap().contains("not connected to a repository"), "{body}");
 }
+
+
+#[tokio::test]
+async fn a_token_with_no_audience_at_all_is_rejected_when_an_audience_is_required() {
+    let h = harness_with_oidc(true).await;
+    h.fixture().await;
+    // `aud` is how a token says which service it is for. A token minted by a trusted issuer
+    // for some *other* service, carrying no audience, must not be usable here — otherwise
+    // "require audience" only means "check it if they bothered to send one", and any token
+    // from that issuer works against every service that trusts it.
+    let token = jwt(json!({
+        "iss": ISSUER, "exp": exp(), "sub": "u-1", "azp": "shacl-manager-ids3",
+        "scope": "advertise:produce"
+    }));
+    let (status, body, _) = h.req("GET", "/api/v1/whoami", Some(&token), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+}

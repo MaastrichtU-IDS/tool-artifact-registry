@@ -103,7 +103,7 @@ repository, nothing to rotate, and the credential cannot be replayed from anywhe
 | `TAR_OIDC_CLIENT_ID` / `_CLIENT_SECRET` | unset | For browser sign-in. The UI uses authorisation code + PKCE, so the secret is only needed for confidential-client setups. |
 | `TAR_WORKLOAD_ISSUERS` | unset | Comma-separated. Accepted for workload tokens only, never for browser sign-in. |
 | `TAR_OIDC_AUDIENCE` | `TAR_BASE_IRI` | Expected `aud`. |
-| `TAR_OIDC_REQUIRE_AUDIENCE` | `true` | Turn off only for a provider that cannot set `aud` — it weakens replay protection. |
+| `TAR_OIDC_REQUIRE_AUDIENCE` | `true` | Requires the `aud` claim **and** checks it. A token without one is rejected, not waved through: otherwise any token from a trusted issuer, minted for any other service, would work here. Turn off only for a provider that cannot set `aud` — it weakens replay protection. |
 | `TAR_OIDC_CLIENT_CLAIM` | `azp` | Which claim carries the workload's identity. |
 | `TAR_OIDC_ROLES_CLAIM` | `realm_access.roles` | Dotted path. |
 | `TAR_OIDC_SCOPE_CLAIM` | `scope` | Space-delimited string or array. |

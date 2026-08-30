@@ -220,7 +220,18 @@ pub async fn authenticate_jwt(state: &Arc<AppState>, token: &str) -> AppResult<P
     let mut validation = Validation::new(alg);
     validation.set_issuer(&[issuer.as_str()]);
     match (&cfg.audience, cfg.require_audience) {
-        (Some(aud), true) => validation.set_audience(&[aud.as_str()]),
+        (Some(aud), true) => {
+            validation.set_audience(&[aud.as_str()]);
+            // `set_audience` alone checks the claim *only if the token carries one*: the
+            // library's own note is "Validation only happens if `aud` claim is present".
+            // A token minted by a trusted issuer for a different service, with no audience,
+            // would otherwise be accepted here — which is exactly the cross-service reuse the
+            // claim exists to prevent. Requiring the claim is what makes the setting's name
+            // true.
+            validation.set_required_spec_claims(&["exp", "aud"]);
+        }
+        // No expected audience configured, or the operator turned the check off. Say nothing
+        // about `aud` rather than half-checking it.
         _ => validation.validate_aud = false,
     }
     let data = decode::<Value>(token, &key, &validation)

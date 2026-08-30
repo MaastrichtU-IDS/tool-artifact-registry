@@ -1,0 +1,258 @@
+//! Software, Release and Capability projections (spec §4.2).
+
+use super::{agent_quads, Ctx};
+use crate::error::{AppError, AppResult};
+use crate::ids::{self, Kind};
+use crate::model::*;
+use crate::ns;
+use crate::rdf::{Node, Props};
+use crate::store::GraphTx;
+use oxigraph::model::Quad;
+use std::collections::HashMap;
+
+pub const TYPE_SOFTWARE: &str = "https://schema.org/SoftwareApplication";
+pub const TYPE_SOURCE: &str = "https://schema.org/SoftwareSourceCode";
+pub const TYPE_RELEASE_PLAN: &str = "http://www.w3.org/ns/prov#Plan";
+pub const TYPE_CAPABILITY: &str = "https://w3id.org/tar/ns#Capability";
+
+// ------------------------------------------------------------------- writes
+
+pub fn software_quads(base: &str, iri: &str, input: &SoftwareIn, actor: &str, created: Option<String>) -> Vec<Quad> {
+    let mut quads = Vec::new();
+    let mut n = Node::local(iri);
+    n.a(TYPE_SOFTWARE);
+    n.a(TYPE_SOURCE);
+    n.text(ns::SCHEMA, "name", &input.name);
+    n.opt_text(ns::TAR, "tagline", &input.tagline);
+    n.opt_text(ns::SCHEMA, "description", &input.description);
+    n.opt_link(ns::SCHEMA, "url", &input.homepage);
+    n.opt_link(ns::SCHEMA, "codeRepository", &input.code_repository);
+    n.opt_link(ns::SCHEMA, "softwareHelp", &input.documentation);
+    n.opt_link(ns::DCT, "license", &input.license);
+    n.opt_text(ns::TAR, "kind", &input.kind);
+    n.opt_text(ns::SCHEMA, "applicationCategory", &input.kind);
+    n.opt_text(ns::TAR, "maturity", &input.maturity);
+    n.links(ns::DCT, "subject", &input.edam_topics);
+    n.texts(ns::SCHEMA, "keywords", &input.keywords);
+    n.links(ns::DCT, "references", &input.publications);
+    n.datetime(ns::DCT, "created", &created.unwrap_or_else(|| chrono::Utc::now().to_rfc3339()));
+    crate::rdf::attribution(&mut n, actor);
+
+    if let Some(p) = &input.publisher {
+        let (piri, pq) = agent_quads(base, p);
+        if let Some(pi) = piri {
+            n.link(ns::DCT, "publisher", &pi);
+        }
+        quads.extend(pq);
+    }
+    if let Some(c) = &input.contact {
+        let (ciri, cq) = agent_quads(base, c);
+        if let Some(ci) = ciri {
+            n.link(ns::TAR, "contact", &ci);
+        }
+        quads.extend(cq);
+    }
+    if let Some(cap) = &input.capability {
+        let cap_iri = ids::mint(base, Kind::Capability);
+        quads.extend(capability_quads(&cap_iri, cap));
+        n.link(ns::TAR, "hasCapability", &cap_iri);
+    }
+    quads.extend(n.finish());
+    quads
+}
+
+pub fn capability_quads(iri: &str, cap: &CapabilityIn) -> Vec<Quad> {
+    let mut n = Node::local(iri);
+    n.a(TYPE_CAPABILITY);
+    n.a(TYPE_RELEASE_PLAN);
+    n.links(ns::TAR, "produces", &cap.produces);
+    n.links(ns::TAR, "consumes", &cap.consumes);
+    n.finish()
+}
+
+pub fn release_quads(base: &str, iri: &str, software_iri: &str, input: &ReleaseIn, actor: &str) -> Vec<Quad> {
+    let mut quads = Vec::new();
+    let mut n = Node::local(iri);
+    n.a(TYPE_SOFTWARE);
+    n.a(TYPE_RELEASE_PLAN);
+    n.text(ns::SCHEMA, "softwareVersion", &input.version);
+    n.opt_datetime(ns::SCHEMA, "datePublished", &input.date_published);
+    n.opt_text(ns::TAR, "containerImage", &input.container_image);
+    n.opt_text(ns::TAR, "imageDigest", &input.image_digest);
+    n.opt_link(ns::SCHEMA, "releaseNotes", &input.changelog);
+    n.opt_text(ns::TAR, "installCommand", &input.install_command);
+    n.link(ns::DCT, "isVersionOf", software_iri);
+    crate::rdf::attribution(&mut n, actor);
+    if let Some(cap) = &input.capability {
+        let cap_iri = ids::mint(base, Kind::Capability);
+        quads.extend(capability_quads(&cap_iri, cap));
+        n.link(ns::TAR, "hasCapability", &cap_iri);
+    }
+    quads.extend(n.finish());
+    quads
+}
+
+// -------------------------------------------------------------------- reads
+
+pub fn capability_from(ctx: &Ctx, cap_iri: &str, declared_at: &str) -> Option<Capability> {
+    let quads = ctx.state.store.describe(cap_iri).ok()?;
+    if quads.is_empty() {
+        return None;
+    }
+    let p = Props::from_quads(cap_iri, &quads);
+    Some(Capability {
+        iri: cap_iri.to_string(),
+        produces: ctx.type_refs(&p.iris(ns::TAR, "produces")),
+        consumes: ctx.type_refs(&p.iris(ns::TAR, "consumes")),
+        declared_at: declared_at.to_string(),
+    })
+}
+
+pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
+    let id = ids::local_id(ctx.base(), iri).map(|(_, i)| i).unwrap_or_else(|| ids::iri_tail(iri).to_string());
+    let capability = p
+        .iri(ns::TAR, "hasCapability")
+        .and_then(|c| capability_from(ctx, &c, "software"));
+    Software {
+        iri: iri.to_string(),
+        id,
+        name: p.str(ns::SCHEMA, "name").unwrap_or_else(|| ids::iri_tail(iri).to_string()),
+        tagline: p.str(ns::TAR, "tagline"),
+        description: p.str(ns::SCHEMA, "description"),
+        homepage: p.iri(ns::SCHEMA, "url"),
+        code_repository: p.iri(ns::SCHEMA, "codeRepository"),
+        documentation: p.iri(ns::SCHEMA, "softwareHelp"),
+        license: p.iri(ns::DCT, "license"),
+        kind: p.str(ns::TAR, "kind").or_else(|| p.str(ns::SCHEMA, "applicationCategory")),
+        maturity: p.str(ns::TAR, "maturity"),
+        edam_topics: ctx.type_refs(&p.iris(ns::DCT, "subject")),
+        keywords: p.strs(ns::SCHEMA, "keywords"),
+        publisher: ctx.opt_agent_ref(p.iri(ns::DCT, "publisher")),
+        contact: ctx.opt_agent_ref(p.iri(ns::TAR, "contact")),
+        publications: p.iris(ns::DCT, "references"),
+        capability,
+        latest_release: None,
+        instance_count: 0,
+        release_count: 0,
+        runs_30d: 0,
+        created: p.str(ns::DCT, "created"),
+        modified: p.str(ns::DCT, "modified"),
+        origin: ctx.origin(p.graph.as_deref()),
+        tombstoned: p.bool(ns::TAR, "tombstoned").unwrap_or(false),
+    }
+}
+
+pub fn load_software(ctx: &Ctx, iri: &str) -> AppResult<Software> {
+    let quads = ctx.state.store.describe(iri).map_err(AppError::from)?;
+    if quads.is_empty() {
+        return Err(AppError::not_found(format!("no software at {iri}")));
+    }
+    let p = Props::from_quads(iri, &quads);
+    if !p.has_type(TYPE_SOFTWARE) && !p.has_type(TYPE_SOURCE) {
+        return Err(AppError::not_found(format!("{iri} is not a Software record")));
+    }
+    let mut sw = software_from_props(ctx, iri, &p);
+    let releases = list_releases(ctx, iri)?;
+    sw.release_count = releases.len() as i64;
+    sw.latest_release = releases.into_iter().next();
+    let counts = software_counts(ctx, Some(iri))?;
+    if let Some(c) = counts.get(iri) {
+        sw.instance_count = c.instances;
+        sw.runs_30d = c.runs_30d;
+    }
+    Ok(sw)
+}
+
+pub fn release_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Release {
+    Release {
+        iri: iri.to_string(),
+        id: ids::local_id(ctx.base(), iri).map(|(_, i)| i).unwrap_or_default(),
+        version: p.str(ns::SCHEMA, "softwareVersion").unwrap_or_default(),
+        date_published: p.str(ns::SCHEMA, "datePublished"),
+        container_image: p.str(ns::TAR, "containerImage"),
+        image_digest: p.str(ns::TAR, "imageDigest"),
+        changelog: p.iri(ns::SCHEMA, "releaseNotes"),
+        install_command: p.str(ns::TAR, "installCommand"),
+        software: p.iri(ns::DCT, "isVersionOf"),
+        software_name: None,
+        capability: p.iri(ns::TAR, "hasCapability").and_then(|c| capability_from(ctx, &c, "release")),
+        origin: ctx.origin(p.graph.as_deref()),
+    }
+}
+
+/// Releases newest first. `datePublished` when present, otherwise the UUIDv7 ordering.
+pub fn list_releases(ctx: &Ctx, software_iri: &str) -> AppResult<Vec<Release>> {
+    let q = format!(
+        r#"{p}
+SELECT ?r WHERE {{ GRAPH ?g {{ ?r dct:isVersionOf <{software_iri}> ; schema:softwareVersion ?v }} }}"#,
+        p = ns::PREFIXES
+    );
+    let rows = ctx.state.store.select(&q).map_err(AppError::from)?;
+    let mut out = Vec::new();
+    for row in rows.rows {
+        let Some(iri) = row.iri("r") else { continue };
+        let quads = ctx.state.store.describe(&iri).map_err(AppError::from)?;
+        let p = Props::from_quads(&iri, &quads);
+        out.push(release_from_props(ctx, &iri, &p));
+    }
+    out.sort_by(|a, b| {
+        b.date_published
+            .as_deref()
+            .unwrap_or("")
+            .cmp(a.date_published.as_deref().unwrap_or(""))
+            .then_with(|| b.iri.cmp(&a.iri))
+    });
+    Ok(out)
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct SoftwareCounts {
+    pub instances: i64,
+    pub runs_30d: i64,
+}
+
+/// Instance and 30-day run counts per Software, in two aggregate queries rather than N.
+pub fn software_counts(ctx: &Ctx, only: Option<&str>) -> AppResult<HashMap<String, SoftwareCounts>> {
+    let filter = only.map(|s| format!("FILTER(?sw = <{s}>)")).unwrap_or_default();
+    let mut out: HashMap<String, SoftwareCounts> = HashMap::new();
+    let q = format!(
+        r#"{p}
+SELECT ?sw (COUNT(DISTINCT ?i) AS ?n) WHERE {{
+  GRAPH ?g {{ ?i tar:instanceOf ?sw }} {filter}
+}} GROUP BY ?sw"#,
+        p = ns::PREFIXES
+    );
+    for row in ctx.state.store.select(&q).map_err(AppError::from)?.rows {
+        if let (Some(sw), Some(n)) = (row.iri("sw"), row.i64("n")) {
+            out.entry(sw).or_default().instances = n;
+        }
+    }
+    let since = super::thirty_days_ago();
+    let q = format!(
+        r#"{p}
+SELECT ?sw (COUNT(DISTINCT ?run) AS ?n) WHERE {{
+  GRAPH ?g {{
+    ?run a prov:Activity ; tar:atInstance ?i ; prov:startedAtTime ?t .
+    ?i tar:instanceOf ?sw .
+  }}
+  FILTER(?t >= "{since}"^^xsd:dateTime)
+  {filter}
+}} GROUP BY ?sw"#,
+        p = ns::PREFIXES
+    );
+    for row in ctx.state.store.select(&q).map_err(AppError::from)?.rows {
+        if let (Some(sw), Some(n)) = (row.iri("sw"), row.i64("n")) {
+            out.entry(sw).or_default().runs_30d = n;
+        }
+    }
+    Ok(out)
+}
+
+/// Replace a Software record in place, preserving its creation date and capability link
+/// unless the patch supplies new ones.
+pub fn replace_software(base: &str, iri: &str, input: &SoftwareIn, actor: &str, created: Option<String>) -> GraphTx {
+    let mut tx = GraphTx::new();
+    tx.replace_subject(iri, ns::G_LOCAL);
+    tx.extend(software_quads(base, iri, input, actor, created));
+    tx
+}

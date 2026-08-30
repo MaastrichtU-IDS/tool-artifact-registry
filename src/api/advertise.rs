@@ -1,0 +1,260 @@
+//! Advertisement endpoints — requirements 4 and 5 (spec §7.5).
+//!
+//! Both are idempotent on `(run, artifact, role)`, so a retried CI step does not duplicate
+//! lineage, and both accept foreign IRIs in artifact position, which is how cross-registry
+//! lineage forms with no coordination. Neither ever blocks on the network: an unknown foreign
+//! IRI is stored verbatim and queued for background resolution (spec §9.3).
+//!
+//! The Instance is taken from the presenting credential and never from the payload (§8.3) —
+//! whether that credential is a registry token or a Keycloak/Kubernetes/GitHub OIDC token.
+
+use crate::auth::{Principal, SCOPE_ADVERTISE_CONSUME, SCOPE_ADVERTISE_PRODUCE};
+use crate::domain::{artifact as artdom, run as rundom, Ctx};
+use crate::error::{AppError, AppResult};
+use crate::ids::{self, Kind};
+use crate::model::*;
+use crate::ns;
+use crate::rdf::Node;
+use crate::shacl;
+use crate::state::AppState;
+use crate::store::GraphTx;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::Json;
+use std::sync::Arc;
+
+pub async fn produced(
+    State(state): State<Arc<AppState>>,
+    principal: Principal,
+    Json(input): Json<AdvertiseIn>,
+) -> AppResult<impl IntoResponse> {
+    advertise(state, principal, input, Role::Produced).await
+}
+
+pub async fn consumed(
+    State(state): State<Arc<AppState>>,
+    principal: Principal,
+    Json(input): Json<AdvertiseIn>,
+) -> AppResult<impl IntoResponse> {
+    advertise(state, principal, input, Role::Consumed).await
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Role {
+    Produced,
+    Consumed,
+}
+
+impl Role {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Role::Produced => "produced",
+            Role::Consumed => "consumed",
+        }
+    }
+    fn scope(&self) -> &'static str {
+        match self {
+            Role::Produced => SCOPE_ADVERTISE_PRODUCE,
+            Role::Consumed => SCOPE_ADVERTISE_CONSUME,
+        }
+    }
+}
+
+async fn advertise(
+    state: Arc<AppState>,
+    principal: Principal,
+    input: AdvertiseIn,
+    role: Role,
+) -> AppResult<impl IntoResponse> {
+    principal.require_scope(role.scope())?;
+    let instance_iri = principal.require_instance()?;
+    if !state.store.exists(&instance_iri).map_err(AppError::from)? {
+        return Err(AppError::forbidden(format!(
+            "credential names Instance {instance_iri}, which this registry does not know"
+        )));
+    }
+    shacl::enforce(shacl::validate_run(&instance_iri, &input.run), state.config.shacl_validate_writes)?;
+    for a in &input.artifacts {
+        if a.iri.is_none() {
+            shacl::enforce(shacl::validate_artifact("urn:tar:new-artifact", a), state.config.shacl_validate_writes)?;
+        }
+    }
+
+    // Resolve or mint the Run. A second advertisement for the same CI attempt attaches to the
+    // same Run rather than inventing a new one.
+    let mut run_input = input.run.clone();
+    if let Some(r) = run_input.release.clone() {
+        run_input.release = Some(ids::iri_for(state.base(), Kind::Release, &r));
+    }
+    let existing_run = match run_input.external_key.as_deref().filter(|k| !k.is_empty()) {
+        Some(key) => state.ops.run_for_key(key, &instance_iri).await.map_err(AppError::from)?,
+        None => None,
+    };
+    let mut tx = GraphTx::new();
+    let mut created_any = false;
+    let run_iri = match existing_run {
+        Some(iri) => {
+            // Update terminal state if this advertisement carries it.
+            if run_input.ended_at.is_some() || run_input.status.is_some() {
+                let mut n = Node::local(&iri);
+                n.opt_datetime(ns::PROV, "endedAtTime", &run_input.ended_at);
+                n.opt_text(ns::TAR, "status", &run_input.status);
+                tx.extend(n.finish());
+            }
+            iri
+        }
+        None => {
+            let iri = ids::mint(state.base(), Kind::Run);
+            created_any = true;
+            tx.extend(rundom::run_quads(&iri, &run_input, &instance_iri, &principal.subject));
+            if let Some(key) = run_input.external_key.as_deref().filter(|k| !k.is_empty()) {
+                state.ops.remember_run(key, &instance_iri, &iri).await.map_err(AppError::from)?;
+            }
+            iri
+        }
+    };
+
+    let mut artifact_iris = Vec::new();
+    let mut queued = Vec::new();
+
+    for a in &input.artifacts {
+        let artifact_iri = match a.iri.as_deref().filter(|s| !s.is_empty()) {
+            // A bare reference: local or foreign. Foreign IRIs are stored verbatim.
+            Some(iri) => {
+                if !ids::is_local(state.base(), iri) && !state.store.exists(iri).map_err(AppError::from)? {
+                    state.ops.queue_resolve(iri, None).await.map_err(AppError::from)?;
+                    queued.push(iri.to_string());
+                }
+                iri.to_string()
+            }
+            None => {
+                // Idempotency by the producer's own key, so re-running a step that re-emits
+                // the same dataset does not mint a second artifact. When the producer gives
+                // no key, one is derived from the run key plus the artifact's description —
+                // otherwise a retried CI step would mint a fresh IRI every attempt and the
+                // idempotency promise of §7.5 would be empty.
+                let key = a
+                    .external_key
+                    .clone()
+                    .filter(|k| !k.is_empty())
+                    .or_else(|| run_input.external_key.as_deref().map(|rk| derived_key(rk, a)));
+                let known = match key.as_deref() {
+                    Some(k) => state.ops.artifact_for_key(k).await.map_err(AppError::from)?,
+                    None => None,
+                };
+                match known {
+                    Some(iri) => iri,
+                    None => {
+                        let iri = ids::mint(state.base(), Kind::Artifact);
+                        let generated_by = (role == Role::Produced).then_some(run_iri.as_str());
+                        tx.extend(artdom::artifact_quads(state.base(), &iri, a, &principal.subject, generated_by));
+                        for parent in &a.was_derived_from {
+                            if !ids::is_local(state.base(), parent) && !state.store.exists(parent).map_err(AppError::from)? {
+                                state.ops.queue_resolve(parent, None).await.map_err(AppError::from)?;
+                                queued.push(parent.clone());
+                            }
+                        }
+                        if let Some(k) = key.as_deref() {
+                            state.ops.remember_artifact(k, &iri).await.map_err(AppError::from)?;
+                        }
+                        created_any = true;
+                        iri
+                    }
+                }
+            }
+        };
+
+        let fresh = state
+            .ops
+            .claim_advertisement(&run_iri, &artifact_iri, role.as_str())
+            .await
+            .map_err(AppError::from)?;
+        if fresh {
+            created_any = true;
+            match role {
+                // `prov:used` on the Run — the consume advertisement (requirement 5).
+                Role::Consumed => {
+                    let mut n = Node::local(&run_iri);
+                    n.link(ns::PROV, "used", &artifact_iri);
+                    tx.extend(n.finish());
+                }
+                // `prov:wasGeneratedBy` on the Artifact — the produce advertisement (req. 4).
+                Role::Produced => {
+                    let mut n = Node::local(&artifact_iri);
+                    n.link(ns::PROV, "wasGeneratedBy", &run_iri);
+                    tx.extend(n.finish());
+                }
+            }
+        }
+        artifact_iris.push(artifact_iri);
+    }
+
+    if !tx.is_empty() {
+        state.store.apply(tx).map_err(AppError::from)?;
+    }
+    let _ = state
+        .ops
+        .audit(
+            Some(&principal.subject),
+            principal.actor_kind(),
+            &format!("advertise.{}", role.as_str()),
+            Some(&run_iri),
+            Some(&format!("{} artifact(s)", artifact_iris.len())),
+            None,
+        )
+        .await;
+
+    let status = if created_any { StatusCode::CREATED } else { StatusCode::OK };
+    Ok((
+        status,
+        Json(AdvertiseOut { run: run_iri, artifacts: artifact_iris, created: created_any, queued_for_resolution: queued }),
+    ))
+}
+
+/// A stable identity for an artifact that carries none of its own: the run it belongs to plus
+/// what the producer said about it. Two identical advertisements of the same step collapse;
+/// two genuinely different artifacts in one run do not.
+fn derived_key(run_key: &str, a: &ArtifactIn) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(run_key.as_bytes());
+    h.update(a.title.as_deref().unwrap_or_default().as_bytes());
+    h.update(a.conforms_to.as_deref().unwrap_or_default().as_bytes());
+    for d in &a.distributions {
+        h.update(d.download_url.as_deref().unwrap_or_default().as_bytes());
+        h.update(d.access_url.as_deref().unwrap_or_default().as_bytes());
+    }
+    format!("urn:tar:derived:{}", hex::encode(&h.finalize()[..16]))
+}
+
+/// Shared by the OpenLineage adapter: resolve the run for a payload, minting when needed.
+pub async fn ensure_run(
+    state: &Arc<AppState>,
+    principal: &Principal,
+    instance_iri: &str,
+    run: &RunIn,
+    tx: &mut GraphTx,
+) -> AppResult<String> {
+    if let Some(key) = run.external_key.as_deref().filter(|k| !k.is_empty()) {
+        if let Some(iri) = state.ops.run_for_key(key, instance_iri).await.map_err(AppError::from)? {
+            let mut n = Node::local(&iri);
+            n.opt_datetime(ns::PROV, "endedAtTime", &run.ended_at);
+            n.opt_text(ns::TAR, "status", &run.status);
+            tx.extend(n.finish());
+            return Ok(iri);
+        }
+    }
+    let iri = ids::mint(state.base(), Kind::Run);
+    tx.extend(rundom::run_quads(&iri, run, instance_iri, &principal.subject));
+    if let Some(key) = run.external_key.as_deref().filter(|k| !k.is_empty()) {
+        state.ops.remember_run(key, instance_iri, &iri).await.map_err(AppError::from)?;
+    }
+    Ok(iri)
+}
+
+/// Load a run for the response of the adapter.
+pub async fn run_summary(state: &Arc<AppState>, iri: &str) -> AppResult<RunSummary> {
+    let ctx = Ctx::new(state).await?;
+    rundom::load_run_summary(&ctx, iri)
+}

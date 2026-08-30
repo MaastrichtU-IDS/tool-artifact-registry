@@ -1,0 +1,92 @@
+# Vocabulary preload for <urn:tar:vocab> (spec §5.4).
+#
+# EDAM is the recommended default for ArtifactType (D11) but is not vendored in full: this is
+# the working subset that IDS artifacts use, so chips render labels without a network call.
+# Any other IRI still works — ArtifactType is any IRI.
+
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix tar:  <https://w3id.org/tar/ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix dct:  <http://purl.org/dc/terms/> .
+
+# --- EDAM data types -------------------------------------------------------
+
+<http://edamontology.org/data_2600> a skos:Concept ;
+    skos:prefLabel "Pathway or network" ;
+    skos:definition "In this registry, used for general RDF graph payloads." ;
+    tar:defaultMediaType "text/turtle" .
+
+<http://edamontology.org/data_2048> a skos:Concept ;
+    skos:prefLabel "Report" ;
+    skos:definition "A human- or machine-readable report produced by an analysis." ;
+    tar:defaultMediaType "text/turtle" .
+
+<http://edamontology.org/data_0006> a skos:Concept ;
+    skos:prefLabel "Data" ;
+    skos:definition "A generic data artifact of unspecified type." .
+
+# --- EDAM topics -----------------------------------------------------------
+
+<http://edamontology.org/topic_3071> a skos:Concept ;
+    skos:prefLabel "Data management" .
+
+<http://edamontology.org/topic_0089> a skos:Concept ;
+    skos:prefLabel "Ontology and terminology" .
+
+<http://edamontology.org/topic_3068> a skos:Concept ;
+    skos:prefLabel "Literature and language" .
+
+# --- the tar: vocabulary itself -------------------------------------------
+
+tar:Capability a rdfs:Class ;
+    rdfs:label "Capability" ;
+    rdfs:comment "A class-level declaration of what a Software, Release or Instance can consume and produce." .
+
+tar:produces a rdf:Property ;
+    rdfs:label "produces" ;
+    rdfs:domain tar:Capability .
+
+tar:consumes a rdf:Property ;
+    rdfs:label "consumes" ;
+    rdfs:domain tar:Capability .
+
+tar:runsRelease a rdf:Property ;
+    rdfs:label "runs release" ;
+    rdfs:comment "Links a deployment to the versioned plan it executes." .
+
+tar:instanceOf a rdf:Property ;
+    rdfs:label "instance of" ;
+    rdfs:comment "Denormalised link from a deployment to its Software, derivable through the Release." .
+
+tar:atInstance a rdf:Property ;
+    rdfs:label "at instance" ;
+    rdfs:comment "Denormalised link from a Run to the deployment that performed it; the authoritative form is prov:qualifiedAssociation." .
+
+tar:availability a rdf:Property ;
+    rdfs:label "availability" ;
+    rdfs:comment "public | restricted | embargoed | metadata-only." .
+
+tar:accessProtocol a rdf:Property ; rdfs:label "access protocol" .
+tar:authMethod a rdf:Property ; rdfs:label "auth method" .
+tar:accessRequestURL a rdf:Property ; rdfs:label "access request URL" .
+tar:externalKey a rdf:Property ; rdfs:label "external key" .
+tar:status a rdf:Property ; rdfs:label "run status" .
+tar:homeRegistry a rdf:Property ; rdfs:label "home registry" .
+tar:tombstoned a rdf:Property ; rdfs:label "tombstoned" .
+tar:openLineagePayload a rdf:Property ;
+    rdfs:label "OpenLineage payload" ;
+    rdfs:comment "The original OpenLineage event, preserved verbatim so nothing the mapping does not name is lost." .
+
+tar:oidcClientId a rdf:Property ;
+    rdfs:label "OIDC client id" ;
+    rdfs:comment "The identity-provider client (Keycloak client, Kubernetes ServiceAccount subject, GitHub Actions subject) allowed to advertise as this deployment." .
+
+tar:oidcIssuer a rdf:Property ;
+    rdfs:label "OIDC issuer" ;
+    rdfs:comment "Restricts the client id above to one issuer; a client id is only unique within an issuer." .
+
+tar:allowedScope a rdf:Property ;
+    rdfs:label "allowed scope" ;
+    rdfs:comment "Scopes granted to a verified workload token that carries none of this registry's own scopes." .

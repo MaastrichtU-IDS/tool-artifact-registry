@@ -2,7 +2,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { EmptyState, ErrorState, KeysetPager, Skeleton } from '../components/common'
-import { ArtifactTypeChip, AvailabilityBadge, OriginChip, RelativeTime } from '../components/chips'
+import { ArtifactTypeChip, AvailabilityBadge, OriginChip, RelativeTime, shortId } from '../components/chips'
 
 export default function ArtifactList() {
   const [params, setParams] = useSearchParams()
@@ -92,7 +92,7 @@ export default function ArtifactList() {
               <tbody>
                 {data.items.map((a) => (
                   <tr key={a.iri}>
-                    <td><Link to={`/artifacts/${a.id}`}>{a.title ?? a.id.slice(0, 8)}</Link></td>
+                    <td><Link to={`/artifacts/${a.id}`}>{a.title ?? shortId(a.id)}</Link></td>
                     <td>{a.conforms_to ? <ArtifactTypeChip type={a.conforms_to} /> : <span className="muted">—</span>}</td>
                     <td><AvailabilityBadge availability={a.availability} /></td>
                     <td>

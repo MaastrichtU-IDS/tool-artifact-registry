@@ -131,6 +131,12 @@ export function RunStatus({ status }: { status: string }) {
   )
 }
 
+/** UUIDv7 puts the timestamp first, so a leading slice is identical across records minted
+ *  close together. The distinguishing bits are at the end. */
+export function shortId(id: string): string {
+  return id.length > 8 ? `…${id.slice(-8)}` : id
+}
+
 export function relative(iso?: string): string {
   if (!iso) return '—'
   const then = new Date(iso).getTime()

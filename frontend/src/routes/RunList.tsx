@@ -2,7 +2,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { EmptyState, ErrorState, KeysetPager, Skeleton, formatDuration } from '../components/common'
-import { OriginChip, RelativeTime, RunStatus } from '../components/chips'
+import { OriginChip, RelativeTime, RunStatus, shortId } from '../components/chips'
 
 export default function RunList() {
   const [params, setParams] = useSearchParams()
@@ -76,7 +76,7 @@ export default function RunList() {
               <tbody>
                 {data.items.map((r) => (
                   <tr key={r.iri}>
-                    <td><Link to={`/runs/${r.id}`} className="mono">{r.id.slice(0, 8)}</Link></td>
+                    <td><Link to={`/runs/${r.id}`} className="mono">{shortId(r.id)}</Link></td>
                     <td>
                       {r.instance && r.instance_label ? (
                         <Link to={`/instances/${r.instance.split('/').pop()}`}>{r.instance_label}</Link>

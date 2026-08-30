@@ -2,7 +2,7 @@ import { Link, useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { CopyField, ErrorState, SignalBar, Skeleton, formatDuration } from '../components/common'
-import { ArtifactTypeChip, AvailabilityBadge, OriginChip, RelativeTime, RunStatus } from '../components/chips'
+import { ArtifactTypeChip, AvailabilityBadge, OriginChip, RelativeTime, RunStatus, shortId } from '../components/chips'
 import type { ArtifactRef } from '../lib/types'
 
 export default function RunDetail() {
@@ -17,7 +17,7 @@ export default function RunDetail() {
     <>
       <div className="page-header">
         <div className="spread">
-          <h1 className="mono" style={{ fontSize: 22 }}>{run.label ?? `run ${run.id.slice(0, 8)}`}</h1>
+          <h1 className="mono" style={{ fontSize: 22 }}>{run.label ?? `run ${shortId(run.id)}`}</h1>
           <div className="inline">
             <RunStatus status={run.status} />
             <OriginChip origin={run.origin} />

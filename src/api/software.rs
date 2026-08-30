@@ -93,11 +93,11 @@ pub async fn list(
         items.push(sw);
     }
     let mut page = Page::new(items, total, next);
-    page.facets = facets(&state)?;
+    page.facets = facets(&ctx)?;
     Ok(Json(page))
 }
 
-fn facets(state: &AppState) -> AppResult<Vec<Facet>> {
+fn facets(ctx: &Ctx) -> AppResult<Vec<Facet>> {
     let mut out = Vec::new();
     for (name, predicate) in [("license", "dct:license"), ("kind", "tar:kind"), ("edam_topic", "dct:subject")] {
         let q = format!(
@@ -105,13 +105,19 @@ fn facets(state: &AppState) -> AppResult<Vec<Facet>> {
             p = ns::PREFIXES,
             t = dom::TYPE_SOFTWARE
         );
-        let rows = state.store.select(&q).map_err(AppError::from)?;
-        let values: Vec<FacetValue> = rows
-            .rows
-            .iter()
-            .filter_map(|r| {
-                let v = r.str("v")?;
-                Some(FacetValue { label: Some(ids::iri_tail(&v).to_string()), value: v, count: r.i64("n").unwrap_or(0) })
+        let rows = ctx.state.store.select(&q).map_err(AppError::from)?;
+        let raw: Vec<(String, i64)> =
+            rows.rows.iter().filter_map(|r| Some((r.str("v")?, r.i64("n").unwrap_or(0)))).collect();
+        // Resolve labels from the vocabulary graph, so the facet reads the same as the chip
+        // beside it rather than falling back to the IRI's last segment.
+        let labels = ctx.type_refs(&raw.iter().map(|(v, _)| v.clone()).collect::<Vec<_>>());
+        let values: Vec<FacetValue> = raw
+            .into_iter()
+            .zip(labels)
+            .map(|((value, count), t)| FacetValue {
+                label: t.label.or_else(|| Some(ids::iri_tail(&value).to_string())),
+                value,
+                count,
             })
             .collect();
         if !values.is_empty() {

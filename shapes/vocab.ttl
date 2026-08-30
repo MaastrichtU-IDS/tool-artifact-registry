@@ -15,8 +15,7 @@
 
 <http://edamontology.org/data_2600> a skos:Concept ;
     skos:prefLabel "Pathway or network" ;
-    skos:definition "In this registry, used for general RDF graph payloads." ;
-    tar:defaultMediaType "text/turtle" .
+    skos:definition "An EDAM data type. Kept here only so the label resolves if a record cites it; the registry's own RDF payloads use tar's rdf-graph type instead." .
 
 <http://edamontology.org/data_2048> a skos:Concept ;
     skos:prefLabel "Report" ;

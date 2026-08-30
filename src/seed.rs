@@ -41,6 +41,7 @@ fn local_type(base: &str, slug: &str) -> String {
 /// hash-chained patch logs (D11).
 fn local_types(base: &str) -> Vec<(String, &'static str, &'static str, &'static str)> {
     vec![
+        (local_type(base, "rdf-graph"), "RDF graph", "An RDF graph in any serialisation. EDAM has no general term for this, so the registry defines one (D11).", "text/turtle"),
         (local_type(base, "shacl-shapes-graph"), "SHACL shapes graph", "An RDF graph of SHACL shapes used to validate other graphs.", "text/turtle"),
         (local_type(base, "shacl-validation-report"), "SHACL validation report", "An RDF validation report produced by a SHACL processor.", "text/turtle"),
         (local_type(base, "conformance-summary"), "Conformance summary", "A human-readable summary of a validation run.", "application/json"),
@@ -97,7 +98,7 @@ fn ids_examples(base: &str) -> Vec<SeedSoftware> {
             kind: "service",
             topics: vec![edam("topic_3071"), edam("topic_0089")],
             keywords: vec!["shacl", "validation", "rdf", "data quality"],
-            consumes: vec![edam("data_2600"), local_type(base, "shacl-shapes-graph")],
+            consumes: vec![local_type(base, "rdf-graph"), local_type(base, "shacl-shapes-graph")],
             produces: vec![local_type(base, "shacl-validation-report"), local_type(base, "conformance-summary")],
             version: "2.1.0",
             image: "ghcr.io/maastrichtu-ids/shacl-manager:2.1.0",
@@ -116,7 +117,7 @@ fn ids_examples(base: &str) -> Vec<SeedSoftware> {
             keywords: vec!["ontology", "sulo", "owl", "schema"],
             consumes: vec![local_type(base, "schema-model"), local_type(base, "sulo-ontology")],
             produces: vec![
-                edam("data_2600"),
+                local_type(base, "rdf-graph"),
                 local_type(base, "owl-ontology"),
                 local_type(base, "shacl-shapes-graph"),
                 local_type(base, "mermaid-uml"),
@@ -292,7 +293,7 @@ fn seed_runs(state: &Arc<AppState>, instances: &[String], base: &str, actor: &st
                 let a = ids::mint(base, Kind::Artifact);
                 let input = ArtifactIn {
                     title: Some(format!("input graph {}-{}", n + 1, i + 1)),
-                    conforms_to: Some(edam("data_2600")),
+                    conforms_to: Some(local_type(base, "rdf-graph")),
                     license: Some("https://spdx.org/licenses/CC-BY-4.0".into()),
                     keywords: vec!["rdf".into(), "input".into()],
                     issued: Some(started.to_rfc3339()),

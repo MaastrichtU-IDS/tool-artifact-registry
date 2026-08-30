@@ -7,7 +7,7 @@ import {
   formatDuration,
 } from '../components/common'
 import {
-  ArtifactTypeChip, AvailabilityBadge, HealthDot, OriginChip, RelativeTime, RunStatus,
+  ArtifactTypeChip, AvailabilityBadge, HealthDot, OriginChip, RelativeTime, RunStatus, shortId,
 } from '../components/chips'
 
 /** Same two-column shell as Software, so the two read as one system — but the content makes
@@ -98,7 +98,7 @@ export default function InstanceDetail() {
                   <tbody>
                     {runs.data.items.map((r) => (
                       <tr key={r.iri}>
-                        <td><Link to={`/runs/${r.id}`} className="mono">{r.id.slice(0, 8)}</Link></td>
+                        <td><Link to={`/runs/${r.id}`} className="mono">{shortId(r.id)}</Link></td>
                         <td><RelativeTime iso={r.started_at} /></td>
                         <td><RunStatus status={r.status} /></td>
                         <td>{formatDuration(r.duration_seconds)}</td>
@@ -132,7 +132,7 @@ export default function InstanceDetail() {
                   <tbody>
                     {artifacts.data.items.map((a) => (
                       <tr key={a.iri}>
-                        <td><Link to={`/artifacts/${a.id}`}>{a.title ?? a.id.slice(0, 8)}</Link></td>
+                        <td><Link to={`/artifacts/${a.id}`}>{a.title ?? shortId(a.id)}</Link></td>
                         <td>{a.conforms_to ? <ArtifactTypeChip type={a.conforms_to} /> : <span className="muted">—</span>}</td>
                         <td><AvailabilityBadge availability={a.availability} /></td>
                         <td><RelativeTime iso={a.issued} /></td>

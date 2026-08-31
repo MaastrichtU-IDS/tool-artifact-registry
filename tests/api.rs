@@ -1891,6 +1891,57 @@ async fn llms_txt_is_a_map_of_the_whole_registry_and_needs_no_credential() {
 }
 
 #[tokio::test]
+async fn llms_txt_lists_the_catalogue_whole_but_only_recent_artifacts() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    // More artifacts than the recent window holds. One busy pipeline does this in an hour, and
+    // a file that listed every one of them would bury the parts that orient a reader.
+    for i in 0..25 {
+        let (status, out) = h
+            .post(
+                "/api/v1/advertise/produced",
+                &f.token,
+                json!({
+                    "run": {"status": "success", "external_key": format!("ci/{i}")},
+                    "artifacts": [{"title": format!("Report {i:02}")}]
+                }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{out}");
+    }
+
+    let (status, body, _) = markdown(&h, "/llms.txt").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Cut at the next heading: the runs section that follows also has "- [" lines.
+    let artifacts = body
+        .split("## Recent artifacts")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("a recent-artifacts section");
+    let listed = artifacts.lines().filter(|l| l.starts_with("- [")).count();
+    assert_eq!(listed, 20, "the window is capped: {artifacts}");
+
+    // Newest first, so the window shows what the registry is doing now — ids are UUIDv7, whose
+    // hex sorts by mint time.
+    assert!(artifacts.contains("Report 24"), "the newest must be listed: {artifacts}");
+    assert!(!artifacts.contains("Report 00"), "the oldest must have fallen out: {artifacts}");
+
+    // And it says it is a window rather than letting a reader take it for the whole set.
+    assert!(artifacts.contains("The most recent 20 of 25"), "{artifacts}");
+    assert!(artifacts.contains("/api/v1/artifacts"), "{artifacts}");
+
+    // The catalogue is not truncated the same way: one piece of software, listed.
+    let software = body
+        .split("## Software")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("a software section");
+    assert!(software.contains("shacl-manager"), "{software}");
+    assert!(!software.contains("The most recent"), "the catalogue is not a window: {software}");
+}
+
+#[tokio::test]
 async fn a_withdrawn_record_still_resolves_and_says_so() {
     let h = harness().await;
     let (status, sw) = h.post("/api/v1/software", ROOT, json!({"name": "gone-tool"})).await;
@@ -2207,3 +2258,121 @@ async fn patching_software_changes_only_what_the_body_names() {
     assert_eq!(cleared["name"], "ontoexplorer", "clearing one field clears only that field");
     assert_eq!(cleared["api_docs"][0]["url"], "https://onto.example.org/openapi.json");
 }
+
+// --------------------------------------------------- the registry's keyword list
+
+#[tokio::test]
+async fn the_keyword_list_is_served_whole_and_needs_no_credential() {
+    let h = harness().await;
+    let (status, body) = h.get("/api/v1/keywords").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let labels: Vec<&str> = body["items"].as_array().unwrap().iter().map(|k| k["label"].as_str().unwrap()).collect();
+    assert_eq!(
+        labels,
+        vec!["Embeddings", "OWL", "RDF Graphs", "SHACL", "SHEX", "Mappings", "SPARQL query"],
+    );
+    assert_eq!(body["total"], 7);
+    // Each carries the IRI a record will actually link to, so a picker needs no second call.
+    assert_eq!(body["items"][3]["iri"], format!("{BASE}/keyword/shacl"));
+
+    // And that IRI resolves. Every artifact carrying one links to it, so a dead URL here would
+    // be a dead link in every record.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/keyword/shacl")
+        .header("accept", "text/turtle")
+        .body(Body::empty())
+        .unwrap();
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ttl = String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes()).to_string();
+    assert!(ttl.contains("SHACL"), "{ttl}");
+    assert!(ttl.contains("inScheme"), "a concept must name the scheme it belongs to: {ttl}");
+
+    // As does the scheme, so one concept leads to all the others.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/scheme/artifact-keywords")
+        .header("accept", "text/turtle")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(h.app.clone().oneshot(req).await.unwrap().status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn keywords_on_the_list_are_normalised_and_the_rest_are_kept() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    let (status, out) = h
+        .post(
+            "/api/v1/advertise/produced",
+            &f.token,
+            json!({
+                "run": {"status": "success"},
+                "artifacts": [{
+                    "title": "Pizza shapes",
+                    // Three spellings of one keyword, one the registry does not know, and one
+                    // reached only through an alias.
+                    "keywords": ["shacl", "SHACL Shapes", "SHACL", "pizza", "rml"]
+                }]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{out}");
+    let iri = out["artifacts"][0].as_str().unwrap().to_string();
+    let id = iri.rsplit('/').next().unwrap();
+
+    let (status, art) = h.get(&format!("/api/v1/artifacts/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    // Compared as a set: `dcat:keyword` is a set in RDF and comes back in no particular order.
+    let mut got: Vec<&str> =
+        art["keywords"].as_array().unwrap().iter().map(|k| k.as_str().unwrap()).collect();
+    got.sort_unstable();
+    assert_eq!(
+        got,
+        vec!["Mappings", "SHACL", "pizza"],
+        "one keyword per meaning, and free text survives: {art}"
+    );
+
+    // The concept link is what a filter matches on, and it is DCAT's own term.
+    let req = Request::builder().method("GET").uri(format!("/artifact/{id}.ttl")).body(Body::empty()).unwrap();
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    let ttl = String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes()).to_string();
+    assert!(ttl.contains("theme"), "{ttl}");
+    assert!(ttl.contains("/keyword/shacl"), "{ttl}");
+    assert!(ttl.contains("/keyword/mappings"), "{ttl}");
+}
+
+#[tokio::test]
+async fn a_keyword_filter_finds_records_written_with_any_spelling() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    for (title, keyword) in [("A", "shacl"), ("B", "SHACL Shapes"), ("C", "owl")] {
+        let (status, out) = h
+            .post(
+                "/api/v1/advertise/produced",
+                &f.token,
+                json!({
+                    "run": {"status": "success", "external_key": format!("run-{title}")},
+                    "artifacts": [{"title": title, "keywords": [keyword]}]
+                }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{out}");
+    }
+
+    // Two records were written with different spellings of the same keyword; both come back.
+    for query in ["shacl", "SHACL", "SHACL%20Shapes", &format!("{BASE}/keyword/shacl")] {
+        let (status, page) = h.get(&format!("/api/v1/artifacts?keyword={query}")).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(page["total"], 2, "querying by {query:?}: {page}");
+    }
+
+    let (_, owl) = h.get("/api/v1/artifacts?keyword=owl").await;
+    assert_eq!(owl["total"], 1, "{owl}");
+
+    // Free text still filters, on the literal, so nothing became unfindable.
+    let (_, none) = h.get("/api/v1/artifacts?keyword=nothing-uses-this").await;
+    assert_eq!(none["total"], 0, "{none}");
+}
+

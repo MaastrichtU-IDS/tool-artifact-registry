@@ -191,14 +191,21 @@ pub async fn endpoint(
         }
         "ping" => json_response(StatusCode::OK, rpc::result(&id, json!({}))),
 
-        // Everything past here needs a credential. An unauthenticated caller learns nothing
-        // about this registry — not even which tools exist.
+        // Past here, an anonymous caller is treated exactly as the rest of the registry treats
+        // one. On a registry serving public reads it gets the read-only tools — the same records
+        // it could already fetch over REST or query over SPARQL, so refusing them here bought no
+        // secrecy and instead pushed every client into an OAuth flow it did not need. On a
+        // closed registry it gets the 401 challenge that starts that flow.
+        //
+        // The tool list is filtered by authority either way (`tools::visible`), and every call
+        // is executed by the REST handler with the caller's own credential, so "anonymous" here
+        // means "can see what anonymous can see", not "can do more".
         "tools/list" => {
-            if principal.is_anonymous() {
+            if principal.is_anonymous() && !state.config.public_read {
                 return unauthorized(&state, &id, "listing tools needs a credential");
             }
             let list: Vec<Value> =
-                tools::visible(&principal, cfg.read_only).iter().map(tools::Tool::to_json).collect();
+                tools::visible(&principal, cfg.read_only, state.config.public_read).iter().map(tools::Tool::to_json).collect();
             let mut result = json!({ "tools": list });
             if era == Era::Modern {
                 let obj = result.as_object_mut().expect("object");
@@ -211,7 +218,7 @@ pub async fn endpoint(
             json_response(StatusCode::OK, rpc::result(&id, result))
         }
         "tools/call" => {
-            if principal.is_anonymous() {
+            if principal.is_anonymous() && !state.config.public_read {
                 return unauthorized(&state, &id, "calling a tool needs a credential");
             }
             let name = req.params.get("name").and_then(Value::as_str).unwrap_or_default();

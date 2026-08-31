@@ -67,7 +67,8 @@ pub fn instructions() -> String {
 /// because every tool executes as an internal HTTP request carrying the caller's own token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gate {
-    /// Any authenticated principal.
+    /// Anyone this registry lets read: an authenticated principal, or anybody at all when
+    /// `TAR_PUBLIC_READ` is on — the same rule the REST surface applies to the same records.
     Read,
     /// `Principal::require_curator` — the curator role, or the `register:software` scope.
     Curator,
@@ -78,9 +79,11 @@ pub enum Gate {
 }
 
 impl Gate {
-    pub fn allows(&self, p: &Principal) -> bool {
+    /// `public_read` is the registry's own `TAR_PUBLIC_READ`. Passed in rather than read from a
+    /// global so this stays a pure function of the credential and the policy.
+    pub fn allows(&self, p: &Principal, public_read: bool) -> bool {
         match self {
-            Gate::Read => !p.is_anonymous(),
+            Gate::Read => public_read || !p.is_anonymous(),
             Gate::Curator => p.is_curator() || p.has_scope(SCOPE_REGISTER_SOFTWARE),
             Gate::CuratorOrScope(s) => p.is_curator() || p.has_scope(s),
             Gate::InstanceScope(s) => p.instance_iri.is_some() && p.has_scope(s),
@@ -95,7 +98,7 @@ impl Gate {
             p.scopes.iter().cloned().collect::<Vec<_>>().join(" ")
         };
         match self {
-            Gate::Read => "this tool needs an authenticated credential".to_string(),
+            Gate::Read => "this registry does not serve anonymous reads; this tool needs a credential".to_string(),
             Gate::Curator => format!(
                 "this tool needs the curator role or the {SCOPE_REGISTER_SOFTWARE} scope; your credential has {held}. \
                  Ask a registry curator to make the change, or to grant the scope."
@@ -780,11 +783,11 @@ pub fn catalogue() -> Vec<Tool> {
 ///
 /// `2026-07-28/server/tools` allows the set to vary by the authorization on the request, and
 /// it should: a model shown a tool it cannot use will call it, read a refusal, and try again.
-pub fn visible(principal: &Principal, read_only: bool) -> Vec<Tool> {
+pub fn visible(principal: &Principal, read_only: bool, public_read: bool) -> Vec<Tool> {
     catalogue()
         .into_iter()
         .filter(|t| !(read_only && t.write))
-        .filter(|t| t.gate.allows(principal))
+        .filter(|t| t.gate.allows(principal, public_read))
         .collect()
 }
 
@@ -841,14 +844,27 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_sees_nothing() {
-        assert!(visible(&Principal::anonymous(), false).is_empty());
+    fn anonymous_sees_nothing_on_a_registry_that_does_not_serve_public_reads() {
+        assert!(visible(&Principal::anonymous(), false, false).is_empty());
+    }
+
+    #[test]
+    fn anonymous_sees_the_read_tools_where_anyone_may_already_read() {
+        // The same records are served to the same caller over REST and SPARQL. Hiding the
+        // tools that reach them protects nothing and turns a working read into a sign-in.
+        let names: Vec<_> =
+            visible(&Principal::anonymous(), false, true).into_iter().map(|t| t.name).collect();
+        assert!(names.contains(&"search_registry"), "{names:?}");
+        assert!(names.contains(&"vocab_search"), "{names:?}");
+        // Writes are a matter of authority, not of the read policy, and stay shut.
+        assert!(!names.contains(&"register_software"), "{names:?}");
+        assert!(!names.contains(&"advertise_produced"), "{names:?}");
     }
 
     #[test]
     fn a_reader_sees_reads_but_no_writes() {
         let p = principal(&[], &[Role::Reader], false);
-        let names: Vec<_> = visible(&p, false).into_iter().map(|t| t.name).collect();
+        let names: Vec<_> = visible(&p, false, false).into_iter().map(|t| t.name).collect();
         assert!(names.contains(&"vocab_search"));
         assert!(names.contains(&"registry_info"));
         assert!(!names.contains(&"register_software"));
@@ -858,7 +874,7 @@ mod tests {
     #[test]
     fn a_curator_sees_the_curation_tools_but_not_advertisement() {
         let p = principal(&[], &[Role::Curator], false);
-        let names: Vec<_> = visible(&p, false).into_iter().map(|t| t.name).collect();
+        let names: Vec<_> = visible(&p, false, false).into_iter().map(|t| t.name).collect();
         assert!(names.contains(&"register_software"));
         assert!(names.contains(&"register_artifact_type"));
         // Advertisement needs a credential that *is* a deployment, which a person's is not.
@@ -868,7 +884,7 @@ mod tests {
     #[test]
     fn an_instance_token_sees_only_what_its_scopes_allow() {
         let p = principal(&[SCOPE_ADVERTISE_PRODUCE], &[], true);
-        let names: Vec<_> = visible(&p, false).into_iter().map(|t| t.name).collect();
+        let names: Vec<_> = visible(&p, false, false).into_iter().map(|t| t.name).collect();
         assert!(names.contains(&"advertise_produced"));
         assert!(!names.contains(&"advertise_consumed"));
         assert!(!names.contains(&"register_software"));
@@ -877,8 +893,8 @@ mod tests {
     #[test]
     fn read_only_mode_hides_every_write_tool() {
         let p = principal(&[], &[Role::Admin], true);
-        let all = visible(&p, false);
-        let ro = visible(&p, true);
+        let all = visible(&p, false, false);
+        let ro = visible(&p, true, false);
         assert!(all.iter().any(|t| t.write));
         assert!(ro.iter().all(|t| !t.write));
         assert!(ro.iter().any(|t| t.name == "vocab_search"));

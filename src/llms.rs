@@ -556,7 +556,17 @@ pub struct SiteIndex<'a> {
     pub mcp_enabled: bool,
 }
 
-fn index_section(out: &mut String, heading: &str, entries: &[IndexEntry], total: i64, base: &str, plural: &str) {
+fn index_section(
+    out: &mut String,
+    heading: &str,
+    entries: &[IndexEntry],
+    total: i64,
+    base: &str,
+    plural: &str,
+    // Whether this section is a recent window rather than the whole set. The wording has to
+    // say which, or a reader takes a truncated list for the complete one.
+    recent: bool,
+) {
     out.push_str(&format!("\n## {heading}\n\n"));
     if entries.is_empty() {
         out.push_str("None registered.\n");
@@ -567,8 +577,11 @@ fn index_section(out: &mut String, heading: &str, entries: &[IndexEntry], total:
         out.push_str(&format!("- [{}]({}.md){note}\n", e.title.replace(']', ")"), e.iri));
     }
     if total > entries.len() as i64 {
+        let what = if recent { "The most recent" } else { "" };
         out.push_str(&format!(
-            "\n{} of {total} shown. The rest are at <{base}/api/v1/{plural}>, which pages with `?cursor=`.\n",
+            "\n{what}{}{} of {total}. The rest are at <{base}/api/v1/{plural}>, which pages with `?cursor=`, \
+             newest first.\n",
+            if recent { " " } else { "" },
             entries.len()
         ));
     }
@@ -609,11 +622,12 @@ pub fn site_index(ix: &SiteIndex<'_>) -> String {
     out.push_str(&format!("- [Search]({}/api/v1/search?q=): free-text search across every record type. Add `&federated=true` to ask this registry's peers too.\n", ix.base));
     out.push_str(&format!("- [Software]({}/api/v1/software): the catalogue. Filter by `?kind=`, `?topic=`, `?keyword=`, `?license=`, `?produces=`, `?consumes=`.\n", ix.base));
     out.push_str(&format!("- [Deployments]({}/api/v1/instances): where the software actually runs, with health.\n", ix.base));
-    out.push_str(&format!("- [Artifacts]({}/api/v1/artifacts): the data. Filter by `?conforms_to=` and `?availability=`.\n", ix.base));
+    out.push_str(&format!("- [Artifacts]({}/api/v1/artifacts): the data. Filter by `?conforms_to=`, `?availability=` and `?keyword=`.\n", ix.base));
     out.push_str(&format!("- [Runs]({}/api/v1/runs): executions, each linking the artifacts it used and generated.\n", ix.base));
     out.push_str(&format!("- [Capability matchmaking]({}/api/v1/capabilities?produces=): which software can produce or consume a given type of artifact.\n", ix.base));
     out.push_str(&format!("- [Vocabulary search]({}/api/v1/vocab/search?q=&branch=topic): look up a controlled term before citing it. `branch=topic` for research topics, `branch=data` for artifact types. Never guess a term IRI — search for it.\n", ix.base));
     out.push_str(&format!("- [Artifact types]({}/api/v1/types): the types this registry has minted or seen in use.\n", ix.base));
+    out.push_str(&format!("- [Artifact keywords]({}/api/v1/keywords): the short list of keywords this registry recognises on artifacts. Use these spellings; anything else is kept as free text and will not match a keyword filter or a subscription written against the list.\n", ix.base));
     if ix.sparql_public {
         out.push_str(&format!("- [SPARQL]({}/sparql?query=): read-only SPARQL 1.1 over everything above, open without credentials. `POST` a query as `application/sparql-query`, or `GET` with `?query=`. Ask for `Accept: application/sparql-results+json`.\n", ix.base));
     }
@@ -621,10 +635,12 @@ pub fn site_index(ix: &SiteIndex<'_>) -> String {
         out.push_str(&format!("- [MCP]({}/mcp): a hosted Model Context Protocol server over this same registry, for agents that would rather call tools than compose URLs.\n", ix.base));
     }
 
-    index_section(&mut out, "Software", &ix.software, ix.totals.0, ix.base, "software");
-    index_section(&mut out, "Deployments", &ix.instances, ix.totals.1, ix.base, "instances");
-    index_section(&mut out, "Artifacts", &ix.artifacts, ix.totals.2, ix.base, "artifacts");
-    index_section(&mut out, "Recent runs", &ix.runs, ix.totals.3, ix.base, "runs");
+    index_section(&mut out, "Software", &ix.software, ix.totals.0, ix.base, "software", false);
+    index_section(&mut out, "Deployments", &ix.instances, ix.totals.1, ix.base, "instances", false);
+    // Named for what they are: a window on what this registry is currently doing, not a
+    // catalogue. A busy pipeline makes more of these in a day than the catalogue holds.
+    index_section(&mut out, "Recent artifacts", &ix.artifacts, ix.totals.2, ix.base, "artifacts", true);
+    index_section(&mut out, "Recent runs", &ix.runs, ix.totals.3, ix.base, "runs", true);
 
     out.push_str("\n## Things worth knowing before you write anything down\n\n");
     out.push_str(
@@ -636,7 +652,10 @@ pub fn site_index(ix: &SiteIndex<'_>) -> String {
          - **A withdrawn record still resolves.** Its IRI keeps working and the page says it \
            was withdrawn; it is not current.\n\
          - **Vocabulary terms must be looked up, not guessed.** A plausible-looking term IRI \
-           that belongs to the wrong branch is rejected on write.\n",
+           that belongs to the wrong branch is rejected on write.\n\
+         - **Artifact keywords are normalised against the registry's list.** Write `shacl` or \
+           `SHACL Shapes` and it is stored as `SHACL`; write something not on the list and it \
+           is kept verbatim, which is fine but will not match a keyword filter.\n",
     );
     out
 }

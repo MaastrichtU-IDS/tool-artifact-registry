@@ -48,6 +48,38 @@ export function CommandBlock({ command }: { command: string }) {
   )
 }
 
+/** A multi-line snippet with a copy button.
+ *
+ *  `CommandBlock` is for one shell line and renders a `$` prompt; this is for the several-line
+ *  config blocks and JSON that a reader is meant to copy whole, where a prompt character would
+ *  end up in the clipboard and break the paste. */
+export function CopyBlock({ code, label }: { code: string; label: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <div className="copy-block">
+      <button
+        type="button"
+        className="copy-block-button"
+        aria-label={`Copy ${label}`}
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(code)
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1600)
+          } catch {
+            // A browser that refuses clipboard access leaves the text selectable, which is
+            // still a working path — saying "copied" when nothing was would not be.
+            setCopied(false)
+          }
+        }}
+      >
+        {copied ? 'copied' : 'copy'}
+      </button>
+      <pre className="report">{code}</pre>
+    </div>
+  )
+}
+
 /** Label/value pairs that degrade to `—` rather than showing zeros or blanks (handoff §7). */
 export function SignalBar({ signals }: { signals: { label: string; value: ReactNode; unknown?: boolean }[] }) {
   return (

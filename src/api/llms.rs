@@ -14,10 +14,16 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use std::sync::Arc;
 
-/// How many records of each kind the index lists before pointing at the paged API. Enough that
-/// a small registry is listed whole, small enough that a large one does not produce a file no
-/// context window will hold.
-const INDEX_LIMIT: usize = 100;
+/// How much of the catalogue the index lists before pointing at the paged API. Software and
+/// deployments are a stable set that changes by the week, so a small registry is listed whole.
+const CATALOGUE_LIMIT: usize = 100;
+
+/// Artifacts and runs are different in kind: a single busy pipeline produces more of them in a
+/// day than the catalogue holds in a year, so listing them the same way would bury the parts
+/// of the file that orient a reader under a wall of near-identical rows. These sections are a
+/// recent window — enough to show what the registry is currently doing — and everything else is
+/// one paged request away.
+const RECENT_LIMIT: usize = 20;
 
 /// Deployments of one piece of software, for its markdown page.
 pub fn instances_of(ctx: &Ctx, software_iri: &str) -> AppResult<Vec<Instance>> {
@@ -65,6 +71,7 @@ fn entries(
     type_iri: &str,
     title_pattern: &str,
     note_alternatives: &[&str],
+    limit: usize,
 ) -> AppResult<(Vec<IndexEntry>, i64)> {
     let mut note_block = String::new();
     let mut vars = Vec::new();
@@ -81,7 +88,9 @@ fn entries(
     );
     let total = super::count(state, &body)?;
     let q = format!(
-        "{p}\nSELECT DISTINCT ?s ?title ?note WHERE {{ {body} }} ORDER BY DESC(STR(?s)) LIMIT {INDEX_LIMIT}",
+        // Newest first: every id is a UUIDv7, whose hex sorts by the time it was minted, so
+        // ordering on the IRI *is* ordering on when the record was created.
+        "{p}\nSELECT DISTINCT ?s ?title ?note WHERE {{ {body} }} ORDER BY DESC(STR(?s)) LIMIT {limit}",
         p = ns::PREFIXES
     );
     let rows = state.store.select(&q).map_err(AppError::from)?;
@@ -105,24 +114,28 @@ pub async fn llms_txt(State(state): State<Arc<AppState>>) -> AppResult<impl Into
         swdom::TYPE_TAR_SOFTWARE,
         "?s schema:name ?title",
         &["?s dct:abstract ?note", "?s schema:description ?note"],
+        CATALOGUE_LIMIT,
     )?;
     let (instances, n_in) = entries(
         &state,
         instdom::TYPE_TAR_INSTANCE,
         "?s rdfs:label ?title",
         &["?s dct:description ?note", "?s dcat:endpointURL ?note"],
+        CATALOGUE_LIMIT,
     )?;
     let (artifacts, n_ar) = entries(
         &state,
         crate::domain::artifact::TYPE_DATASET,
         "?s dct:title ?title",
         &["?s dct:description ?note"],
+        RECENT_LIMIT,
     )?;
     let (runs, n_ru) = entries(
         &state,
         crate::domain::run::TYPE_ACTIVITY,
         "?s rdfs:label ?title",
         &["?s tar:status ?note"],
+        RECENT_LIMIT,
     )?;
 
     let body = site_index(&SiteIndex {

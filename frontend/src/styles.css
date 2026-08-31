@@ -466,3 +466,14 @@ pre.report.sparql-parse-error {
 .api-op-body { padding: 0 0 12px 12px; border-left: 2px solid var(--border); margin-left: 4px; }
 .api-params { list-style: none; padding: 0; margin: 0; }
 .api-params li { padding: 4px 0; }
+
+/* A copyable multi-line snippet: the button floats over the block's top-right corner so it
+   costs no vertical space, and the block keeps its own horizontal scroll. */
+.copy-block { position: relative; }
+.copy-block > pre { margin: 0; }
+.copy-block-button {
+  position: absolute; top: 8px; right: 8px; z-index: 1;
+  font-size: 11px; padding: 2px 8px; line-height: 1.6;
+  opacity: 0.75;
+}
+.copy-block-button:hover, .copy-block-button:focus-visible { opacity: 1; }

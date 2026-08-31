@@ -384,7 +384,7 @@ pub async fn call(
 
     // A pre-check purely so the refusal is a sentence the model can act on. The binding check
     // is the REST handler's own, a few lines below.
-    if !tool.gate.allows(principal) {
+    if !tool.gate.allows(principal, state.config.public_read) {
         return Outcome::err(format!("Refused: {}", tool.gate.refusal(principal)));
     }
 
@@ -469,7 +469,8 @@ async fn registry_info(
     let (_, registry) = rest(state, auth, "GET", "/api/v1/registry", None).await;
     let (_, well_known) = rest(state, auth, "GET", "/.well-known/tar-registry", None).await;
     let (_, whoami) = rest(state, auth, "GET", "/api/v1/whoami", None).await;
-    let allowed: Vec<&str> = tools::visible(principal, read_only).iter().map(|t| t.name).collect();
+    let allowed: Vec<&str> =
+        tools::visible(principal, read_only, state.config.public_read).iter().map(|t| t.name).collect();
 
     let counts = registry.get("counts").cloned().unwrap_or(json!({}));
     let text = format!(
@@ -612,6 +613,18 @@ fn list_enumerations() -> Outcome {
                 "metadata-only": "the record describes something whose bytes are not obtainable here — the honest value when there is no URL",
             }
         },
+        "artifact_keywords": {
+            "field": "keywords (advertise_produced, advertise_consumed)",
+            "note": "The registry's own list. A keyword matching one of these — by label, slug \
+                     or alias, ignoring case and punctuation — is stored under its label and \
+                     becomes filterable. Free text is still allowed for anything else, and is \
+                     kept verbatim, but will not match a keyword filter or a subscription \
+                     written against the list. Prefer these spellings.",
+            "values": crate::domain::keywords::KEYWORDS
+                .iter()
+                .map(|k| (k.label.to_string(), json!(k.definition)))
+                .collect::<serde_json::Map<_, _>>(),
+        },
         "access_protocol": {
             "field": "distributions[].access_protocol",
             "values": ["https", "http", "s3", "sparql", "oci", "ipfs", "file"],
@@ -675,8 +688,37 @@ async fn search_registry(state: &Arc<AppState>, auth: Option<&str>, args: &Value
     if !status.is_success() {
         return Outcome::err(problem_to_message(status, &body));
     }
-    let n = body.get("items").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
-    Outcome::ok(format!("{n} hit(s)."), body)
+    // `/api/v1/search` answers with `hits`, not `items` — this counted the wrong field and so
+    // reported "0 hit(s)" on every successful search, which reads to a model as "nothing here"
+    // and sends it off to invent a record instead of using the one it just found.
+    let hits = body.get("hits").and_then(Value::as_array).cloned().unwrap_or_default();
+    let total = body.get("total").and_then(Value::as_i64).unwrap_or(hits.len() as i64);
+    let text = if hits.is_empty() {
+        "0 hit(s). Nothing in this registry matches. Try a broader query or a different \
+         spelling; add `federated: true` to ask this registry's peers as well. A record that is \
+         genuinely absent has to be registered, not assumed to exist."
+            .to_string()
+    } else {
+        // Name the top few in the text as well as the structured content: the summary line is
+        // what a model reads first, and "3 hit(s)" alone makes it fetch them one by one.
+        let listed: Vec<String> = hits
+            .iter()
+            .take(5)
+            .map(|h| {
+                let title = h.get("title").and_then(Value::as_str).unwrap_or("(untitled)");
+                let kind = h.get("entity_type").and_then(Value::as_str).unwrap_or("record");
+                let iri = h.get("iri").and_then(Value::as_str).unwrap_or("");
+                format!("- {title} ({kind}) — {iri}")
+            })
+            .collect();
+        let more = if total > listed.len() as i64 {
+            format!("\n…and {} more; pass a higher `limit` or narrow the query.", total - listed.len() as i64)
+        } else {
+            String::new()
+        };
+        format!("{total} hit(s).\n{}{more}", listed.join("\n"))
+    };
+    Outcome::ok(text, body)
 }
 
 async fn list_records(state: &Arc<AppState>, auth: Option<&str>, args: &Value) -> Outcome {
@@ -752,17 +794,107 @@ async fn list_records(state: &Arc<AppState>, auth: Option<&str>, args: &Value) -
     if !status.is_success() {
         return Outcome::err(problem_to_message(status, &body));
     }
-    let n = body.get("items").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+    let items = body.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+    let n = items.len();
     let total = body.get("total").and_then(Value::as_i64);
     let more = body.get("next_cursor").and_then(Value::as_str);
+
+    // Summarise. A listing used to hand back whole records, and a software record carries its
+    // entire README — four of them came to 112 KB and overran the client's tool-output limit,
+    // so a browse of a small catalogue failed outright. What a caller needs from a *list* is
+    // enough to choose one; `get_record` returns the whole thing once it has chosen.
+    let summarised: Vec<Value> = items.iter().map(|i| summarise(kind, i)).collect();
+    let result = json!({
+        "items": summarised,
+        "total": total,
+        "next_cursor": more,
+        "note": "Summaries. Call get_record with an id for the complete record.",
+    });
+
     Outcome::ok(
         format!(
-            "{n} {kind} record(s){}{}",
+            "{n} {kind} record(s){}{} Summarised — call get_record for the whole of one.",
             total.map(|t| format!(" of {t}")).unwrap_or_default(),
             more.map(|c| format!(". More available — pass cursor={c}.")).unwrap_or_else(|| ".".into())
         ),
-        body,
+        result,
     )
+}
+
+/// Long free text is the thing that makes a listing enormous, and no listing needs all of it.
+fn clip(v: Option<&Value>) -> Option<Value> {
+    let s = v?.as_str()?;
+    const MAX: usize = 200;
+    if s.chars().count() <= MAX {
+        return Some(json!(s));
+    }
+    let cut: String = s.chars().take(MAX).collect();
+    Some(json!(format!("{}…", cut.trim_end())))
+}
+
+fn pick(item: &Value, keys: &[&str]) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    for k in keys {
+        if let Some(v) = item.get(*k) {
+            if !v.is_null() {
+                out.insert((*k).to_string(), v.clone());
+            }
+        }
+    }
+    out
+}
+
+/// The fields that let a caller choose between records of this kind. Everything else — READMEs,
+/// screenshots, distributions, full descriptions — waits for `get_record`.
+fn summarise(kind: &str, item: &Value) -> Value {
+    let mut out = match kind {
+        "software" => pick(
+            item,
+            &["iri", "id", "name", "kinds", "deployable", "license", "maturity",
+              "instance_count", "release_count", "runs_30d", "keywords"],
+        ),
+        "instance" => pick(
+            item,
+            &["iri", "id", "label", "software", "software_name", "release_version", "outdated",
+              "endpoint_url", "health", "availability", "runs_30d", "artifact_count"],
+        ),
+        "artifact" => pick(
+            item,
+            &["iri", "id", "title", "availability", "issued", "version", "keywords", "license"],
+        ),
+        "run" => pick(
+            item,
+            &["iri", "id", "label", "status", "started_at", "ended_at", "software_name",
+              "instance_label", "used_count", "generated_count"],
+        ),
+        "release" => pick(item, &["iri", "id", "version", "date_published", "container_image"]),
+        // Types are already small, and a picker wants their definitions.
+        _ => pick(item, &["iri", "id", "label", "definition", "source", "default_media_type"]),
+    };
+    // The one-liner is what a caller reads to choose; the long description is not.
+    if let Some(t) = clip(item.get("tagline")).or_else(|| clip(item.get("description"))) {
+        out.insert("tagline".into(), t);
+    }
+    // Typed references keep their label so a chip renders without another call, but not their
+    // definition text.
+    if let Some(t) = item.get("conforms_to") {
+        out.insert(
+            "conforms_to".into(),
+            json!({"iri": t.get("iri"), "label": t.get("label")}),
+        );
+    }
+    if let Some(topics) = item.get("topics").and_then(Value::as_array) {
+        if !topics.is_empty() {
+            out.insert(
+                "topics".into(),
+                json!(topics
+                    .iter()
+                    .map(|t| json!({"iri": t.get("iri"), "label": t.get("label")}))
+                    .collect::<Vec<_>>()),
+            );
+        }
+    }
+    Value::Object(out)
 }
 
 async fn get_record(state: &Arc<AppState>, auth: Option<&str>, args: &Value) -> Outcome {

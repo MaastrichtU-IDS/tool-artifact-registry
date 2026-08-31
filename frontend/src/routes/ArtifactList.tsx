@@ -10,11 +10,16 @@ export default function ArtifactList() {
     q: params.get('q') ?? undefined,
     conforms_to: params.get('conforms_to') ?? undefined,
     availability: params.get('availability') ?? undefined,
+    keyword: params.get('keyword') ?? undefined,
     software: params.get('software') ?? undefined,
     instance: params.get('instance') ?? undefined,
     cursor: params.get('cursor') ?? undefined,
   }
   const { data, error, loading, reload } = useAsync(() => api.listArtifacts(filters), [params.toString()])
+  // The registry's own keyword list. Shown as one row of toggles rather than a dropdown: it is
+  // seven items, and seeing them is most of the point — a dropdown would hide the vocabulary
+  // from the person who most needs to learn it.
+  const keywords = useAsync(() => api.keywords(), [])
   const filtered = Object.entries(filters).some(([k, v]) => k !== 'cursor' && v)
 
   const setParam = (key: string, value?: string) => {
@@ -51,6 +56,27 @@ export default function ArtifactList() {
         </select>
         {filtered && <button type="button" className="link" onClick={() => setParams(new URLSearchParams())}>Clear filters</button>}
       </div>
+
+      {keywords.data && keywords.data.items.length > 0 && (
+        <div className="inline" style={{ marginBottom: 14, flexWrap: 'wrap', gap: 6 }}>
+          <span className="muted" style={{ fontSize: 12 }}>Keyword:</span>
+          {keywords.data.items.map((k) => {
+            const active = filters.keyword === k.slug
+            return (
+              <button
+                key={k.slug}
+                type="button"
+                className={active ? 'chip accent' : 'chip'}
+                title={k.definition}
+                aria-pressed={active}
+                onClick={() => setParam('keyword', active ? undefined : k.slug)}
+              >
+                {k.label}
+              </button>
+            )
+          })}
+        </div>
+      )}
 
       {filters.conforms_to && (
         <div className="banner info">

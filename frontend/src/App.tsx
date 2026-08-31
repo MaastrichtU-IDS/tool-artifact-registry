@@ -10,6 +10,7 @@ import InstanceDetail from './routes/InstanceDetail'
 import InstanceForm from './routes/InstanceForm'
 import Tokens from './routes/Tokens'
 import SoftwareTokens from './routes/SoftwareTokens'
+import ConnectAgent from './routes/ConnectAgent'
 import Subscriptions from './routes/Subscriptions'
 import ArtifactList from './routes/ArtifactList'
 import ArtifactDetail from './routes/ArtifactDetail'
@@ -50,6 +51,7 @@ export default function App() {
           <Route path="/peers" element={<Peers />} />
           <Route path="/search" element={<Search />} />
           <Route path="/sparql" element={<Sparql />} />
+          <Route path="/connect" element={<ConnectAgent />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
@@ -76,6 +78,7 @@ function Header() {
           <NavLink to="/artifacts">Artifacts</NavLink>
           <NavLink to="/runs">Runs</NavLink>
           <NavLink to="/sparql">SPARQL</NavLink>
+          <NavLink to="/connect">Connect</NavLink>
           {/* Peers is admin-only, and absent rather than disabled for everyone else. */}
           {isAdmin && <NavLink to="/peers">Peers</NavLink>}
         </nav>

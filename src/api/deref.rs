@@ -165,9 +165,21 @@ pub async fn deref_generic(
     if quads.is_empty() {
         return Err(AppError::not_found(format!("nothing at {iri}")));
     }
+    // Markdown would otherwise fall through to the Turtle serialiser and be labelled
+    // `text/markdown`, which is a lie about the bytes. These records are a handful of triples,
+    // so a fenced block is the honest rendering.
+    let body = if repr == Repr::Markdown {
+        let ttl = serialize(&quads, Repr::Turtle, state.base())?;
+        format!(
+            "# {iri}\n\n> A record in a Tool Artifact Registry. The Turtle below is the whole \
+             of it.\n\n```turtle\n{ttl}```\n"
+        )
+    } else {
+        serialize(&quads, if repr == Repr::Json { Repr::Turtle } else { repr }, state.base())?
+    };
     Ok(Negotiated {
         repr,
-        body: serialize(&quads, if repr == Repr::Json { Repr::Turtle } else { repr }, state.base())?,
+        body,
         signposting: Some(Signposting::new(&iri)),
         status: axum::http::StatusCode::OK,
     }

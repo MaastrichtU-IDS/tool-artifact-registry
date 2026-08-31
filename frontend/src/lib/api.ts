@@ -1,6 +1,6 @@
 import type {
   Artifact, Lineage, Page, Peer, Run, RunSummary, SearchResults, Software, Instance,
-  Release, TokenRecord, WellKnown, WhoAmI, ProblemJson,
+  Release, TokenRecord, WellKnown, WhoAmI, ProblemJson, KeywordTerm,
   Subscription, SubscriptionCreated, SubscriptionDelivery, SubscriptionDetail,
   SparqlAnswer, SparqlTerm,
 } from './types'
@@ -141,6 +141,8 @@ export const api = {
   revokeToken: (id: string, tokenId: string) =>
     request<void>(`/api/v1/instances/${id}/tokens/${tokenId}`, { method: 'DELETE' }),
 
+  keywords: () =>
+    request<{ scheme: string; items: KeywordTerm[]; total: number }>('/api/v1/keywords'),
   listArtifacts: (p: Record<string, string | undefined>) =>
     request<Page<Artifact>>(`/api/v1/artifacts${qs(p)}`),
   getArtifact: (id: string) => request<Artifact>(`/api/v1/artifacts/${id}`),

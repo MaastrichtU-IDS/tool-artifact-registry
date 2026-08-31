@@ -272,14 +272,33 @@ the failure mode there.
 
 ---
 
+### Listings are summaries
+
+`list_records` returns a projection — the fields you would choose a record on — not the records
+themselves. It used to return the REST body verbatim, and a software record carries its whole
+README: four of them came to 112 KB and overran a client's tool-output cap, so browsing a
+four-record catalogue failed outright. `get_record` returns the complete record once the caller
+has chosen one.
+
 ## 5. Safety
 
-**Nothing without a credential.** The REST API allows anonymous read when `TAR_PUBLIC_READ` is
-on; the MCP endpoint does not. An unauthenticated caller gets the protocol handshake only —
-server name, version, capabilities, the same thing `/healthz` already reveals — and a 401 with
-the discovery challenge on everything else. Not the tool list, not a count, not a record. The
+**MCP follows the registry's own read policy — no looser, no tighter.** With `TAR_PUBLIC_READ`
+on (the default), an unauthenticated caller gets the read-only tools and may call them: they
+reach the same records anyone can already fetch over REST and query over SPARQL, so refusing
+them here bought no secrecy. It cost something real, though — it forced every client into an
+OAuth flow it did not need, and a misconfigured identity provider then turned "read the
+catalogue" into "cannot connect at all".
+
+With `TAR_PUBLIC_READ` off, an unauthenticated caller gets the protocol handshake only — server
+name, version, capabilities, the same thing `/healthz` already reveals — and a 401 with the
+discovery challenge on everything else. Not the tool list, not a count, not a record. The
 handshake stays open because that is what lets a client reach the challenge and start the OAuth
 flow rather than failing at connection time.
+
+Either way the tool list is filtered by the caller's authority and every call is executed by the
+REST handler with the caller's own credential, so "anonymous" means "can see what anonymous can
+see", never "can do more". A credential that is *offered and rejected* is always a 401, whatever
+the read policy: the caller meant to authenticate and needs to know it failed.
 
 **A tool call can never do more than the credential could over REST — structurally.** Every
 tool executes as an ordinary HTTP request dispatched through `crate::api::router` in-process,

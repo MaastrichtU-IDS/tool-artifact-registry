@@ -156,6 +156,31 @@ cluster and much weaker.
 
 ---
 
+## Artifact keywords
+
+The registry keeps a short list of its own — **Embeddings, OWL, RDF Graphs, SHACL, SHEX,
+Mappings, SPARQL query** — at `GET /api/v1/keywords`.
+
+Free text is where a catalogue quietly stops being searchable: one deployment writes `SHACL`,
+another `shacl`, a third `shacl shapes`, and a filter for any of them finds a third of what is
+there. Worse, a subscription written against `SHACL` silently misses everything advertised as
+`shacl`, and a subscription that delivers nothing looks exactly like one with nothing to
+deliver.
+
+So a keyword matching the list — by label, slug or alias, ignoring case and punctuation — is
+stored under its preferred label and additionally linked with `dcat:theme` to a concept that
+dereferences. Anything else is kept verbatim as `dcat:keyword`. That is DCAT's own division
+between a concept from a scheme and a literal, so nothing is invented and no existing record
+breaks. `?keyword=` on `/api/v1/artifacts` accepts the IRI, the slug, the label or any alias.
+
+```bash
+# five spellings in, four keywords out
+curl … -d '{"artifacts":[{"keywords":["shacl","SHACL Shapes","rml","pizza-ontology","RDF"]}]}'
+# → ["SHACL", "Mappings", "pizza-ontology", "RDF Graphs"]
+```
+
+---
+
 ## For agents
 
 Every record IRI serves Markdown. Append `.md`, or send `Accept: text/markdown`:
@@ -178,7 +203,9 @@ that a withdrawn record still resolves, and that vocabulary terms must be looked
 guessed.
 
 Agents that would rather call tools than compose URLs can use the hosted MCP server at `/mcp`
-(see `docs/mcp.md`). Nothing needs installing.
+(see `docs/mcp.md`). Nothing needs installing. The **Connect** tab in the UI shows the copy-paste
+setup for Claude Code, Claude Desktop, the editors, an SDK client and plain `curl`, built from
+the registry's own URL rather than a placeholder.
 
 ---
 

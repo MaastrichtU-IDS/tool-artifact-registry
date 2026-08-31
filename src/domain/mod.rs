@@ -3,6 +3,7 @@
 pub mod artifact;
 pub mod forge;
 pub mod instance;
+pub mod keywords;
 pub mod run;
 pub mod software;
 

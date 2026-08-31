@@ -25,6 +25,8 @@ pub struct ArtifactFilter {
     pub conforms_to: Option<String>,
     pub license: Option<String>,
     pub availability: Option<String>,
+    /// A keyword from the registry's list (by label, slug or IRI) or any free-text keyword.
+    pub keyword: Option<String>,
     pub instance: Option<String>,
     pub software: Option<String>,
     pub run: Option<String>,
@@ -54,6 +56,22 @@ fn where_body(base: &str, f: &ArtifactFilter) -> String {
             "\nGRAPH ?g {{ ?s dcat:distribution/tar:availability \"{}\" }}",
             super::escape_literal(a)
         ));
+    }
+    if let Some(k) = f.keyword.as_deref().filter(|v| !v.is_empty()) {
+        // Accept whatever the caller has to hand: the concept IRI, the slug, the label, or any
+        // alias. A filter that only understood one of those would send people back to guessing
+        // spellings, which is the problem the list exists to remove.
+        match crate::domain::keywords::lookup(k.rsplit('/').next().unwrap_or(k)).or_else(|| crate::domain::keywords::lookup(k)) {
+            Some(entry) => {
+                let iri = crate::domain::keywords::iri(base, entry.slug);
+                w.push_str(&format!("\nGRAPH ?g {{ ?s dcat:theme <{iri}> }}"));
+            }
+            // Not on the list, so it is free text and only the literal can match.
+            None => w.push_str(&format!(
+                "\nGRAPH ?g {{ ?s dcat:keyword \"{}\" }}",
+                super::escape_literal(k)
+            )),
+        }
     }
     if let Some(i) = f.instance.as_deref().filter(|v| !v.is_empty()) {
         let iri = ids::iri_for(base, Kind::Instance, i);

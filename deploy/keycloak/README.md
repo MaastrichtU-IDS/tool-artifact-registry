@@ -113,3 +113,57 @@ curl -s -H "Authorization: Bearer $TOKEN" localhost:8099/api/v1/whoami | jq
 ```bash
 docker compose -f deploy/keycloak/compose.yaml down     # -v is unnecessary: dev mode is in-memory
 ```
+
+## Dynamic client registration, and why the realm configures it
+
+An MCP client — Claude Code, Claude Desktop, an editor — does not have a client id in this
+realm and cannot be given one in advance. It registers itself at
+`/realms/tar/clients-registrations/openid-connect` (RFC 7591), which the MCP authorization spec
+expects a server to support. Two things in a stock Keycloak 26 realm stop that working, and
+`realm-tar.json` fixes both:
+
+**Trusted Hosts.** Keycloak installs an anonymous client-registration policy called
+`Trusted Hosts` whose host list is *empty* and whose "host sending the request must match" flag
+is *on*, so every dynamic registration is rejected with:
+
+```
+"error": "insufficient_scope",
+"error_description": "Policy 'Trusted Hosts' rejected request ... Host not trusted."
+```
+
+The realm now declares that policy explicitly with `127.0.0.1` and `localhost` trusted.
+`client-uris-must-match` stays on — the redirect URIs a client registers must still be on a
+trusted host, which is the part that actually matters — while
+`host-sending-registration-request-must-match` is off, because behind Docker's NAT the apparent
+source host is the bridge gateway and matching on it rejects the very clients this admits.
+
+**Audience.** The registry runs with `TAR_OIDC_REQUIRE_AUDIENCE`, so a token's `aud` must name
+it. The two hand-written clients carry audience mappers; a client that registers itself carries
+none, and its tokens come out with `aud: ["account"]` and are rejected as `InvalidAudience` —
+after a sign-in that appeared to succeed, which is a miserable thing to debug. The realm now
+defines a `tar-audience` client scope holding those mappers and lists it in
+`defaultDefaultClientScopes`, so every client gets it, including ones nobody configured.
+
+Declaring `clientScopes` means Keycloak no longer creates its own, so the file also carries the
+built-in scopes (`acr`, `basic`, `email`, `profile`, `roles`, `web-origins`, …). Dropping them
+makes the import log `Referenced client scope 'acr' doesn't exist` and quietly strips standard
+claims from every token.
+
+**Full Scope Disabled is deliberately absent.** Keycloak's stock anonymous policy set includes
+it, and it sets `fullScopeAllowed=false` on every dynamically registered client — which strips
+`realm_access.roles` from their tokens. The effect is subtle and miserable: sign-in succeeds, the
+registry reports you as authenticated with your name and issuer, and then every write is refused
+because it sees no roles. A curator connecting an agent gets identity without authority and no
+message explaining why. This realm's only protected resource is the registry, whose authority
+*is* those realm roles, so the policy is dropped rather than worked around.
+
+**Deploying elsewhere.** Add your host to `trusted-hosts` and your base IRI to the
+`tar-audience` mappers. Both are in `realm-tar.json`; nothing else needs to change.
+
+To apply changes to this file, recreate the container — `start-dev` keeps its database inside
+the container, so this re-imports the realm and loses nothing that is not in the file:
+
+```bash
+docker compose -f deploy/keycloak/compose.yaml down
+docker compose -f deploy/keycloak/compose.yaml up -d
+```

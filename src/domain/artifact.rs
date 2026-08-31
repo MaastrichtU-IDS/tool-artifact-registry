@@ -50,7 +50,13 @@ pub fn artifact_quads(base: &str, iri: &str, input: &ArtifactIn, actor: &str, ru
     n.opt_text(ns::DCT, "description", &input.description);
     n.opt_link(ns::DCT, "conformsTo", &input.conforms_to);
     n.opt_link(ns::DCT, "license", &input.license);
-    n.texts(ns::DCAT, "keyword", &input.keywords);
+    // Normalised here rather than in each caller, so every write path — the REST create, both
+    // advertise endpoints, the OpenLineage adapter and the seed — gets the same keywords.
+    // `dcat:keyword` keeps the literal a person reads; `dcat:theme` carries the concept a
+    // filter and a subscription can match on exactly.
+    let (keywords, themes) = super::keywords::normalise(base, &input.keywords);
+    n.texts(ns::DCAT, "keyword", &keywords);
+    n.links(ns::DCAT, "theme", &themes);
     n.datetime(ns::DCT, "issued", input.issued.as_deref().unwrap_or(&chrono::Utc::now().to_rfc3339()));
     n.links(ns::PROV, "wasDerivedFrom", &input.was_derived_from);
     n.opt_link(ns::PROV, "wasRevisionOf", &input.was_revision_of);

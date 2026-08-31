@@ -144,3 +144,33 @@ pub async fn resolve(
 
 /// Unused today, but keeps the paging import honest if the endpoint grows a cursor.
 pub fn _paging(_p: &Paging) {}
+
+/// `GET /api/v1/keywords` — the registry's own artifact keyword list, whole.
+///
+/// A list endpoint rather than only a search one, because the list is short and a picker wants
+/// to show it before anyone has typed anything. Free-text keywords remain allowed; this is what
+/// the registry recognises and normalises, not a closed set of what may be said.
+pub async fn keywords(State(state): State<Arc<AppState>>) -> AppResult<impl IntoResponse> {
+    use crate::domain::keywords as kw;
+    let base = state.base();
+    let items: Vec<serde_json::Value> = kw::KEYWORDS
+        .iter()
+        .map(|k| {
+            serde_json::json!({
+                "iri": kw::iri(base, k.slug),
+                "slug": k.slug,
+                "label": k.label,
+                "definition": k.definition,
+                "aliases": k.aliases,
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "scheme": kw::scheme_iri(base),
+        "items": items,
+        "total": items.len(),
+        "note": "A keyword matching one of these — by label, slug or alias, ignoring case and \
+                 punctuation — is stored under its label and linked with dcat:theme. Anything \
+                 else is kept verbatim as free text.",
+    })))
+}

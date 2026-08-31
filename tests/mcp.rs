@@ -30,7 +30,18 @@ struct Harness {
 }
 
 async fn harness() -> Harness {
+    harness_with(true).await
+}
+
+/// A registry that does not serve anonymous reads. MCP follows that policy, so this is where
+/// the OAuth challenge lives.
+async fn closed_harness() -> Harness {
+    harness_with(false).await
+}
+
+async fn harness_with(public_read: bool) -> Harness {
     let mut config = Config::for_test(BASE);
+    config.public_read = public_read;
     config.root_token = Some(ROOT.into());
     config.oidc.issuer = Some("https://kc.test/realms/tar".into());
     config.oidc.client_id = Some("tar-ui".into());
@@ -270,7 +281,7 @@ async fn a_legacy_client_that_sends_initialize_is_served_too() {
 
 #[tokio::test]
 async fn an_unauthenticated_call_gets_a_401_naming_the_metadata_document() {
-    let h = harness().await;
+    let h = closed_harness().await;
     let req = Request::builder()
         .method("POST")
         .uri("/mcp")
@@ -290,8 +301,8 @@ async fn an_unauthenticated_call_gets_a_401_naming_the_metadata_document() {
 }
 
 #[tokio::test]
-async fn an_unauthenticated_caller_learns_nothing_about_the_registry() {
-    let h = harness().await;
+async fn a_closed_registry_tells_an_unauthenticated_caller_nothing() {
+    let h = closed_harness().await;
     for method in ["tools/list", "tools/call"] {
         let (status, body) = h.modern(None, json!(1), method, json!({ "name": "search_registry" })).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{method}");
@@ -302,7 +313,48 @@ async fn an_unauthenticated_caller_learns_nothing_about_the_registry() {
 }
 
 #[tokio::test]
+async fn a_public_registry_lets_an_anonymous_agent_read_without_an_oauth_dance() {
+    // Anonymous callers can already list software over REST and query it over SPARQL on this
+    // registry. Refusing them the equivalent tools bought no secrecy and forced every client
+    // into a sign-in it did not need — which is exactly where a misconfigured identity provider
+    // turns "read the catalogue" into "cannot connect at all".
+    let h = harness().await;
+
+    let (status, body) = h.modern(None, json!(1), "tools/list", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let names: Vec<&str> =
+        body["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"search_registry"), "{names:?}");
+    assert!(names.contains(&"vocab_search"), "{names:?}");
+
+    // But only what anonymous may do: the list is still filtered by authority.
+    assert!(!names.contains(&"register_software"), "a write tool must not be offered: {names:?}");
+    assert!(!names.contains(&"advertise_produced"), "{names:?}");
+
+    // And a read tool actually works.
+    let (status, body) = h
+        .modern(None, json!(2), "tools/call", json!({ "name": "registry_info", "arguments": {} }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_ne!(body["result"]["isError"], serde_json::Value::Bool(true), "{body}");
+
+    // Naming a write tool anyway is refused, not quietly executed.
+    let (status, body) = h
+        .modern(
+            None,
+            json!(3),
+            "tools/call",
+            json!({ "name": "register_software", "arguments": { "name": "sneaky" } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["result"]["isError"], serde_json::Value::Bool(true), "{body}");
+}
+
+#[tokio::test]
 async fn a_bad_token_gets_the_same_challenge_rather_than_a_bare_rejection() {
+    // A credential that was offered and rejected is a 401 whether reads are public or not:
+    // the caller meant to authenticate and needs to know it failed.
     let h = harness().await;
     let req = Request::builder()
         .method("POST")
@@ -774,4 +826,81 @@ async fn the_registry_state_is_untouched_by_read_tools() {
         assert!(!is_error(&r), "{name}: {}", text_of(&r));
     }
     assert_eq!(h.state.store.count().unwrap(), before);
+}
+
+#[tokio::test]
+async fn a_search_that_finds_something_says_so_and_names_it() {
+    // This counted the wrong field and answered "0 hit(s)" on every successful search. A model
+    // reads that first line as "nothing here" and goes off to register a duplicate of the
+    // record it had just found.
+    let h = harness().await;
+    let created = h
+        .call(ROOT, "register_software", json!({ "name": "shacl-manager", "tagline": "SHACL shape management" }))
+        .await;
+    assert_ne!(created["isError"], json!(true), "{created}");
+
+    let r = h.call(ROOT, "search_registry", json!({ "q": "shacl" })).await;
+    let text = text_of(&r);
+    assert!(text.starts_with("1 hit(s)."), "{text}");
+    // The title is in the summary, so acting on the result costs no second call.
+    assert!(text.contains("shacl-manager"), "{text}");
+    assert!(text.contains("/software/"), "the IRI is named too: {text}");
+
+    // And a genuine miss still says so, without inviting invention.
+    let empty = h.call(ROOT, "search_registry", json!({ "q": "zzqqxx-nothing-like-this" })).await;
+    let text = text_of(&empty);
+    assert!(text.starts_with("0 hit(s)."), "{text}");
+    assert!(text.contains("has to be registered"), "{text}");
+}
+
+#[tokio::test]
+async fn a_listing_summarises_rather_than_returning_whole_records() {
+    // Four software records with READMEs came to 112 KB and overran a client's tool-output
+    // limit, so browsing a four-record catalogue failed outright. A listing is for choosing;
+    // `get_record` is for reading.
+    let h = harness().await;
+    let readme = "# Big\n".repeat(4000);
+    let r = h
+        .call(
+            ROOT,
+            "register_software",
+            json!({
+                "name": "verbose-tool",
+                "tagline": "A short line",
+                "readme": readme,
+                "kinds": ["service"],
+            }),
+        )
+        .await;
+    assert_ne!(r["isError"], json!(true), "{r}");
+
+    let listing = h.call(ROOT, "list_records", json!({ "kind": "software" })).await;
+    let body = serde_json::to_string(&listing).unwrap();
+    assert!(!body.contains("# Big"), "the README must not travel in a listing");
+    assert!(body.len() < 8_000, "a listing of one record should be small, was {}", body.len());
+
+    let item = &listing["structuredContent"]["items"][0];
+    // Still enough to choose one and then fetch it.
+    assert_eq!(item["name"], "verbose-tool");
+    assert_eq!(item["tagline"], "A short line");
+    assert!(item["iri"].as_str().unwrap().contains("/software/"));
+    assert!(item.get("readme").is_none(), "{item}");
+
+    // And the whole record is one call away.
+    let full = h.call(ROOT, "get_record", json!({ "kind": "software", "id": item["id"] })).await;
+    assert!(serde_json::to_string(&full).unwrap().contains("# Big"), "get_record returns it all");
+}
+
+#[tokio::test]
+async fn a_listing_clips_a_long_description_instead_of_dropping_it() {
+    let h = harness().await;
+    let long = "x".repeat(900);
+    let r = h
+        .call(ROOT, "register_software", json!({ "name": "wordy", "description": long }))
+        .await;
+    assert_ne!(r["isError"], json!(true), "{r}");
+    let listing = h.call(ROOT, "list_records", json!({ "kind": "software" })).await;
+    let tagline = listing["structuredContent"]["items"][0]["tagline"].as_str().unwrap();
+    assert!(tagline.ends_with('…'), "{tagline}");
+    assert!(tagline.chars().count() < 250, "{}", tagline.chars().count());
 }

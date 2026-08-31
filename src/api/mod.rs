@@ -60,6 +60,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         // local ArtifactTypes (D11)
         .route("/types", get(types::list).post(types::create))
         .route("/vocab/search", get(vocab::search))
+        // The registry's own artifact keyword list, whole — short enough that a picker wants
+        // all of it before anyone types.
+        .route("/keywords", get(vocab::keywords))
         .route("/vocab/resolve", get(vocab::resolve))
         .route("/types/{id}", get(types::get))
         // instances
@@ -130,6 +133,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/runs/{id}", get(deref::deref_run))
         .route("/type/{id}", get(deref::deref_type))
         .route("/capability/{id}", get(deref::deref_generic))
+        // The registry's own keyword concepts and the scheme they belong to. Without these a
+        // `dcat:theme` on every artifact would point at a URL that resolves to nothing, which
+        // is the FAIR failure this registry exists to avoid.
+        .route("/keyword/{id}", get(deref::deref_generic))
+        .route("/scheme/{id}", get(deref::deref_generic))
         .route("/distribution/{id}", get(deref::deref_generic))
         .route("/agent/{id}", get(deref::deref_generic))
         .fallback(web::spa)

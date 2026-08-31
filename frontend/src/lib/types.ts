@@ -172,6 +172,15 @@ export interface Instance {
   tombstoned?: boolean
 }
 
+/** One entry in the registry's own artifact keyword list. */
+export interface KeywordTerm {
+  iri: string
+  slug: string
+  label: string
+  definition: string
+  aliases: string[]
+}
+
 export type Availability = 'public' | 'restricted' | 'embargoed' | 'metadata-only'
 
 export interface Distribution {

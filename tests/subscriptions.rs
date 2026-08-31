@@ -469,3 +469,24 @@ async fn a_curators_direct_registration_also_reaches_subscribers() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["artifact_iri"], art["iri"]);
 }
+
+#[tokio::test]
+async fn a_subscription_written_against_the_keyword_list_catches_every_spelling() {
+    // The payoff of normalising keywords. Before it, a rule filtering on `SHACL` silently
+    // missed everything a deployment advertised as `shacl` — the worst kind of failure, since
+    // a subscription that delivers nothing looks exactly like one with nothing to deliver.
+    let h = harness().await;
+    let sw = h.software().await;
+    let producer = h.deployment(&sw, "shacl.ids.unimaas.nl").await;
+    let subscriber = h.deployment(&sw, "downstream.mumc.nl").await;
+
+    // Written the way the registry's list spells it.
+    let sub = h.subscribe(&subscriber, json!({"filter": {"keywords": ["SHACL"]}})).await;
+    let sid = sub["subscription"]["id"].as_str().unwrap().to_string();
+
+    // Advertised the way a deployment actually types it. `advertise` sends "shacl".
+    h.advertise(&producer, "ci/kw", "A report", REPORT, "public").await;
+
+    let deliveries = all_deliveries(&h, &subscriber, &sid).await;
+    assert_eq!(deliveries.len(), 1, "the lower-case spelling must still match: {deliveries:?}");
+}

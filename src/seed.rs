@@ -31,7 +31,15 @@ pub fn load_vocab(state: &AppState) -> Result<usize> {
     let b = state.store.load_turtle(SHAPES_TTL, ns::G_SHAPES, Some(&state.config.base_iri))?;
     let c = state.store.load_turtle(EDAM_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
     let d = state.store.load_turtle(EUROSCIVOC_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
-    Ok(a + b + c + d)
+    // Loaded on every start, not only on a seeded registry: the keyword list is the registry's
+    // own and writes normalise against it, so a picker that could not offer it would be
+    // offering nothing on a fresh install.
+    let keywords = keyword_quads(&state.config.base_iri);
+    let n = keywords.len();
+    let mut tx = GraphTx::new();
+    tx.extend(keywords);
+    state.store.apply(tx)?;
+    Ok(a + b + c + d + n)
 }
 
 const EDAM: &str = "http://edamontology.org/";
@@ -65,6 +73,42 @@ fn local_types(base: &str) -> Vec<(String, &'static str, &'static str, &'static 
         (local_type(base, "materialised-view"), "Materialised RDF view", "RDF materialised from a virtual mapping.", "application/n-quads"),
         (local_type(base, "mapping-coverage-report"), "Mapping coverage report", "Which parts of a source a mapping covers.", "application/json"),
     ]
+}
+
+/// The registry's own artifact keyword list, as a SKOS scheme (`crate::domain::keywords`).
+///
+/// The authoritative list is the Rust table — this puts it in the graph so the pickers, the
+/// vocabulary search and a federating peer all see it the same way as any other concept, with
+/// no special case anywhere.
+fn keyword_quads(base: &str) -> Vec<oxigraph::model::Quad> {
+    use crate::domain::keywords;
+    let scheme = keywords::scheme_iri(base);
+    let mut out = Vec::new();
+    let mut sn = crate::rdf::Node::iri(&scheme, ns::G_VOCAB);
+    sn.a(&format!("{}ConceptScheme", ns::SKOS));
+    sn.text(ns::SKOS, "prefLabel", "Artifact keywords");
+    sn.text(
+        ns::SKOS,
+        "definition",
+        "The keywords this registry recognises on artifacts. A keyword outside the list is kept as free text.",
+    );
+    out.extend(sn.finish());
+    for k in keywords::KEYWORDS {
+        let iri = keywords::iri(base, k.slug);
+        let mut n = crate::rdf::Node::iri(&iri, ns::G_VOCAB);
+        n.a(&format!("{}Concept", ns::SKOS));
+        n.text(ns::SKOS, "prefLabel", k.label);
+        n.text(ns::SKOS, "definition", k.definition);
+        for a in k.aliases {
+            n.text(ns::SKOS, "altLabel", a);
+        }
+        n.link(ns::SKOS, "inScheme", &scheme);
+        // The same branch marker the topic and data vocabularies use, so `vocab_search` can
+        // scope to keywords without knowing anything about this scheme in particular.
+        n.text(ns::TAR, "conceptBranch", "keyword");
+        out.extend(n.finish());
+    }
+    out
 }
 
 fn type_quads(base: &str) -> Vec<oxigraph::model::Quad> {

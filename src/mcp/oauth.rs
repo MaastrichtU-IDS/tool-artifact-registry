@@ -66,7 +66,9 @@ fn metadata_for(state: &AppState, resource: &str) -> Value {
         "resource": resource,
         "bearer_methods_supported": ["header"],
         "resource_name": format!("{} — {}", state.config.title, SERVER_NAME),
-        "resource_documentation": format!("{}/docs/mcp", state.base()),
+        // No `resource_documentation`: it is optional, and the registry serves its SPA on any
+        // unrouted path, so any URL named here would resolve to the app shell rather than to
+        // documentation. Naming nothing beats naming something misleading.
     });
     let obj = doc.as_object_mut().expect("object");
 

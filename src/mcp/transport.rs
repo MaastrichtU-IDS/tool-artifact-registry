@@ -312,7 +312,8 @@ fn validate_mirrored_headers(headers: &HeaderMap, req: &rpc::RpcRequest) -> Resu
                 };
                 if Some(decoded.as_str()) != body_name {
                     return Err(format!(
-                        "Mcp-Name header {decoded:?} does not match the body value {body_name:?}"
+                        "Mcp-Name header {decoded:?} does not match the body value {:?}",
+                        body_name.unwrap_or("(absent)")
                     ));
                 }
             }

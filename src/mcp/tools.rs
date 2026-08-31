@@ -449,7 +449,7 @@ pub fn catalogue() -> Vec<Tool> {
                     "release": s("Release id or IRI."),
                     "run": s("Run id or IRI."),
                     "conforms_to": s("Artifact type IRI, for kind=artifact. Must come from `vocab_search`."),
-                    "edam_topic": s("Topic IRI, for kind=software. Must come from `vocab_search` (branch=topic)."),
+                    "topic": s("Topic IRI, for kind=software. Must come from `vocab_search` (branch=topic)."),
                     "produces": s("Artifact type IRI the software's capability emits."),
                     "consumes": s("Artifact type IRI the software's capability accepts."),
                     "license": s("Licence IRI."),
@@ -543,7 +543,7 @@ pub fn catalogue() -> Vec<Tool> {
                  What to fill in from a repository you can read: `name`, `code_repository`, `homepage`, \
                  `description` and `readme` from the README, `license` from the LICENSE file or package \
                  metadata (the SPDX IRI, e.g. https://spdx.org/licenses/Apache-2.0), `kinds` from what \
-                 the project actually ships, `keywords` from its own stated keywords. `edam_topics` \
+                 the project actually ships, `keywords` from its own stated keywords. `topics` \
                  requires `vocab_search` — always.\n\n\
                  What NOT to fill in: a licence the repository does not state; a maturity you inferred \
                  from commit dates; a tagline you composed when the project has one; topics that \
@@ -566,7 +566,7 @@ pub fn catalogue() -> Vec<Tool> {
                     "kinds": json!({ "type": "array", "items": { "type": "string", "enum": ["service", "library", "cli", "desktop", "workflow"] }, "description": "What the software is. A set, because one program is routinely several of these at once." }),
                     "maturity": s_enum("repostatus.org development status, only if the project declares one.", &["concept", "wip", "active", "inactive", "unsupported", "suspended", "abandoned", "moved"]),
                     "deployable": boolean("False when the software cannot be hosted at an endpoint at all (a desktop app, a CLI). Defaults to true; set it false and the registry refuses an endpoint on any instance of it."),
-                    "edam_topics": vocab_array("Topics this software is about, from `vocab_search` with branch=topic. Named `edam_topics` for API compatibility; the topic branch is EuroSciVoc, not EDAM."),
+                    "topics": vocab_array("Topics this software is about, from `vocab_search` with branch=topic. Named `topics` for API compatibility; the topic branch is EuroSciVoc, not EDAM."),
                     "keywords": arr_s("The project's own keywords. Free text, no lookup needed."),
                     "publisher": agent_schema("The organisation or person that publishes it."),
                     "contact": agent_schema("Who to ask about it."),
@@ -607,7 +607,7 @@ pub fn catalogue() -> Vec<Tool> {
                         "kinds": json!({ "type": "array", "items": { "type": "string", "enum": ["service", "library", "cli", "desktop", "workflow"] }, "description": "What the software is." }),
                         "maturity": s_enum("repostatus.org status.", &["concept", "wip", "active", "inactive", "unsupported", "suspended", "abandoned", "moved"]),
                         "deployable": boolean("Whether it can be hosted at an endpoint."),
-                        "edam_topics": vocab_array("Topics, from `vocab_search` with branch=topic."),
+                        "topics": vocab_array("Topics, from `vocab_search` with branch=topic."),
                         "keywords": arr_s("Keywords."),
                         "publisher": agent_schema("Publisher."),
                         "contact": agent_schema("Contact."),
@@ -802,6 +802,7 @@ mod tests {
         Principal {
             credential: CredentialKind::LocalToken,
             instance_iri: instance.then(|| "https://reg.test/instance/1".to_string()),
+            software_iri: None,
             subject: "test".into(),
             display_name: None,
             scopes: scopes.iter().map(|s| s.to_string()).collect(),

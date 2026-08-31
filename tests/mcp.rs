@@ -83,6 +83,27 @@ impl Harness {
     async fn get(&self, uri: &str) -> (StatusCode, Value, axum::http::HeaderMap) {
         self.raw(Request::builder().method("GET").uri(uri).body(Body::empty()).unwrap()).await
     }
+
+    /// Register a software and a deployment of it, and mint a token that *acts as* that
+    /// deployment — the credential shape spec §8.3 requires for advertisement.
+    async fn instance_token(&self, label: &str, scopes: Value) -> String {
+        let sw = self.call(ROOT, "register_software", json!({ "name": label })).await;
+        let sw_id = sw["structuredContent"]["id"].as_str().unwrap().to_string();
+        let inst = self
+            .call(ROOT, "register_instance", json!({ "label": format!("{label} prod"), "software": sw_id }))
+            .await;
+        let inst_id = inst["structuredContent"]["id"].as_str().unwrap().to_string();
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/instances/{inst_id}/tokens"))
+            .header("authorization", format!("Bearer {ROOT}"))
+            .header("content-type", "application/json")
+            .body(Body::from(json!({ "label": "ci", "scopes": scopes }).to_string()))
+            .unwrap();
+        let (status, tok, _) = self.raw(req).await;
+        assert_eq!(status, StatusCode::CREATED, "{tok}");
+        tok["token"].as_str().unwrap().to_string()
+    }
 }
 
 fn text_of(result: &Value) -> String {
@@ -402,7 +423,7 @@ async fn a_search_with_no_hits_says_omit_or_mint_rather_than_guess() {
     let r = h.call(ROOT, "vocab_search", json!({ "q": "zzqqxx-not-a-real-concept" })).await;
     let text = text_of(&r);
     assert!(text.contains("register_artifact_type"), "{text}");
-    assert!(text.contains("Do not write an EDAM IRI that did not come from this tool"), "{text}");
+    assert!(text.contains("Do not write an ontology IRI that did not come from this tool"), "{text}");
 }
 
 #[tokio::test]
@@ -413,14 +434,14 @@ async fn an_invented_edam_iri_is_refused_before_anything_is_written() {
         .call(
             ROOT,
             "register_software",
-            json!({ "name": "invented-topics-tool", "edam_topics": ["http://edamontology.org/topic_9999999"] }),
+            json!({ "name": "invented-topics-tool", "topics": ["http://edamontology.org/topic_9999999"] }),
         )
         .await;
     assert!(is_error(&r), "an invented EDAM IRI must not be written: {}", text_of(&r));
     let text = text_of(&r);
     assert!(text.contains("topic_9999999"), "{text}");
     assert!(text.contains("vocab_search"), "the refusal must say how to recover: {text}");
-    assert!(text.contains("Do not adjust the number and try again"), "{text}");
+    assert!(text.contains("Do not adjust the identifier and try again"), "{text}");
 
     // …and nothing was created.
     let (_, list, _) = h.get("/api/v1/software?q=invented-topics-tool").await;
@@ -430,9 +451,10 @@ async fn an_invented_edam_iri_is_refused_before_anything_is_written() {
 #[tokio::test]
 async fn an_invented_artifact_type_is_refused_on_advertisement_too() {
     let h = harness().await;
+    let token = h.instance_token("advertiser", json!(["advertise:produce"])).await;
     let r = h
         .call(
-            ROOT,
+            &token,
             "advertise_produced",
             json!({
                 "run": { "external_key": "ci/1" },
@@ -440,8 +462,76 @@ async fn an_invented_artifact_type_is_refused_on_advertisement_too() {
             }),
         )
         .await;
-    assert!(is_error(&r));
-    assert!(text_of(&r).contains("data_8888888"));
+    assert!(is_error(&r), "{}", text_of(&r));
+    assert!(text_of(&r).contains("data_8888888"), "{}", text_of(&r));
+
+    // Nothing was written: no run, no artifact.
+    let (_, runs, _) = h.get("/api/v1/runs").await;
+    assert_eq!(runs["items"].as_array().unwrap().len(), 0);
+}
+
+/// Found by pointing a real coding agent at this server and telling it to guess: it produced
+/// `edamontology.org/topic_3170`, which *exists* — it is EDAM's "RNA-Seq" — and an existence
+/// check alone waved it onto a record with nothing to do with RNA-Seq. Software topics come from
+/// EuroSciVoc here, and `build.rs` marks EDAM's topic branch `topic-edam` so the picker never
+/// offers it, so the rule has to be "could `vocab_search` have returned this for this field".
+#[tokio::test]
+async fn a_real_term_in_the_wrong_branch_is_refused_as_firmly_as_an_invented_one() {
+    let h = harness().await;
+
+    // Verify the premise: the term is genuinely in the registry's vocabulary…
+    let r = h.call(ROOT, "vocab_resolve", json!({ "iris": ["http://edamontology.org/topic_3170"] })).await;
+    assert!(text_of(&r).contains("All resolved."), "{}", text_of(&r));
+    // …and `vocab_search` with branch=topic will never return it.
+    let r = h.call(ROOT, "vocab_search", json!({ "q": "RNA-Seq", "branch": "topic" })).await;
+    let hits = r["structuredContent"]["items"].as_array().unwrap();
+    assert!(
+        !hits.iter().any(|i| i["iri"] == "http://edamontology.org/topic_3170"),
+        "premise broken: the topic picker now offers EDAM topics"
+    );
+
+    // So writing it as a software topic must be refused.
+    let r = h
+        .call(
+            ROOT,
+            "register_software",
+            json!({ "name": "wrong-branch-tool", "topics": ["http://edamontology.org/topic_3170"] }),
+        )
+        .await;
+    assert!(is_error(&r), "a real term in the wrong branch must not be written: {}", text_of(&r));
+    let text = text_of(&r);
+    assert!(text.contains("EDAM topic"), "{text}");
+    assert!(text.contains("EuroSciVoc"), "the refusal must say where topics come from: {text}");
+    assert!(text.contains("branch=topic"), "{text}");
+
+    let (_, list, _) = h.get("/api/v1/software?q=wrong-branch-tool").await;
+    assert_eq!(list["items"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn a_topic_used_as_an_artifact_type_is_refused_too() {
+    let h = harness().await;
+    let topics = h.call(ROOT, "vocab_search", json!({ "q": "software", "branch": "topic" })).await;
+    let topic = topics["structuredContent"]["items"][0]["iri"].as_str().unwrap().to_string();
+
+    // A real EuroSciVoc topic is a real term — but it is not a thing an artifact can be.
+    let r = h
+        .call(ROOT, "register_software", json!({ "name": "swapped", "capability": { "produces": [topic] } }))
+        .await;
+    assert!(is_error(&r), "{}", text_of(&r));
+    assert!(text_of(&r).contains("not an artifact type"), "{}", text_of(&r));
+    assert!(text_of(&r).contains("branch=data"), "{}", text_of(&r));
+}
+
+#[tokio::test]
+async fn a_data_type_is_accepted_where_an_artifact_type_belongs() {
+    let h = harness().await;
+    let hits = h.call(ROOT, "vocab_search", json!({ "q": "sequence", "branch": "data" })).await;
+    let data_type = hits["structuredContent"]["items"][0]["iri"].as_str().unwrap().to_string();
+    let r = h
+        .call(ROOT, "register_software", json!({ "name": "right-branch", "capability": { "produces": [data_type] } }))
+        .await;
+    assert!(!is_error(&r), "{}", text_of(&r));
 }
 
 #[tokio::test]
@@ -517,7 +607,7 @@ async fn a_full_curation_flow_works_end_to_end() {
                 "code_repository": "https://github.com/example/peak-caller",
                 "license": "https://spdx.org/licenses/Apache-2.0",
                 "kinds": ["cli", "library"],
-                "edam_topics": [topic],
+                "topics": [topic],
             }),
         )
         .await;
@@ -581,25 +671,7 @@ async fn a_shacl_rejection_comes_back_as_an_actionable_correction() {
 async fn advertisement_writes_lineage_and_is_idempotent() {
     let h = harness().await;
     // A deployment, and a token that acts as it — the credential shape the advertise tools need.
-    let sw = h.call(ROOT, "register_software", json!({ "name": "shacl-manager" })).await;
-    let sw_id = sw["structuredContent"]["id"].as_str().unwrap().to_string();
-    let inst = h
-        .call(ROOT, "register_instance", json!({ "label": "shacl-manager prod", "software": sw_id }))
-        .await;
-    let inst_id = inst["structuredContent"]["id"].as_str().unwrap().to_string();
-
-    let req = Request::builder()
-        .method("POST")
-        .uri(format!("/api/v1/instances/{inst_id}/tokens"))
-        .header("authorization", format!("Bearer {ROOT}"))
-        .header("content-type", "application/json")
-        .body(Body::from(
-            json!({ "label": "ci", "scopes": ["advertise:produce", "advertise:consume"] }).to_string(),
-        ))
-        .unwrap();
-    let (status, tok, _) = h.raw(req).await;
-    assert_eq!(status, StatusCode::CREATED, "{tok}");
-    let token = tok["token"].as_str().unwrap().to_string();
+    let token = h.instance_token("shacl-manager", json!(["advertise:produce", "advertise:consume"])).await;
 
     // That token sees only what it may do.
     let (_, body) = h.modern(Some(&token), json!(1), "tools/list", json!({})).await;
@@ -636,21 +708,8 @@ async fn advertisement_writes_lineage_and_is_idempotent() {
 #[tokio::test]
 async fn a_tool_can_do_no_more_than_the_same_credential_could_over_rest() {
     let h = harness().await;
-    let sw = h.call(ROOT, "register_software", json!({ "name": "gated" })).await;
-    let sw_id = sw["structuredContent"]["id"].as_str().unwrap().to_string();
-    let inst = h.call(ROOT, "register_instance", json!({ "label": "gated prod", "software": sw_id })).await;
-    let inst_id = inst["structuredContent"]["id"].as_str().unwrap().to_string();
-
     // A token with only `advertise:produce` — no curation authority of any kind.
-    let req = Request::builder()
-        .method("POST")
-        .uri(format!("/api/v1/instances/{inst_id}/tokens"))
-        .header("authorization", format!("Bearer {ROOT}"))
-        .header("content-type", "application/json")
-        .body(Body::from(json!({ "label": "narrow", "scopes": ["advertise:produce"] }).to_string()))
-        .unwrap();
-    let (_, tok, _) = h.raw(req).await;
-    let token = tok["token"].as_str().unwrap().to_string();
+    let token = h.instance_token("gated", json!(["advertise:produce"])).await;
 
     // Over REST: refused.
     let req = Request::builder()

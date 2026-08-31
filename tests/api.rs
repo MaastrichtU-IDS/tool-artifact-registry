@@ -761,6 +761,36 @@ async fn a_tombstoned_record_still_resolves() {
     let (status, sw) = h.get(&format!("/api/v1/software/{}", f.software_id)).await;
     assert_eq!(status, StatusCode::OK, "a soft-deleted IRI must keep resolving, not 404");
     assert_eq!(sw["tombstoned"], true);
+
+    // …but it is withdrawn, so it must not still be offered in listings or counted in totals.
+    // Resolving and being listed are different promises, and only the first survives a delete.
+    let (_, list) = h.get("/api/v1/software").await;
+    assert_eq!(list["total"], 0, "a withdrawn record must leave the list");
+    let (_, reg) = h.get("/api/v1/registry").await;
+    assert_eq!(reg["counts"]["software"], 0);
+}
+
+#[tokio::test]
+async fn a_withdrawn_instance_stops_counting_against_its_software() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    let (_, before) = h.get(&format!("/api/v1/software/{}", f.software_id)).await;
+    assert_eq!(before["instance_count"], 1);
+
+    let (status, _, _) = h
+        .req("DELETE", &format!("/api/v1/instances/{}", f.instance_id), Some(ROOT), None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, after) = h.get(&format!("/api/v1/software/{}", f.software_id)).await;
+    assert_eq!(after["instance_count"], 0, "a withdrawn deployment must not still be counted");
+    let (_, list) = h.get("/api/v1/instances").await;
+    assert_eq!(list["total"], 0);
+
+    // Still resolves, because something may cite it.
+    let (status, inst) = h.get(&format!("/api/v1/instances/{}", f.instance_id)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(inst["tombstoned"], true);
 }
 
 #[tokio::test]

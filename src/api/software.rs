@@ -38,7 +38,8 @@ pub struct SoftwareFilter {
 fn where_body(f: &SoftwareFilter) -> String {
     let mut w = format!(
         "GRAPH ?g {{ ?s a <{t}> ; schema:name ?name . \
-         OPTIONAL {{ ?s dct:abstract|tar:tagline ?tagline }} OPTIONAL {{ ?s schema:description ?desc }} }}",
+         OPTIONAL {{ ?s dct:abstract|tar:tagline ?tagline }} OPTIONAL {{ ?s schema:description ?desc }} }}\n\
+         FILTER NOT EXISTS {{ GRAPH ?tg {{ ?s tar:tombstoned true }} }}",
         t = dom::TYPE_SOFTWARE
     );
     if let Some(q) = &f.q {

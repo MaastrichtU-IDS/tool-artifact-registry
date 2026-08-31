@@ -101,7 +101,9 @@ fn entity_counts(state: &AppState) -> AppResult<serde_json::Value> {
         ("runs", crate::domain::run::TYPE_ACTIVITY),
     ] {
         let q = format!(
-            "{p}\nSELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{ GRAPH ?g {{ ?s a <{type_iri}> }} }}",
+            "{p}\nSELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{\n\
+               GRAPH ?g {{ ?s a <{type_iri}> }}\n\
+               FILTER NOT EXISTS {{ GRAPH ?tg {{ ?s tar:tombstoned true }} }} }}",
             p = ns::PREFIXES
         );
         let n = state

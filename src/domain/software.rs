@@ -336,6 +336,7 @@ pub fn software_counts(ctx: &Ctx, only: Option<&str>) -> AppResult<HashMap<Strin
         r#"{p}
 SELECT ?sw (COUNT(DISTINCT ?i) AS ?n) WHERE {{
   GRAPH ?g {{ ?i tar:instanceOf ?sw }} {filter}
+  FILTER NOT EXISTS {{ GRAPH ?tg {{ ?i tar:tombstoned true }} }}
 }} GROUP BY ?sw"#,
         p = ns::PREFIXES
     );

@@ -34,7 +34,8 @@ pub struct InstanceFilter {
 
 fn where_body(base: &str, f: &InstanceFilter) -> String {
     let mut w = format!(
-        "GRAPH ?g {{ ?s a <{t}> ; rdfs:label ?label }}",
+        "GRAPH ?g {{ ?s a <{t}> ; rdfs:label ?label }}\n\
+         FILTER NOT EXISTS {{ GRAPH ?tg {{ ?s tar:tombstoned true }} }}",
         t = dom::TYPE_SOFTWARE_AGENT
     );
     if let Some(q) = &f.q {

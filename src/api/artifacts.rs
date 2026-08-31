@@ -35,7 +35,8 @@ pub struct ArtifactFilter {
 
 fn where_body(base: &str, f: &ArtifactFilter) -> String {
     let mut w = format!(
-        "GRAPH ?g {{ ?s a <{t}> . OPTIONAL {{ ?s dct:title ?title }} OPTIONAL {{ ?s dct:description ?desc }} }}",
+        "GRAPH ?g {{ ?s a <{t}> . OPTIONAL {{ ?s dct:title ?title }} OPTIONAL {{ ?s dct:description ?desc }} }}\n\
+         FILTER NOT EXISTS {{ GRAPH ?tg {{ ?s tar:tombstoned true }} }}",
         t = dom::TYPE_DATASET
     );
     if let Some(q) = &f.q {

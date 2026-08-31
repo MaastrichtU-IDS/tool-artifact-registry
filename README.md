@@ -531,6 +531,19 @@ Honest list of where the prototype departs from the spec, or stops short of it.
 10. **Keyset pagination orders by IRI string**, which is time-ordered within one registry
     because of UUIDv7, but interleaves imperfectly across origins.
 
+11. **Upgrading a store written before the artifact-type rule can strand a record.** A write is
+   judged on the whole record it asserts, and a PATCH carries the fields the caller did not name
+   — so a record citing a term the registry has since retired is refused on an edit to some
+   other field entirely. The boot log names every such record and the term, once, rather than
+   deleting a value nobody asked it to delete. Nothing shipped is affected; a long-lived store
+   might be. Replacing or clearing the named term fixes the record permanently.
+
+12. **A type resolved from a peer is accepted but not offered.** It is a term this registry
+   holds, so citing it is fine; it carries none of this registry's own classes, so the picker
+   does not list it. That is the conservative half-answer: which registry owns a term, and
+   whether adopting a peer's implies agreeing with it, is a federation question this prototype
+   does not settle. The picker's adopt flow is how to make one first-class here.
+
 ## Answers to the handoff's open questions
 
 1. **Dark mode in v1?** Yes — tokens in `frontend/src/styles.css`, cheap now and expensive to

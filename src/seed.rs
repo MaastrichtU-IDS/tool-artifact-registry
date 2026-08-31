@@ -46,7 +46,9 @@ pub fn load_vocab(state: &AppState) -> Result<usize> {
     let mut tx = GraphTx::new();
     tx.extend(keywords);
     state.store.apply(tx)?;
-    let migrated = class_existing_types(state)? + drop_branch_markers(state)?;
+    let migrated =
+        class_existing_types(state)? + drop_branch_markers(state)? + unclaim_series_concepts(state)?;
+    warn_about_unusable_stored_terms(state);
     Ok(a + b + c + d + n + migrated)
 }
 
@@ -131,6 +133,91 @@ fn is_a_record_that_is_not_a_type(iri: &str) -> bool {
 /// Peer graphs are left alone. A peer still running an older build may serve the marker in its
 /// stub, and a cached copy of what a peer said is not ours to edit — the same reason a peer's
 /// record never passes a write handler.
+/// Say plainly, once at boot, which stored records a curator can no longer edit.
+///
+/// The vocabulary rule judges the whole record a write asserts, and a PATCH carries the fields
+/// the caller did not name — so a record written by an older build against a term this registry
+/// has since retired fails on a field nobody touched, with a message about that field rather
+/// than about the upgrade. Nothing in the shipped data is affected, but a store that predates
+/// the rule can be, and finding out by having an unrelated edit refused is a poor way to learn
+/// it. The data is left exactly as it is: a stale subject is the operator's to correct or keep,
+/// and quietly deleting a term from someone's records to make an edit succeed would be a worse
+/// trade than telling them.
+fn warn_about_unusable_stored_terms(state: &AppState) {
+    let q = format!(
+        r#"{p}
+SELECT ?s ?t WHERE {{
+  GRAPH ?g {{ ?s dct:subject ?t }}
+  FILTER(!STRSTARTS(STR(?g), "{peer}"))
+}} LIMIT 200"#,
+        p = ns::PREFIXES,
+        peer = ns::G_PEER_PREFIX
+    );
+    let Ok(rows) = state.store.select(&q) else { return };
+    let pairs: Vec<(String, String)> =
+        rows.rows.iter().filter_map(|r| Some((r.iri("s")?, r.iri("t")?))).collect();
+    let terms: Vec<&str> = pairs.iter().map(|(_, t)| t.as_str()).collect();
+    let Some(held) = crate::domain::vocabulary::held(state, &terms) else { return };
+
+    let mut stuck: Vec<&(String, String)> = pairs
+        .iter()
+        .filter(|(_, t)| {
+            held.get(t).is_none_or(|h| !h.usable_as(crate::domain::vocabulary::Slot::Topic))
+        })
+        .collect();
+    stuck.sort();
+    stuck.dedup();
+    if stuck.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        count = stuck.len(),
+        "records hold a topic this registry no longer classifies software by; editing one will \
+         be refused until the topic is replaced or removed, even on an unrelated field"
+    );
+    for (record, term) in stuck.iter().take(10) {
+        tracing::warn!(record = %record, term = %term, "stale topic");
+    }
+}
+
+/// Stop version-series nodes claiming to be vocabulary concepts.
+///
+/// A series is the idea of "this artifact, any version", and an early build typed it
+/// `skos:Concept` to say so — which put every artifact's *title* into the artifact-type picker.
+/// The minting was corrected long before the type rule existed, but records written in between
+/// still carry the triple: harmless now that the rule refuses them, and still a statement the
+/// graph makes that is not true. Only the `skos:Concept` claim goes; `tar:ArtifactSeries` and
+/// the series' own label stay, because the series is real.
+fn unclaim_series_concepts(state: &AppState) -> Result<usize> {
+    let q = format!(
+        r#"{p}
+SELECT DISTINCT ?s ?g WHERE {{
+  GRAPH ?g {{ ?s a skos:Concept ; a <{series}> }}
+  FILTER(!STRSTARTS(STR(?g), "{peer}"))
+}}"#,
+        p = ns::PREFIXES,
+        series = crate::domain::artifact::TYPE_ARTIFACT_SERIES,
+        peer = ns::G_PEER_PREFIX
+    );
+    let rows = state.store.select(&q)?;
+    let mut tx = GraphTx::new();
+    let mut n = 0;
+    for row in &rows.rows {
+        let (Some(iri), Some(graph)) = (row.iri("s"), row.iri("g")) else { continue };
+        // There is no delete-one-quad; clearing the property and re-asserting the type we want
+        // is the same thing in one transaction, and a series has no other type to lose.
+        tx.replace_property(&iri, &format!("{}type", ns::RDF), &graph);
+        let mut node = crate::rdf::Node::iri(&iri, &graph);
+        node.a(crate::domain::artifact::TYPE_ARTIFACT_SERIES);
+        tx.extend(node.finish());
+        n += 1;
+    }
+    if n > 0 {
+        state.store.apply(tx)?;
+    }
+    Ok(n)
+}
+
 fn drop_branch_markers(state: &AppState) -> Result<usize> {
     let predicate = format!("{}conceptBranch", ns::TAR);
     let q = format!(

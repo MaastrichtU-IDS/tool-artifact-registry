@@ -2803,3 +2803,82 @@ async fn reloading_the_shapes_does_not_add_another_copy_of_them() {
     let (status, body) = h.post("/api/v1/software", ROOT, json!({"tagline": "no name"})).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
 }
+
+#[tokio::test]
+async fn re_registering_a_seeded_type_replaces_it_rather_than_shadowing_it() {
+    // `tar seed` writes its types into the vocabulary graph while this route cleared only the
+    // local one, so the same IRI ended up carrying two `skos:prefLabel`s. The write answered
+    // 200 and the picker went on showing the old label — a success that changed nothing.
+    let h = harness().await;
+    let iri = format!("{BASE}/type/rdf-graph");
+    let mut tx = tar::store::GraphTx::new();
+    let mut n = tar::rdf::Node::iri(&iri, tar::ns::G_VOCAB);
+    n.a(&format!("{}Concept", tar::ns::SKOS));
+    n.a(tar::domain::vocabulary::CLASS_ARTIFACT_TYPE);
+    n.text(tar::ns::SKOS, "prefLabel", "RDF graph");
+    tx.extend(n.finish());
+    h.state.store.apply(tx).unwrap();
+
+    let (status, created) = h
+        .post("/api/v1/types", ROOT, json!({"slug": "rdf-graph", "label": "RDF graph (renamed)"}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["iri"], iri, "the same name, not a second one");
+
+    let labels = h
+        .state
+        .store
+        .select(&format!(
+            "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+             SELECT ?l WHERE {{ GRAPH ?g {{ <{iri}> skos:prefLabel ?l }} }}"
+        ))
+        .unwrap();
+    let labels: Vec<String> = labels.rows.iter().filter_map(|r| r.str("l")).collect();
+    assert_eq!(labels, vec!["RDF graph (renamed)"], "exactly one label, and the new one");
+
+    let (_, found) = h.get("/api/v1/vocab/search?branch=data&q=RDF%20graph").await;
+    let hit = found["items"].as_array().unwrap().iter().find(|i| i["iri"] == iri.as_str()).unwrap();
+    assert_eq!(hit["label"], "RDF graph (renamed)", "the picker shows the edit: {found}");
+}
+
+#[tokio::test]
+async fn a_version_series_stops_claiming_to_be_a_vocabulary_concept() {
+    // An early build typed a version series `skos:Concept`, which put every artifact's title
+    // into the artifact-type picker. Minting was fixed long ago; records written before it
+    // still carry the triple.
+    let h = harness().await;
+    let series = format!("{BASE}/artifact-series/01a05400-0000-7000-8000-000000000000");
+    let mut tx = tar::store::GraphTx::new();
+    let mut n = tar::rdf::Node::iri(&series, tar::ns::G_LOCAL);
+    n.a(&format!("{}Concept", tar::ns::SKOS));
+    n.a(tar::domain::artifact::TYPE_ARTIFACT_SERIES);
+    n.text(tar::ns::SKOS, "prefLabel", "Some artifact title");
+    tx.extend(n.finish());
+    h.state.store.apply(tx).unwrap();
+
+    tar::seed::load_vocab(&h.state).unwrap();
+
+    let types = h
+        .state
+        .store
+        .select(&format!("SELECT ?t WHERE {{ GRAPH ?g {{ <{series}> a ?t }} }}"))
+        .unwrap();
+    let types: Vec<String> = types.rows.iter().filter_map(|r| r.iri("t")).collect();
+    assert_eq!(
+        types,
+        vec![tar::domain::artifact::TYPE_ARTIFACT_SERIES.to_string()],
+        "the series is still a series, and no longer a concept"
+    );
+
+    // Its label survives — the series is real, only the claim about what kind of thing it is
+    // was wrong.
+    let label = h
+        .state
+        .store
+        .select(&format!(
+            "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+             SELECT ?l WHERE {{ GRAPH ?g {{ <{series}> skos:prefLabel ?l }} }}"
+        ))
+        .unwrap();
+    assert_eq!(label.rows.len(), 1, "the series keeps its label");
+}

@@ -194,6 +194,8 @@ pub async fn seed_ids_examples(state: &Arc<AppState>, with_runs: bool) -> Result
             documentation: Some(format!("{}#readme", s.repo)),
             image: None,
             screenshots: Vec::new(),
+            api_docs: Vec::new(),
+            registration_clients: Vec::new(),
             readme: None,
             readme_base_url: None,
             deployable: None,
@@ -203,7 +205,7 @@ pub async fn seed_ids_examples(state: &Arc<AppState>, with_runs: bool) -> Result
             kinds: vec![s.kind.into()],
             kind: None,
             maturity: Some("active".into()),
-            edam_topics: s.topics.clone(),
+            topics: s.topics.clone(),
             keywords: s.keywords.iter().map(|k| k.to_string()).collect(),
             publisher: Some(publisher.clone()),
             contact: Some(AgentIn {
@@ -236,6 +238,8 @@ pub async fn seed_ids_examples(state: &Arc<AppState>, with_runs: bool) -> Result
         for (label, endpoint, client_id) in &s.instances {
             let input = InstanceIn {
                 label: (*label).into(),
+                self_registered_by: None,
+                instance_key: None,
                 software: Some(sw_iri.clone()),
                 release: Some(rel_iri.clone()),
                 endpoint_url: (!endpoint.is_empty()).then(|| (*endpoint).to_string()),
@@ -248,6 +252,7 @@ pub async fn seed_ids_examples(state: &Arc<AppState>, with_runs: bool) -> Result
                 oidc_client_id: client_id.map(|c| c.to_string()),
                 oidc_issuer: None,
                 allowed_scopes: vec!["advertise:produce".into(), "advertise:consume".into()],
+                health_endpoint: None,
                 capability: None,
             };
             let inst_iri = ids::mint(&base, Kind::Instance);

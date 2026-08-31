@@ -13,6 +13,12 @@ pub struct Config {
     pub data_dir: String,
     pub listen: String,
     pub public_read: bool,
+    /// SPARQL is a public read surface in its own right (spec §7.7): a standard query language
+    /// is most of its value to analysts and peers, and losing it whenever an operator closes
+    /// REST reads would make the two settings one. Defaults open, and stays open when
+    /// `public_read` is false, so an operator who wants a genuinely private registry has to say
+    /// so about the query endpoint too.
+    pub sparql_public: bool,
     pub root_token: Option<String>,
     pub shacl_validate_writes: bool,
     pub max_payload_bytes: usize,
@@ -150,6 +156,7 @@ impl Config {
             data_dir: env("TAR_DATA_DIR").unwrap_or_else(|| "./data".into()),
             listen: env("TAR_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into()),
             public_read: env_bool("TAR_PUBLIC_READ", true),
+            sparql_public: env_bool("TAR_SPARQL_PUBLIC", true),
             root_token,
             shacl_validate_writes: env_bool("TAR_SHACL_VALIDATE_WRITES", true),
             max_payload_bytes: env("TAR_MAX_PAYLOAD_BYTES")
@@ -176,6 +183,7 @@ impl Config {
             data_dir: "memory".into(),
             listen: "127.0.0.1:0".into(),
             public_read: true,
+            sparql_public: true,
             root_token: Some("test-root-token-0123456789".into()),
             shacl_validate_writes: true,
             max_payload_bytes: 2 * 1024 * 1024,

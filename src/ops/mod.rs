@@ -28,6 +28,9 @@ pub struct TokenRecord {
     pub id: String,
     pub prefix: String,
     pub instance_iri: Option<String>,
+    /// Set instead of `instance_iri` for an auto-registration credential: the token names the
+    /// software, and each deployment of it registers itself on first announcement.
+    pub software_iri: Option<String>,
     pub subject_kind: String,
     pub scopes: Vec<String>,
     pub label: Option<String>,
@@ -84,6 +87,7 @@ impl Ops {
     pub async fn mint_token(
         &self,
         instance_iri: Option<&str>,
+        software_iri: Option<&str>,
         subject_kind: &str,
         scopes: &[String],
         label: Option<&str>,
@@ -105,13 +109,14 @@ impl Ops {
         let expires = ttl.map(|d| (now + d).to_rfc3339());
         let scopes_s = scopes.join(" ");
         sqlx::query(
-            "INSERT INTO api_tokens (id, prefix, hash, instance_iri, subject_kind, scopes, label, created_at, created_by, expires_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO api_tokens (id, prefix, hash, instance_iri, software_iri, subject_kind, scopes, label, created_at, created_by, expires_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(&id)
         .bind(&prefix)
         .bind(&hash)
         .bind(instance_iri)
+        .bind(software_iri)
         .bind(subject_kind)
         .bind(&scopes_s)
         .bind(label)
@@ -125,6 +130,7 @@ impl Ops {
                 id,
                 prefix,
                 instance_iri: instance_iri.map(str::to_string),
+                software_iri: software_iri.map(str::to_string),
                 subject_kind: subject_kind.to_string(),
                 scopes: scopes.to_vec(),
                 label: label.map(str::to_string),
@@ -170,9 +176,13 @@ impl Ops {
         Ok(Some(rec))
     }
 
-    pub async fn list_tokens(&self, instance_iri: &str) -> Result<Vec<TokenRecord>> {
-        let rows = sqlx::query("SELECT * FROM api_tokens WHERE instance_iri = ? ORDER BY created_at DESC")
-            .bind(instance_iri)
+    /// Tokens bound to one subject — an instance or a software record. One query, because a
+    /// token is bound to exactly one of the two and the caller knows which it is asking about.
+    pub async fn list_tokens(&self, subject_iri: &str) -> Result<Vec<TokenRecord>> {
+        let rows = sqlx::query(
+            "SELECT * FROM api_tokens WHERE instance_iri = ?1 OR software_iri = ?1 ORDER BY created_at DESC",
+        )
+            .bind(subject_iri)
             .fetch_all(&self.pool)
             .await?;
         rows.iter().map(token_from_row).collect()
@@ -382,6 +392,7 @@ fn token_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<TokenRecord> {
         id: row.try_get("id")?,
         prefix: row.try_get("prefix")?,
         instance_iri: row.try_get("instance_iri")?,
+        software_iri: row.try_get("software_iri")?,
         subject_kind: row.try_get("subject_kind")?,
         scopes: scopes.split_whitespace().map(str::to_string).collect(),
         label: row.try_get("label")?,
@@ -432,7 +443,7 @@ mod tests {
     async fn mints_and_verifies_a_token_once() {
         let ops = Ops::open(":memory:").await.unwrap();
         let (rec, plaintext) = ops
-            .mint_token(Some("https://r/instance/1"), "instance", &["advertise:produce".into()], Some("ci"), None, None)
+            .mint_token(Some("https://r/instance/1"), None, "instance", &["advertise:produce".into()], Some("ci"), None, None)
             .await
             .unwrap();
         assert!(plaintext.starts_with("tar_"));

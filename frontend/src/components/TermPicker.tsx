@@ -12,7 +12,7 @@ export interface Term {
  * Pick vocabulary terms by name instead of by IRI.
  *
  * Nobody should have to know that "data management" is `http://edamontology.org/topic_3071`.
- * This searches the registry's bundled vocabulary (EDAM plus any locally-minted types) and
+ * This searches the registry's bundled vocabularies plus any locally-minted types, and
  * shows what was chosen as removable chips.
  *
  * It keeps a free-IRI escape hatch, deliberately: `ArtifactType` is any IRI (spec D11), so a

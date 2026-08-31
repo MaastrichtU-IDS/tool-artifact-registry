@@ -45,7 +45,25 @@ export function KindChip({ kind, interactive = true }: { kind?: string; interact
   return <Link className="chip" to={`/software?kind=${encodeURIComponent(kind)}`}>{kind}</Link>
 }
 
-/** An EDAM or local artifact type. Falls back to the IRI's last segment when unlabelled. */
+/** Which controlled vocabulary a term's IRI belongs to.
+ *
+ *  Derived from the IRI rather than hard-coded to one vocabulary: the registry already mixes
+ *  several, and it will mix more. An unrecognised IRI gets no badge — better a missing label
+ *  than a wrong one. */
+function vocabularyOf(iri: string): string | null {
+  const known: [string, string][] = [
+    ['edamontology.org', 'EDAM'],
+    ['data.europa.eu/8mn/euroscivoc', 'EuroSciVoc'],
+    ['purl.obolibrary.org/obo/SWO', 'SWO'],
+    ['spdx.org/licenses', 'SPDX'],
+    ['w3id.org/', 'W3ID'],
+  ]
+  for (const [needle, name] of known) if (iri.includes(needle)) return name
+  return null
+}
+
+/** A vocabulary term or a locally-minted type. Falls back to the IRI's last segment when
+ *  unlabelled, and badges whichever vocabulary the IRI belongs to. */
 export function ArtifactTypeChip({
   type, to, interactive = true,
 }: { type: TypeRef; to?: string; interactive?: boolean }) {
@@ -55,7 +73,9 @@ export function ArtifactTypeChip({
     <>
       <span className="dot" aria-hidden="true" />
       {label}
-      {type.source === 'edam' && <span className="muted" style={{ fontSize: 10 }}>EDAM</span>}
+      {vocabularyOf(type.iri) && (
+        <span className="muted" style={{ fontSize: 10 }}>{vocabularyOf(type.iri)}</span>
+      )}
     </>
   )
   if (!interactive) {
@@ -65,7 +85,9 @@ export function ArtifactTypeChip({
     <Link className="chip accent" to={href} title={type.definition || type.iri}>
       <span className="dot" aria-hidden="true" />
       {label}
-      {type.source === 'edam' && <span className="muted" style={{ fontSize: 10 }}>EDAM</span>}
+      {vocabularyOf(type.iri) && (
+        <span className="muted" style={{ fontSize: 10 }}>{vocabularyOf(type.iri)}</span>
+      )}
     </Link>
   )
 }

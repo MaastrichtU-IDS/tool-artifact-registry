@@ -45,8 +45,12 @@ impl OxigraphStore {
 /// Predicates whose objects are sub-resources of the subject rather than records in their own
 /// right (see `GraphStore::describe`). `dct:publisher` is deliberately absent: an Agent is its
 /// own record, shared between many.
-const OWNED_SUBRESOURCE_PREDICATES: [&str; 5] = [
+const OWNED_SUBRESOURCE_PREDICATES: [&str; 6] = [
     "http://www.w3.org/ns/dcat#distribution",
+    // An API description node carries dct:conformsTo and a title *about this record's API*.
+    // Without this the triples exist but never come back with the record, because the node's
+    // IRI is the document's own URL rather than something under the registry's base.
+    "http://www.w3.org/ns/dcat#endpointDescription",
     "https://w3id.org/tar/ns#hasCapability",
     "https://w3id.org/tar/ns#sync",
     "http://spdx.org/rdf/terms#checksum",

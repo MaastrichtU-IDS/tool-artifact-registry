@@ -118,7 +118,7 @@ pub async fn get(
             }
         }
     }
-    Ok(resource_response(&state, &headers, &iri, &artifact, sp, Repr::Json)?)
+    Ok(resource_response(&state, &headers, &iri, &artifact, sp, Repr::Json).await?)
 }
 
 /// Direct artifact registration (spec §7.5). Advertising through `/advertise/*` is the usual

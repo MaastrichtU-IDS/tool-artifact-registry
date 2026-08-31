@@ -336,6 +336,7 @@ pub async fn principal_from_claims(
         return Ok(Principal {
             credential: CredentialKind::OidcWorkload,
             instance_iri: Some(binding.instance_iri),
+            software_iri: None,
             subject: candidates.first().cloned().unwrap_or(sub),
             display_name: binding.label.or(name),
             scopes,
@@ -354,6 +355,16 @@ pub async fn principal_from_claims(
     // puts on interactive logins and never on a `client_credentials` token.
     let is_person =
         !roles.is_empty() || (home_issuer && (is_ui_client || claims.get("sid").is_some()));
+
+    // Nothing is bound to this client at the deployment level. Before concluding it has no
+    // authority, ask whether some *software* names it as a registration client — the
+    // auto-registration mode, where one credential belongs to the application and each of its
+    // deployments registers itself.
+    let software_iri = if is_person {
+        None
+    } else {
+        find_software_for_client(state, issuer, &candidates).await?
+    };
 
     // A person is their `sub`. An unbound workload is its *client id*: that is the string an
     // admin has to copy into `tar:oidcClientId` to make it work, and addendum §3.2 promises
@@ -374,6 +385,7 @@ pub async fn principal_from_claims(
             CredentialKind::OidcWorkload
         },
         instance_iri: None,
+        software_iri,
         subject,
         display_name: name,
         scopes: token_scopes,
@@ -465,3 +477,51 @@ mod tests {
     }
 }
 pub use jsonwebtoken;
+
+/// Find the Software that names one of these OIDC client ids as a registration client
+/// (`tar:registrationClient`) — the auto-registration mode.
+///
+/// Deliberately a *different* predicate from `tar:oidcClientId` on an Instance. Reusing that
+/// one would make a single triple mean "this credential *is* this deployment" in one place and
+/// "this credential may create deployments" in another, and the difference between being a
+/// thing and being allowed to create it is the whole of the authorisation question here.
+pub async fn find_software_for_client(
+    state: &Arc<AppState>,
+    issuer: &str,
+    candidates: &[String],
+) -> AppResult<Option<String>> {
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let values = candidates
+        .iter()
+        .map(|c| format!("\"{}\"", c.replace('\\', "\\\\").replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let q = format!(
+        r#"{prefixes}
+SELECT ?s ?iss WHERE {{
+  GRAPH <{g}> {{
+    VALUES ?cid {{ {values} }}
+    ?s tar:registrationClient ?cid .
+    OPTIONAL {{ ?s tar:oidcIssuer ?iss }}
+  }}
+}}"#,
+        prefixes = ns::PREFIXES,
+        g = ns::G_LOCAL,
+    );
+    let rows = state.store.select(&q).map_err(AppError::from)?;
+    for row in rows.rows {
+        // A client id is only unique within an issuer, so when the record names one it must
+        // match — otherwise any issuer this registry trusts could mint "the same" client.
+        if let Some(declared) = row.str("iss") {
+            if declared.trim_end_matches('/') != issuer {
+                continue;
+            }
+        }
+        if let Some(iri) = row.iri("s") {
+            return Ok(Some(iri));
+        }
+    }
+    Ok(None)
+}

@@ -15,6 +15,9 @@ pub struct AppState {
     /// The shape set every write is validated against (spec §5.3).
     pub shapes: Shapes,
     pub http: reqwest::Client,
+    /// Fetched API descriptions, by URL. In memory and per process: it is a cache of somebody
+    /// else's document, so losing it on restart costs one fetch.
+    pub api_doc_cache: crate::api::apidocs::DocCache,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub version: &'static str,
 }
@@ -51,6 +54,7 @@ impl AppState {
             store,
             ops,
             config,
+            api_doc_cache: Default::default(),
             started_at: chrono::Utc::now(),
             version: env!("CARGO_PKG_VERSION"),
         }

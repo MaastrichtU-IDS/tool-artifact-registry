@@ -4,6 +4,12 @@ import { ApiError, api } from '../lib/api'
 import { useSession } from '../lib/session'
 import { ProblemJsonError, Skeleton } from '../components/common'
 import { TermPicker } from '../components/TermPicker'
+import { API_FORMAT_LABEL } from '../components/ApiDocs'
+import type { ApiDoc } from '../lib/types'
+
+const API_FORMATS = [
+  'openapi', 'asyncapi', 'graphql', 'sparql-service-description', 'ols4', 'postman', 'other',
+]
 
 const KINDS = ['service', 'library', 'cli', 'desktop', 'workflow']
 // repostatus.org concepts, which is what CodeMeta's developmentStatus ranges over.
@@ -28,6 +34,8 @@ export default function SoftwareForm() {
   const [consumes, setConsumes] = useState<string[]>([])
   const [produces, setProduces] = useState<string[]>([])
   const [deployable, setDeployable] = useState(true)
+  const [apiDocs, setApiDocs] = useState<ApiDoc[]>([])
+  const [registrationClients, setRegistrationClients] = useState<string[]>([])
   const [loading, setLoading] = useState(editing)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<Error>()
@@ -51,10 +59,12 @@ export default function SoftwareForm() {
         contact_email: s.contact?.email ?? '', publications: s.publications.join('\n'),
       })
       setKinds(s.kinds ?? (s.kind ? [s.kind] : []))
-      setTopics(s.edam_topics.map((t) => t.iri))
+      setTopics(s.topics.map((t) => t.iri))
       setConsumes((s.capability?.consumes ?? []).map((t) => t.iri))
       setProduces((s.capability?.produces ?? []).map((t) => t.iri))
       setDeployable(s.deployable)
+      setApiDocs(s.api_docs ?? [])
+      setRegistrationClients(s.registration_clients ?? [])
       setLoading(false)
     }).catch((e) => { setError(e as Error); setLoading(false) })
   }, [id])
@@ -81,28 +91,36 @@ export default function SoftwareForm() {
     setSaving(true)
     setError(undefined)
     setFieldErrors({})
+    // `null`, not `undefined`, for an emptied field. The server's PATCH merges, so an absent
+    // key keeps whatever is stored — clearing a value in this form has to say so explicitly or
+    // the old one silently survives. `JSON.stringify` drops `undefined` keys entirely.
+    const cleared = (v: string) => (v ? v : editing ? null : undefined)
     const body = {
       name: form.name,
-      tagline: form.tagline || undefined,
-      description: form.description || undefined,
-      homepage: form.homepage || undefined,
-      code_repository: form.code_repository || undefined,
-      documentation: form.documentation || undefined,
-      download_url: form.download_url || undefined,
+      tagline: cleared(form.tagline),
+      description: cleared(form.description),
+      homepage: cleared(form.homepage),
+      code_repository: cleared(form.code_repository),
+      documentation: cleared(form.documentation),
+      download_url: cleared(form.download_url),
       deployable,
-      image: form.image || undefined,
+      image: cleared(form.image),
       screenshots: lines(form.screenshots),
-      readme: form.readme || undefined,
-      readme_base_url: form.readme_base_url || undefined,
-      license: form.license || undefined,
+      readme: cleared(form.readme),
+      readme_base_url: cleared(form.readme_base_url),
+      // Blank rows are the natural state of an "add another" editor; drop them rather than
+      // sending empty URLs the server would have to reject.
+      api_docs: apiDocs.filter((d) => d.url.trim() !== ''),
+      registration_clients: registrationClients.filter((c) => c.trim() !== ''),
+      license: cleared(form.license),
       kinds,
-      maturity: form.maturity || undefined,
+      maturity: cleared(form.maturity),
       keywords: commas(form.keywords),
-      edam_topics: topics,
+      topics: topics,
       publications: lines(form.publications),
       publisher: form.publisher_name || form.publisher_id
         ? { name: form.publisher_name || undefined, identifier: form.publisher_id || undefined, kind: 'organization' }
-        : undefined,
+        : editing ? null : undefined,
       contact: form.contact_name || form.contact_id || form.contact_email
         ? {
             name: form.contact_name || undefined,
@@ -110,8 +128,8 @@ export default function SoftwareForm() {
             email: form.contact_email || undefined,
             kind: 'person',
           }
-        : undefined,
-      capability: consumes.length || produces.length ? { consumes, produces } : undefined,
+        : editing ? null : undefined,
+      capability: consumes.length || produces.length ? { consumes, produces } : editing ? null : undefined,
     }
     try {
       const saved = editing ? await api.updateSoftware(id!, body) : await api.createSoftware(body)
@@ -305,17 +323,17 @@ export default function SoftwareForm() {
         <legend>Topics and keywords</legend>
         <TermPicker
           id="topics"
-          label="EDAM topics"
+          label="Topics"
           branch="topic"
           value={topics}
           onChange={setTopics}
           placeholder="ontology, data management, imaging…"
-          hint="What the tool is about. Search EDAM by name."
+          hint="What the tool is about. Search the registry's topic vocabularies by name."
         />
         <div className="field">
           <label htmlFor="keywords">Keywords — comma separated</label>
           <input id="keywords" value={form.keywords} onChange={set('keywords')} />
-          <p className="hint">Free text, for things EDAM does not cover.</p>
+          <p className="hint">Free text, for things the vocabularies do not cover.</p>
         </div>
         <div className="field">
           <label htmlFor="publications">Publications — one DOI or URL per line</label>
@@ -325,10 +343,119 @@ export default function SoftwareForm() {
       </fieldset>
 
       <fieldset>
+        <legend>API</legend>
+        <p className="hint" style={{ marginTop: 0 }}>
+          Where a machine-readable description of this software's API lives — an{' '}
+          <code>openapi.json</code>, a SPARQL service description, a GraphQL schema. The
+          registry stores the link, never a copy, and renders OpenAPI documents on the software
+          page.
+        </p>
+        {apiDocs.map((doc, i) => (
+          <div className="row" key={i} style={{ alignItems: 'flex-end', gap: 8 }}>
+            <div className="field" style={{ flex: 3 }}>
+              <label htmlFor={`api_url_${i}`}>Document URL</label>
+              <input
+                id={`api_url_${i}`}
+                value={doc.url}
+                onChange={(e) =>
+                  setApiDocs(apiDocs.map((d, j) => (i === j ? { ...d, url: e.target.value } : d)))
+                }
+                placeholder="https://example.org/openapi.json"
+              />
+            </div>
+            <div className="field" style={{ flex: 2 }}>
+              <label htmlFor={`api_format_${i}`}>Format</label>
+              <select
+                id={`api_format_${i}`}
+                value={doc.format || ''}
+                onChange={(e) =>
+                  setApiDocs(apiDocs.map((d, j) => (i === j ? { ...d, format: e.target.value } : d)))
+                }
+              >
+                <option value="">Guess from the URL</option>
+                {API_FORMATS.map((f) => (
+                  <option key={f} value={f}>
+                    {API_FORMAT_LABEL[f]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field" style={{ flex: 2 }}>
+              <label htmlFor={`api_title_${i}`}>Title</label>
+              <input
+                id={`api_title_${i}`}
+                value={doc.title ?? ''}
+                onChange={(e) =>
+                  setApiDocs(apiDocs.map((d, j) => (i === j ? { ...d, title: e.target.value } : d)))
+                }
+                placeholder="REST API"
+              />
+            </div>
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => setApiDocs(apiDocs.filter((_, j) => j !== i))}
+              aria-label={`Remove API description ${i + 1}`}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="btn ghost"
+          onClick={() => setApiDocs([...apiDocs, { url: '', format: '' }])}
+        >
+          Add an API description
+        </button>
+      </fieldset>
+
+      <fieldset>
+        <legend>Deployment registration</legend>
+        <p className="hint" style={{ marginTop: 0 }}>
+          Two ways a deployment gets into this registry. Either a curator creates it here by
+          hand, or the application registers itself — list the OIDC client ids allowed to do
+          that below, or issue an auto-registration key from the software's page. A
+          self-registering deployment publishes its own endpoint, version and health endpoint,
+          and keeps them current.
+        </p>
+        {registrationClients.map((c, i) => (
+          <div className="row" key={i} style={{ alignItems: 'flex-end', gap: 8 }}>
+            <div className="field" style={{ flex: 1 }}>
+              <label htmlFor={`regclient_${i}`}>OIDC client id</label>
+              <input
+                id={`regclient_${i}`}
+                value={c}
+                onChange={(e) =>
+                  setRegistrationClients(registrationClients.map((v, j) => (i === j ? e.target.value : v)))
+                }
+                placeholder="sulo-schema-builder"
+              />
+            </div>
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => setRegistrationClients(registrationClients.filter((_, j) => j !== i))}
+              aria-label={`Remove registration client ${i + 1}`}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="btn ghost"
+          onClick={() => setRegistrationClients([...registrationClients, ''])}
+        >
+          Allow a client to register deployments
+        </button>
+      </fieldset>
+
+      <fieldset>
         <legend>Capability</legend>
         <p className="hint" style={{ marginTop: 0 }}>
-          Artifact types are any IRI. EDAM is the recommended default; a registry-local type
-          IRI works for the things EDAM does not name.
+          Artifact types are any IRI. Search picks from the vocabularies this registry carries;
+          a registry-local type IRI works for the things none of them name.
         </p>
         <TermPicker
           id="consumes"
@@ -337,7 +464,7 @@ export default function SoftwareForm() {
           value={consumes}
           onChange={setConsumes}
           placeholder="ontology, alignment, sequence…"
-          hint="What it takes in. EDAM data types and this registry's own types both appear; an IRI can be pasted directly."
+          hint="What it takes in. Vocabulary terms and this registry's own types both appear; an IRI can be pasted directly."
         />
         <TermPicker
           id="produces"

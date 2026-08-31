@@ -18,7 +18,7 @@ export default function InstanceForm() {
 
   const [form, setForm] = useState({
     label: '', software: params.get('software') ?? '', release: '', endpoint_url: '',
-    endpoint_description: '', operator_name: '', availability: '', jurisdiction: '',
+    endpoint_description: '', health_endpoint: '', operator_name: '', availability: '', jurisdiction: '',
     description: '', oidc_client_id: '', oidc_issuer: '',
   })
   const [scopes, setScopes] = useState<string[]>(['advertise:produce', 'advertise:consume'])
@@ -39,6 +39,7 @@ export default function InstanceForm() {
         release: i.release?.split('/').pop() ?? '',
         endpoint_url: i.endpoint_url ?? '',
         endpoint_description: i.endpoint_description ?? '',
+        health_endpoint: i.health_endpoint ?? '',
         operator_name: i.operator?.name ?? '',
         availability: i.availability ?? '',
         jurisdiction: i.jurisdiction ?? '',
@@ -83,6 +84,7 @@ export default function InstanceForm() {
       release: form.release || undefined,
       endpoint_url: form.endpoint_url || undefined,
       endpoint_description: form.endpoint_description || undefined,
+      health_endpoint: form.health_endpoint || undefined,
       operator: form.operator_name ? { name: form.operator_name, kind: 'organization' } : undefined,
       availability: form.availability || undefined,
       jurisdiction: form.jurisdiction || undefined,
@@ -152,6 +154,21 @@ export default function InstanceForm() {
         <div className="field">
           <label htmlFor="openapi">Endpoint description (OpenAPI)</label>
           <input id="openapi" value={form.endpoint_description} onChange={set('endpoint_description')} />
+        </div>
+        <div className={field('health_endpoint')}>
+          <label htmlFor="health_endpoint">Health endpoint</label>
+          <input
+            id="health_endpoint"
+            value={form.health_endpoint}
+            onChange={set('health_endpoint')}
+            placeholder="https://shacl.ids.unimaas.nl/healthz"
+          />
+          <p className="hint">
+            Where the registry checks that this deployment is alive. It must answer 2xx. Leave
+            it empty and the endpoint URL itself is probed instead, where anything that answers
+            counts as up — many healthy services return 401 or 404 at their root.
+          </p>
+          {err('health_endpoint')}
         </div>
       </fieldset>
 

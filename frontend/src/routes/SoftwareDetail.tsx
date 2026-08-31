@@ -10,6 +10,7 @@ import {
   ArtifactTypeChip, HealthDot, KindChip, LicenseChip, OriginChip, RelativeTime,
 } from '../components/chips'
 import { Markdown } from '../components/Markdown'
+import { ApiDocs } from '../components/ApiDocs'
 import { useState } from 'react'
 import { ApiError } from '../lib/api'
 import type { Software as SoftwareRecord } from '../lib/types'
@@ -50,6 +51,11 @@ export default function SoftwareDetail() {
                 {/* Edit affordances are absent for foreign records, never disabled. */}
                 {isCurator && !foreign && !s.tombstoned && (
                   <Link className="chip" to={`/software/${s.id}/edit`}>Edit</Link>
+                )}
+                {/* Only offered where a deployment could exist: an auto-registration key for
+                    software that cannot be hosted would create records nothing can fill in. */}
+                {isCurator && !foreign && !s.tombstoned && s.deployable && (
+                  <Link className="chip" to={`/software/${s.id}/tokens`}>Auto-registration</Link>
                 )}
               </div>
             </div>
@@ -243,6 +249,18 @@ export default function SoftwareDetail() {
             </section>
           )}
 
+          {s.api_docs?.length > 0 && (
+            <section className="card">
+              <h2>API</h2>
+              <p className="hint" style={{ marginTop: 0 }}>
+                Machine-readable descriptions of this software's API. The document is fetched
+                through this registry, because most are served without CORS headers and a
+                browser cannot read them directly.
+              </p>
+              <ApiDocs softwareId={s.id} docs={s.api_docs} />
+            </section>
+          )}
+
           {s.publications.length > 0 && (
             <section className="card">
               <h2>Publications</h2>
@@ -264,13 +282,13 @@ export default function SoftwareDetail() {
               {s.maturity && <li><span className="chip">{s.maturity}</span></li>}
             </ul>
             <dl>
-              {s.edam_topics.length > 0 && (
+              {s.topics.length > 0 && (
                 <>
-                  <dt>EDAM topics</dt>
+                  <dt>Topics</dt>
                   <dd>
                     <ul className="chips">
-                      {s.edam_topics.map((t) => (
-                        <li key={t.iri}><ArtifactTypeChip type={t} to={`/software?edam_topic=${encodeURIComponent(t.iri)}`} /></li>
+                      {s.topics.map((t) => (
+                        <li key={t.iri}><ArtifactTypeChip type={t} to={`/software?topic=${encodeURIComponent(t.iri)}`} /></li>
                       ))}
                     </ul>
                   </dd>

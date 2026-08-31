@@ -24,7 +24,7 @@ pub struct SoftwareFilter {
     pub q: Option<String>,
     pub license: Option<String>,
     pub publisher: Option<String>,
-    pub edam_topic: Option<String>,
+    pub topic: Option<String>,
     pub keyword: Option<String>,
     pub kind: Option<String>,
     /// Matchmaking passthrough: software whose capability produces/consumes a type.
@@ -49,7 +49,7 @@ fn where_body(f: &SoftwareFilter) -> String {
     for (value, pattern) in [
         (&f.license, "GRAPH ?g {{ ?s dct:license <{v}> }}"),
         (&f.publisher, "GRAPH ?g {{ ?s dct:publisher <{v}> }}"),
-        (&f.edam_topic, "GRAPH ?g {{ ?s dct:subject <{v}> }}"),
+        (&f.topic, "GRAPH ?g {{ ?s dct:subject <{v}> }}"),
         (&f.produces, "GRAPH ?g {{ ?s tar:hasCapability/tar:produces <{v}> }}"),
         (&f.consumes, "GRAPH ?g {{ ?s tar:hasCapability/tar:consumes <{v}> }}"),
     ] {
@@ -104,7 +104,7 @@ pub async fn list(
 fn facets(ctx: &Ctx) -> AppResult<Vec<Facet>> {
     let mut out = Vec::new();
     for (name, predicate) in
-        [("license", "dct:license"), ("kind", "schema:applicationCategory|tar:kind"), ("edam_topic", "dct:subject")]
+        [("license", "dct:license"), ("kind", "schema:applicationCategory|tar:kind"), ("topic", "dct:subject")]
     {
         let q = format!(
             "{p}\nSELECT ?v (COUNT(DISTINCT ?s) AS ?n) WHERE {{ GRAPH ?g {{ ?s a <{t}> ; {predicate} ?v }} }} GROUP BY ?v ORDER BY DESC(?n) LIMIT 25",
@@ -151,7 +151,7 @@ pub async fn get(
     if let Some(r) = &sw.code_repository {
         sp = sp.item(r, None);
     }
-    Ok(resource_response(&state, &headers, &iri, &sw, sp, Repr::Json)?)
+    Ok(resource_response(&state, &headers, &iri, &sw, sp, Repr::Json).await?)
 }
 
 pub async fn create(
@@ -177,11 +177,16 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(dom::load_software(&ctx, &iri)?)))
 }
 
+/// PATCH merges: the body carries only what changes, and everything else stands.
+///
+/// It used to take a whole `SoftwareIn`, which made `{"api_docs": [...]}` fail with "missing
+/// field `name`" — a replace wearing a PATCH's method. The UI never noticed because its form
+/// always sends every field; anything else did.
 pub async fn patch(
     State(state): State<Arc<AppState>>,
     principal: Principal,
     Path(id): Path<String>,
-    Json(input): Json<SoftwareIn>,
+    Json(body): Json<serde_json::Value>,
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
     let iri = ids::iri_for(state.base(), Kind::Software, &id);
@@ -192,6 +197,14 @@ pub async fn patch(
     if existing.is_empty() {
         return Err(AppError::not_found(format!("no software at {iri}")));
     }
+    let ctx = Ctx::new(&state).await?;
+    let current = software_in_from(&dom::load_software(&ctx, &iri)?);
+    let merged = super::instances::merge_json(
+        serde_json::to_value(current).map_err(|e| AppError::internal(e.to_string()))?,
+        body,
+    );
+    let input: SoftwareIn = serde_json::from_value(merged)
+        .map_err(|e| AppError::bad_request(format!("could not apply the change: {e}")))?;
     if let Some(sync) = &input.sync {
         crate::domain::forge::check_fields(&sync.fields)?;
     }
@@ -419,12 +432,14 @@ fn software_in_from(s: &crate::model::Software) -> SoftwareIn {
         screenshots: s.screenshots.clone(),
         readme: s.readme.clone(),
         readme_base_url: s.readme_base_url.clone(),
+        api_docs: s.api_docs.clone(),
+        registration_clients: s.registration_clients.clone(),
         license: s.license.clone(),
         kinds: s.kinds.clone(),
         kind: None,
         maturity: s.maturity.clone(),
         deployable: Some(s.deployable),
-        edam_topics: s.edam_topics.iter().map(|t| t.iri.clone()).collect(),
+        topics: s.topics.iter().map(|t| t.iri.clone()).collect(),
         keywords: s.keywords.clone(),
         publisher: s.publisher.as_ref().map(agent_in),
         contact: s.contact.as_ref().map(agent_in),
@@ -544,7 +559,7 @@ pub async fn export_biotools(
             "workflow" => "Workflow",
             _ => "Command-line tool",
         }]).unwrap_or_default(),
-        "topic": sw.edam_topics.iter().map(|t| serde_json::json!({"uri": t.iri, "term": t.label})).collect::<Vec<_>>(),
+        "topic": sw.topics.iter().map(|t| serde_json::json!({"uri": t.iri, "term": t.label})).collect::<Vec<_>>(),
         "function": function,
         "license": sw.license.as_deref().map(ids::iri_tail),
         "version": sw.latest_release.as_ref().map(|r| vec![r.version.clone()]).unwrap_or_default(),

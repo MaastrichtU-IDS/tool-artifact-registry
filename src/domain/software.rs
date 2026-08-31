@@ -50,6 +50,27 @@ pub fn software_quads(base: &str, iri: &str, input: &SoftwareIn, actor: &str, cr
     n.links(ns::SCHEMA, "screenshot", &input.screenshots);
     n.opt_text(ns::TAR, "readme", &input.readme);
     n.opt_link(ns::TAR, "readmeBaseURL", &input.readme_base_url);
+    // API descriptions as dcat:endpointDescription — DCAT's own definition is "a description of
+    // the service endpoint, including its operations, parameters", with OpenAPI given as the
+    // worked example. The document node carries dct:conformsTo naming which specification it
+    // follows, so a consumer that has never heard of this registry still knows what it is
+    // holding. Nothing here is OpenAPI-only: a SPARQL service description or an OLS4 route
+    // listing is the same shape with a different conformsTo.
+    for d in &input.api_docs {
+        if d.url.trim().is_empty() {
+            continue;
+        }
+        let format = d.normalised_format();
+        let mut dn = Node::local(d.url.trim());
+        dn.a(&format!("{}Standard", ns::DCT));
+        dn.text(ns::TAR, "apiFormat", &format);
+        if let Some(spec) = crate::model::api_format_iri(&format) {
+            dn.link(ns::DCT, "conformsTo", spec);
+        }
+        dn.opt_text(ns::DCT, "title", &d.title);
+        dn.opt_text(ns::DCT, "description", &d.description);
+        n.child(ns::DCAT, "endpointDescription", dn);
+    }
     n.opt_link(ns::DCT, "license", &input.license);
     // Audit 2026-08-30: schema:applicationCategory already carried the kind — the duplicate
     // tar:kind triple is gone. codemeta:developmentStatus is CodeMeta's term for exactly
@@ -69,7 +90,8 @@ pub fn software_quads(base: &str, iri: &str, input: &SoftwareIn, actor: &str, cr
     if let Some(iri) = input.maturity.as_deref().and_then(repostatus_iri) {
         n.link(ns::CODEMETA, "developmentStatus", &iri);
     }
-    n.links(ns::DCT, "subject", &input.edam_topics);
+    n.texts(ns::TAR, "registrationClient", &input.registration_clients);
+    n.links(ns::DCT, "subject", &input.topics);
     n.texts(ns::SCHEMA, "keywords", &input.keywords);
     n.links(ns::DCT, "references", &input.publications);
     n.datetime(ns::DCT, "created", &created.unwrap_or_else(|| chrono::Utc::now().to_rfc3339()));
@@ -201,6 +223,25 @@ pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
         screenshots: p.iris(ns::SCHEMA, "screenshot"),
         readme: p.str(ns::TAR, "readme"),
         readme_base_url: p.iri(ns::TAR, "readmeBaseURL"),
+        api_docs: p
+            .node_keys(ns::DCAT, "endpointDescription")
+            .iter()
+            .filter_map(|k| {
+                let dp = p.nested_for(k)?;
+                Some(ApiDoc {
+                    url: k.trim_start_matches('<').trim_end_matches('>').to_string(),
+                    // The literal is authoritative; conformsTo is the fallback for records a
+                    // peer wrote without it.
+                    format: dp.str(ns::TAR, "apiFormat").or_else(|| {
+                        dp.iri(ns::DCT, "conformsTo")
+                            .and_then(|i| crate::model::api_format_from_iri(&i).map(str::to_string))
+                    })
+                    .unwrap_or_else(|| "other".into()),
+                    title: dp.str(ns::DCT, "title"),
+                    description: dp.str(ns::DCT, "description"),
+                })
+            })
+            .collect(),
         license: p.iri(ns::DCT, "license"),
         kind: kinds.first().cloned(),
         kinds,
@@ -209,7 +250,8 @@ pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
             p.iri(ns::CODEMETA, "developmentStatus").and_then(|i| i.rsplit('#').next().map(str::to_string))
         }),
         deployable: p.bool(ns::TAR, "deployable").unwrap_or(true),
-        edam_topics: ctx.type_refs(&p.iris(ns::DCT, "subject")),
+        registration_clients: p.strs(ns::TAR, "registrationClient"),
+        topics: ctx.type_refs(&p.iris(ns::DCT, "subject")),
         keywords: p.strs(ns::SCHEMA, "keywords"),
         publisher: ctx.opt_agent_ref(p.iri(ns::DCT, "publisher")),
         contact: ctx.opt_agent_ref(p.iri(ns::CODEMETA, "maintainer").or_else(|| p.iri(ns::TAR, "contact"))),

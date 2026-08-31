@@ -1669,3 +1669,541 @@ async fn the_type_list_is_types_in_use_not_the_whole_bundled_vocabulary() {
     let (_, hits) = h.get("/api/v1/vocab/search?q=sequence%20alignment&branch=data&limit=5").await;
     assert!(!hits["items"].as_array().unwrap().is_empty(), "vocabulary search should still reach EDAM");
 }
+
+
+// ------------------------------------------------------- self-advertisement
+
+#[tokio::test]
+async fn a_deployment_records_its_own_endpoint_without_losing_the_rest() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    // PATCH means merge. It used to replace, so a deployment recording an endpoint silently
+    // dropped its operator, jurisdiction, scopes and OIDC binding — everything it did not
+    // happen to resend.
+    let (status, patched, _) = h
+        .req(
+            "PATCH",
+            &format!("/api/v1/instances/{}", f.instance_id),
+            Some(&f.token),
+            Some(json!({"endpoint_url": "https://shacl.ids.unimaas.nl"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{patched}");
+    assert_eq!(patched["endpoint_url"], "https://shacl.ids.unimaas.nl");
+    assert_eq!(patched["label"], "shacl.ids.unimaas.nl", "the label survived");
+    assert_eq!(patched["oidc_client_id"], "shacl-manager-ids3", "the binding survived");
+    assert_eq!(patched["allowed_scopes"].as_array().unwrap().len(), 2, "the scopes survived");
+
+    // An explicit null is the way to clear a field, and the only way to tell "leave it" from
+    // "erase it" once absent means leave it.
+    let (_, cleared, _) = h
+        .req(
+            "PATCH",
+            &format!("/api/v1/instances/{}", f.instance_id),
+            Some(&f.token),
+            Some(json!({"endpoint_url": null})),
+        )
+        .await;
+    assert!(cleared["endpoint_url"].is_null());
+    assert_eq!(cleared["oidc_client_id"], "shacl-manager-ids3");
+}
+
+#[tokio::test]
+async fn a_service_announces_itself_and_is_stamped_as_seen() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    let (status, announced, _) = h
+        .req(
+            "PUT",
+            "/api/v1/instances/self",
+            Some(&f.token),
+            Some(json!({"endpoint_url": "https://shacl.ids.unimaas.nl", "jurisdiction": "NL"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{announced}");
+    assert_eq!(announced["endpoint_url"], "https://shacl.ids.unimaas.nl");
+    assert_eq!(announced["jurisdiction"], "NL");
+    assert!(announced["last_seen_at"].is_string(), "an announcement is a liveness signal");
+    // It updated its own record rather than creating a second one.
+    let (_, list) = h.get("/api/v1/instances").await;
+    assert_eq!(list["total"], 1);
+}
+
+#[tokio::test]
+async fn an_unbound_workload_cannot_conjure_a_deployment_by_default() {
+    let h = harness_with_oidc(true).await;
+    h.fixture().await;
+    // A verified token from a trusted issuer, bound to no Instance. Registering it silently
+    // would mean the registry gains records for anything holding a trusted token.
+    let token = jwt(json!({
+        "iss": ISSUER, "aud": BASE, "exp": exp(), "sub": "service-account-newcomer",
+        "azp": "newcomer", "scope": "advertise:produce"
+    }));
+    let (status, body, _) = h
+        .req("PUT", "/api/v1/instances/self", Some(&token), Some(json!({"software": "whatever"})))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let detail = body["detail"].as_str().unwrap();
+    assert!(detail.contains("newcomer"), "it must name the client id an admin has to register: {detail}");
+    assert!(detail.contains("TAR_OIDC_AUTO_REGISTER_INSTANCES"), "{detail}");
+}
+
+#[tokio::test]
+async fn a_person_cannot_announce_a_deployment_as_if_they_were_one() {
+    let h = harness().await;
+    h.fixture().await;
+    // The root credential is an administrator, not a running service. Which Instance a caller
+    // *is* comes from the credential, so a principal that is not one has nothing to announce.
+    let (status, body, _) = h
+        .req("PUT", "/api/v1/instances/self", Some(ROOT), Some(json!({"endpoint_url": "https://x.example"})))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(body["detail"].as_str().unwrap().contains("only a deployment may announce itself"));
+}
+
+// ------------------------------------------- markdown representations and llms.txt
+
+/// Fetch a URI asking for markdown, returning the body as text.
+async fn markdown(h: &Harness, uri: &str) -> (StatusCode, String, axum::http::HeaderMap) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header("accept", "text/markdown")
+        .body(Body::empty())
+        .unwrap();
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let headers = resp.headers().clone();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).to_string(), headers)
+}
+
+#[tokio::test]
+async fn an_agent_reads_a_software_record_as_markdown_without_a_parser() {
+    let h = harness().await;
+    let f = h.fixture().await;
+
+    // Both routes to the same representation: the `.md` extension and the Accept header.
+    let (status, body, headers) = markdown(&h, &format!("/software/{}", f.software_id)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers.get("content-type").unwrap().to_str().unwrap(),
+        "text/markdown; charset=utf-8"
+    );
+    let (_, by_extension, _) = markdown(&h, &format!("/software/{}.md", f.software_id)).await;
+    assert_eq!(body, by_extension, "`.md` and Accept must render the same thing");
+
+    assert!(body.starts_with("# shacl-manager"), "{body}");
+    // The canonical IRI is written out, so the agent's next fetch is obvious.
+    assert!(body.contains(&format!("{BASE}/software/{}", f.software_id)), "{body}");
+    // And the other representations are named rather than assumed.
+    assert!(body.contains(".ttl"), "{body}");
+    assert!(body.contains("SHACL shape management and validation"), "{body}");
+    assert!(body.contains("Apache-2.0"), "{body}");
+    // The deployment is listed, so the agent can reach the running thing.
+    assert!(body.contains("shacl.ids.unimaas.nl"), "{body}");
+}
+
+#[tokio::test]
+async fn markdown_says_plainly_when_software_cannot_be_deployed() {
+    let h = harness().await;
+    let (status, sw) = h
+        .post(
+            "/api/v1/software",
+            ROOT,
+            json!({"name": "RDFCraft", "kinds": ["desktop"], "deployable": false}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    let (_, body, _) = markdown(&h, &format!("/software/{}.md", sw["id"].as_str().unwrap())).await;
+    // An agent that skims this must not come away thinking there is an endpoint to call.
+    assert!(body.contains("**Deployable:** no"), "{body}");
+    assert!(body.contains("cannot be hosted"), "{body}");
+}
+
+#[tokio::test]
+async fn every_record_kind_renders_as_markdown() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    let (status, art) = h
+        .post(
+            "/api/v1/advertise/produced",
+            &f.token,
+            json!({
+                "run": {"status": "success"},
+                "artifacts": [{
+                    "title": "Pizza shapes",
+                    "conforms_to": "http://edamontology.org/data_2048",
+                    "creators": [{"name": "A Person", "kind": "person"}],
+                    "distributions": [{"download_url": "https://example.org/pizza.ttl", "media_type": "text/turtle"}]
+                }]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{art}");
+
+    let artifact_iri = art["artifacts"][0].as_str().unwrap();
+    let artifact_id = artifact_iri.rsplit('/').next().unwrap();
+    let (status, body, _) = markdown(&h, &format!("/artifact/{artifact_id}.md")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("# Pizza shapes"), "{body}");
+    assert!(body.contains("A Person"), "{body}");
+    assert!(body.contains("https://example.org/pizza.ttl"), "{body}");
+
+    let run_id = art["run"].as_str().unwrap().rsplit('/').next().unwrap().to_string();
+    let (status, body, _) = markdown(&h, &format!("/run/{run_id}.md")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("## Produced"), "{body}");
+    assert!(body.contains("Pizza shapes"), "{body}");
+
+    let (status, body, _) = markdown(&h, &format!("/instance/{}.md", f.instance_id)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("shacl.ids.unimaas.nl"), "{body}");
+}
+
+#[tokio::test]
+async fn llms_txt_is_a_map_of_the_whole_registry_and_needs_no_credential() {
+    let h = harness().await;
+    let f = h.fixture().await;
+
+    let (status, body, headers) = markdown(&h, "/llms.txt").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        headers.get("content-type").unwrap().to_str().unwrap(),
+        "text/markdown; charset=utf-8"
+    );
+    // The llmstxt.org shape: an H1, then a blockquote summary.
+    assert!(body.starts_with("# "), "{body}");
+    assert!(body.contains("\n> "), "{body}");
+    // It tells an unfamiliar client how to read a record...
+    assert!(body.contains(".md"), "{body}");
+    assert!(body.contains(".ttl"), "{body}");
+    // ...names the entry points...
+    assert!(body.contains("/api/v1/search"), "{body}");
+    assert!(body.contains("/sparql"), "{body}");
+    assert!(body.contains("/api/v1/vocab/search"), "{body}");
+    // ...and lists what is actually here.
+    assert!(body.contains("shacl-manager"), "{body}");
+    assert!(body.contains(&f.software_id), "{body}");
+    // The warnings that stop an agent inventing things.
+    assert!(body.contains("deployable"), "{body}");
+    assert!(body.contains("withdrawn"), "{body}");
+}
+
+#[tokio::test]
+async fn a_withdrawn_record_still_resolves_and_says_so() {
+    let h = harness().await;
+    let (status, sw) = h.post("/api/v1/software", ROOT, json!({"name": "gone-tool"})).await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    let id = sw["id"].as_str().unwrap().to_string();
+    let (status, _, _) = h.req("DELETE", &format!("/api/v1/software/{id}"), Some(ROOT), None).await;
+    assert!(status.is_success(), "{status}");
+
+    let (status, body, _) = markdown(&h, &format!("/software/{id}.md")).await;
+    assert_eq!(status, StatusCode::OK, "an IRI that once meant something keeps meaning it");
+    assert!(body.contains("Withdrawn"), "{body}");
+
+    // ...and it is not in the index a fresh agent reads.
+    let (_, index, _) = markdown(&h, "/llms.txt").await;
+    assert!(!index.contains("gone-tool"), "{index}");
+}
+
+// ------------------------------------------------------------------- API docs
+
+#[tokio::test]
+async fn api_descriptions_round_trip_as_dcat_endpoint_descriptions() {
+    let h = harness().await;
+    let (status, sw) = h
+        .post(
+            "/api/v1/software",
+            ROOT,
+            json!({
+                "name": "ontoexplorer",
+                "kinds": ["service"],
+                "api_docs": [
+                    {"url": "https://onto.example.org/openapi.json", "format": "openapi", "title": "REST API"},
+                    {"url": "https://onto.example.org/sparql", "format": "sparql-service-description"},
+                    // No format given: it is guessed from the URL rather than lost.
+                    {"url": "https://onto.example.org/v2/swagger.json"}
+                ]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    let id = sw["id"].as_str().unwrap().to_string();
+
+    let (status, back) = h.get(&format!("/api/v1/software/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let docs = back["api_docs"].as_array().unwrap();
+    assert_eq!(docs.len(), 3, "{back}");
+    let by_url: std::collections::HashMap<&str, &Value> =
+        docs.iter().map(|d| (d["url"].as_str().unwrap(), d)).collect();
+    assert_eq!(by_url["https://onto.example.org/openapi.json"]["format"], "openapi");
+    assert_eq!(by_url["https://onto.example.org/openapi.json"]["title"], "REST API");
+    assert_eq!(
+        by_url["https://onto.example.org/sparql"]["format"],
+        "sparql-service-description",
+        "not everything is OpenAPI"
+    );
+    assert_eq!(by_url["https://onto.example.org/v2/swagger.json"]["format"], "openapi");
+
+    // The RDF uses DCAT's own term, not an invention of ours, and says which spec it follows.
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/software/{id}.ttl"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    let ttl = String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes()).to_string();
+    assert!(ttl.contains("endpointDescription"), "{ttl}");
+    assert!(ttl.contains("spec.openapis.org"), "{ttl}");
+
+    // And an agent reading the markdown is told where to fetch them.
+    let (_, md, _) = markdown(&h, &format!("/software/{id}.md")).await;
+    assert!(md.contains("## API"), "{md}");
+    assert!(md.contains("https://onto.example.org/openapi.json"), "{md}");
+    assert!(md.contains("SPARQL service description"), "{md}");
+}
+
+#[tokio::test]
+async fn the_api_doc_proxy_only_fetches_what_the_record_itself_declares() {
+    let h = harness().await;
+    let (status, sw) = h
+        .post(
+            "/api/v1/software",
+            ROOT,
+            json!({"name": "svc", "api_docs": [{"url": "https://onto.example.org/openapi.json"}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    let id = sw["id"].as_str().unwrap().to_string();
+
+    // An index the record does not have is a 404, not a fetch.
+    let (status, body) = h.get(&format!("/api/v1/software/{id}/api-doc?n=7")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    // There is no URL parameter to pass at all: the endpoint indexes the record's own list, so
+    // it cannot be pointed at an arbitrary host.
+    let (status, _) = h.get(&format!("/api/v1/software/{id}/api-doc?url=http://169.254.169.254/latest/meta-data")).await;
+    assert_ne!(status, StatusCode::OK, "an unreachable declared doc must not 200");
+}
+
+// -------------------------------------------- registration mode 2: auto-register
+
+#[tokio::test]
+async fn an_application_key_registers_a_deployment_and_then_keeps_it_updated() {
+    let h = harness().await;
+    let (status, sw) = h
+        .post("/api/v1/software", ROOT, json!({"name": "sulo-schema-builder", "kinds": ["service"]}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    let software_id = sw["id"].as_str().unwrap().to_string();
+
+    // A curator issues one key for the application itself, not for a deployment.
+    let (status, minted) = h
+        .post(&format!("/api/v1/software/{software_id}/tokens"), ROOT, json!({"label": "cluster deploys"}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{minted}");
+    let key = minted["token"].as_str().unwrap().to_string();
+    assert_eq!(minted["record"]["software_iri"], format!("{BASE}/software/{software_id}"));
+    assert!(minted["record"]["scopes"].as_array().unwrap().iter().any(|s| s == "register:instance"), "{minted}");
+
+    // The deployment registers itself. It never had to be created by hand.
+    let (status, first, _) = h
+        .req(
+            "PUT",
+            "/api/v1/instances/self",
+            Some(&key),
+            Some(json!({
+                "label": "sulo on ids-cluster",
+                "instance_key": "ids-cluster",
+                "endpoint_url": "https://sulo.ids.example",
+                "health_endpoint": "https://sulo.ids.example/healthz",
+                "availability": "restricted"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let iri = first["iri"].as_str().unwrap().to_string();
+    assert_eq!(first["software"], format!("{BASE}/software/{software_id}"));
+    assert_eq!(first["health_endpoint"], "https://sulo.ids.example/healthz");
+
+    // Announcing again updates that record rather than creating a second one.
+    let (status, second, _) = h
+        .req(
+            "PUT",
+            "/api/v1/instances/self",
+            Some(&key),
+            Some(json!({"instance_key": "ids-cluster", "endpoint_url": "https://sulo2.ids.example"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["iri"], iri, "the same deployment must not register twice");
+    assert_eq!(second["endpoint_url"], "https://sulo2.ids.example");
+    // And the rest of what it said the first time survives.
+    assert_eq!(second["label"], "sulo on ids-cluster", "{second}");
+    assert_eq!(second["health_endpoint"], "https://sulo.ids.example/healthz", "{second}");
+
+    // A second deployment of the same application, under the same key, is a second record.
+    let (status, other, _) = h
+        .req(
+            "PUT",
+            "/api/v1/instances/self",
+            Some(&key),
+            Some(json!({"label": "sulo on dev", "instance_key": "dev-cluster"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+    assert_ne!(other["iri"], iri);
+
+    let (_, list) = h.get(&format!("/api/v1/instances?software={software_id}")).await;
+    assert_eq!(list["total"], 2, "{list}");
+}
+
+#[tokio::test]
+async fn an_application_key_cannot_register_a_deployment_of_a_different_application() {
+    let h = harness().await;
+    let (_, mine) = h.post("/api/v1/software", ROOT, json!({"name": "mine"})).await;
+    let (_, theirs) = h.post("/api/v1/software", ROOT, json!({"name": "theirs"})).await;
+    let mine_id = mine["id"].as_str().unwrap().to_string();
+    let theirs_id = theirs["id"].as_str().unwrap().to_string();
+
+    let (_, minted) = h.post(&format!("/api/v1/software/{mine_id}/tokens"), ROOT, json!({})).await;
+    let key = minted["token"].as_str().unwrap().to_string();
+
+    let (status, body, _) = h
+        .req(
+            "PUT",
+            "/api/v1/instances/self",
+            Some(&key),
+            Some(json!({"label": "impostor", "software": theirs_id})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // Nothing was created.
+    let (_, list) = h.get(&format!("/api/v1/instances?software={theirs_id}")).await;
+    assert_eq!(list["total"], 0, "{list}");
+}
+
+#[tokio::test]
+async fn only_a_curator_may_issue_an_application_key() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    // The instance's own advertise token is a perfectly good credential, and still must not be
+    // able to mint a standing permission to add records.
+    let (status, body) = h
+        .post(&format!("/api/v1/software/{}/tokens", f.software_id), &f.token, json!({}))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn a_curator_created_deployment_declares_where_to_probe_it() {
+    let h = harness().await;
+    let (_, sw) = h.post("/api/v1/software", ROOT, json!({"name": "svc", "kinds": ["service"]})).await;
+    let software_id = sw["id"].as_str().unwrap().to_string();
+
+    // Mode 1 unchanged: a curator creates the record, and may now say where health lives.
+    let (status, inst) = h
+        .post(
+            "/api/v1/instances",
+            ROOT,
+            json!({
+                "label": "svc prod",
+                "software": software_id,
+                "endpoint_url": "https://svc.example",
+                "health_endpoint": "https://svc.example/healthz"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{inst}");
+    assert_eq!(inst["health_endpoint"], "https://svc.example/healthz");
+    // Never probed yet is "unknown", which is a different fact from "down".
+    assert_eq!(inst["health"], "unknown", "{inst}");
+
+    // A caller cannot claim ownership of a record it did not self-register.
+    let (status, patched, _) = h
+        .req(
+            "PATCH",
+            &format!("/api/v1/instances/{}", inst["id"].as_str().unwrap()),
+            Some(ROOT),
+            Some(json!({"self_registered_by": "urn:tar:token:someone-else", "instance_key": "hijack"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{patched}");
+    assert!(patched["self_registered_by"].is_null(), "{patched}");
+    assert!(patched["instance_key"].is_null(), "{patched}");
+}
+
+#[tokio::test]
+async fn sparql_stays_public_even_when_rest_reads_are_closed() {
+    let mut config = Config::for_test(BASE);
+    config.root_token = Some(ROOT.into());
+    // The operator closed anonymous REST reads but left the query endpoint alone.
+    config.public_read = false;
+    let store = Arc::new(OxigraphStore::memory().unwrap());
+    let ops = Ops::open(":memory:").await.unwrap();
+    let state = Arc::new(AppState::from_parts(config, store, ops));
+    tar::seed::load_vocab(&state).unwrap();
+    let h = Harness { app: tar::app(state.clone()), state };
+
+    let (status, _) = h.get("/api/v1/software").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "REST reads are closed");
+
+    let (status, body) = h.get("/sparql?query=ASK%20%7B%20%3Fs%20%3Fp%20%3Fo%20%7D").await;
+    assert_eq!(status, StatusCode::OK, "SPARQL is public in its own right: {body}");
+}
+
+#[tokio::test]
+async fn patching_software_changes_only_what_the_body_names() {
+    let h = harness().await;
+    let (status, sw) = h
+        .post(
+            "/api/v1/software",
+            ROOT,
+            json!({
+                "name": "ontoexplorer",
+                "tagline": "FAIR ontology repository",
+                "kinds": ["service"],
+                "license": "https://spdx.org/licenses/Apache-2.0",
+                "keywords": ["ontology", "fair"]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    let id = sw["id"].as_str().unwrap().to_string();
+
+    // A PATCH naming one field must not require, or discard, all the others.
+    let (status, patched, _) = h
+        .req(
+            "PATCH",
+            &format!("/api/v1/software/{id}"),
+            Some(ROOT),
+            Some(json!({"api_docs": [{"url": "https://onto.example.org/openapi.json"}]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{patched}");
+    assert_eq!(patched["api_docs"][0]["url"], "https://onto.example.org/openapi.json");
+    assert_eq!(patched["name"], "ontoexplorer");
+    assert_eq!(patched["tagline"], "FAIR ontology repository");
+    assert_eq!(patched["license"], "https://spdx.org/licenses/Apache-2.0");
+    assert_eq!(patched["keywords"].as_array().unwrap().len(), 2, "{patched}");
+    assert_eq!(patched["kinds"][0], "service");
+
+    // Clearing is still possible, and `null` is how you say it. Without this, a merging PATCH
+    // would make emptying a field impossible — which is how the edit form clears one.
+    let (status, cleared, _) = h
+        .req(
+            "PATCH",
+            &format!("/api/v1/software/{id}"),
+            Some(ROOT),
+            Some(json!({"tagline": null, "license": null})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert!(cleared["tagline"].is_null(), "{cleared}");
+    assert!(cleared["license"].is_null(), "{cleared}");
+    assert_eq!(cleared["name"], "ontoexplorer", "clearing one field clears only that field");
+    assert_eq!(cleared["api_docs"][0]["url"], "https://onto.example.org/openapi.json");
+}

@@ -17,6 +17,9 @@ pub enum Repr {
     JsonLd,
     NQuads,
     Html,
+    /// Markdown, for agents (`llms.txt` convention). The same record as the Turtle, written
+    /// as prose an LLM reads without a parser and without the SPA's JavaScript.
+    Markdown,
 }
 
 impl Repr {
@@ -27,6 +30,7 @@ impl Repr {
             Repr::JsonLd => "application/ld+json",
             Repr::NQuads => "application/n-quads",
             Repr::Html => "text/html; charset=utf-8",
+            Repr::Markdown => "text/markdown; charset=utf-8",
         }
     }
 
@@ -37,6 +41,7 @@ impl Repr {
             "nq" | "nquads" => Repr::NQuads,
             "json" => Repr::Json,
             "html" => Repr::Html,
+            "md" | "markdown" => Repr::Markdown,
             _ => return None,
         })
     }
@@ -66,6 +71,7 @@ pub fn negotiate(headers: &HeaderMap, default_repr: Repr) -> Repr {
             "application/n-quads" | "application/n-triples" => Some(Repr::NQuads),
             "application/json" | "application/problem+json" => Some(Repr::Json),
             "text/html" | "application/xhtml+xml" => Some(Repr::Html),
+            "text/markdown" | "text/x-markdown" => Some(Repr::Markdown),
             "*/*" => Some(default_repr),
             _ => None,
         };
@@ -139,6 +145,8 @@ impl Signposting {
         s.links.push(format!("<{iri}>; rel=\"cite-as\""));
         s.links.push(format!("<{iri}.ttl>; rel=\"describedby\"; type=\"text/turtle\""));
         s.links.push(format!("<{iri}.jsonld>; rel=\"describedby\"; type=\"application/ld+json\""));
+        // How an agent finds the prose rendering without knowing the convention in advance.
+        s.links.push(format!("<{iri}.md>; rel=\"alternate\"; type=\"text/markdown\""));
         s
     }
     pub fn type_(mut self, iri: &str) -> Self {
@@ -207,6 +215,7 @@ impl IntoResponse for Negotiated {
             Repr::JsonLd => "application/ld+json",
             Repr::NQuads => "application/n-quads",
             Repr::Html => "text/html; charset=utf-8",
+            Repr::Markdown => "text/markdown; charset=utf-8",
         }));
         headers.insert(header::VARY, HeaderValue::from_static("Accept"));
         if let Some(v) = self.signposting.as_ref().and_then(|s| s.header_value()) {

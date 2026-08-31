@@ -81,6 +81,11 @@ pub struct Principal {
     pub credential: CredentialKind,
     /// The Instance IRI this credential acts as, when it is a deployment.
     pub instance_iri: Option<String>,
+    /// The Software IRI this credential is allowed to register deployments of, in the
+    /// auto-registration mode. Set instead of `instance_iri` for a credential handed to an
+    /// application rather than to one of its deployments: the first announcement creates the
+    /// deployment record, and every announcement after it finds that record.
+    pub software_iri: Option<String>,
     /// Stable subject identifier for the audit log.
     pub subject: String,
     pub display_name: Option<String>,
@@ -95,6 +100,7 @@ impl Principal {
         Self {
             credential: CredentialKind::None,
             instance_iri: None,
+            software_iri: None,
             subject: "anonymous".into(),
             display_name: None,
             scopes: BTreeSet::new(),
@@ -203,6 +209,7 @@ pub async fn authenticate(state: &Arc<AppState>, raw: &str) -> AppResult<Princip
             return Ok(Principal {
                 credential: CredentialKind::RootToken,
                 instance_iri: None,
+                software_iri: None,
                 subject: "urn:tar:root".into(),
                 display_name: Some("bootstrap admin".into()),
                 scopes: ALL_SCOPES.iter().map(|s| s.to_string()).collect(),
@@ -219,7 +226,13 @@ pub async fn authenticate(state: &Arc<AppState>, raw: &str) -> AppResult<Princip
         return Ok(Principal {
             credential: CredentialKind::LocalToken,
             instance_iri: rec.instance_iri.clone(),
-            subject: rec.instance_iri.clone().unwrap_or_else(|| format!("urn:tar:token:{}", rec.id)),
+            software_iri: rec.software_iri.clone(),
+            // A software-bound token has no instance to be, so its subject is the token
+            // itself until the deployment it registers exists.
+            subject: rec
+                .instance_iri
+                .clone()
+                .unwrap_or_else(|| format!("urn:tar:token:{}", rec.id)),
             display_name: rec.label.clone(),
             scopes: rec.scopes.iter().cloned().collect(),
             roles: BTreeSet::new(),

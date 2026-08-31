@@ -36,6 +36,12 @@ pub fn instance_quads(base: &str, iri: &str, input: &InstanceIn, actor: &str, so
     }
     n.opt_link(ns::DCAT, "endpointURL", &input.endpoint_url);
     n.opt_link(ns::DCAT, "endpointDescription", &input.endpoint_description);
+    // Where the registry probes. Declared separately from the endpoint because a deployment
+    // that serves an API at `/` and health at `/healthz` should not have its liveness judged
+    // by whatever `/` happens to return.
+    n.opt_link(ns::TAR, "healthEndpoint", &input.health_endpoint);
+    n.opt_text(ns::TAR, "selfRegisteredBy", &input.self_registered_by);
+    n.opt_text(ns::TAR, "instanceKey", &input.instance_key);
     n.opt_text(ns::TAR, "availability", &input.availability);
     // Supplement (audit 2026-08-30): dct:accessRights with the EU access-right authority
     // table is what DCAT-AP harvesters read; tar:availability keeps the finer four-way enum.
@@ -95,6 +101,12 @@ pub fn instance_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Instance {
         availability: p.str(ns::TAR, "availability"),
         jurisdiction: p.str(ns::TAR, "jurisdiction"),
         health: p.str(ns::TAR, "health").unwrap_or_else(|| "unknown".into()),
+        health_checked_at: p.str(ns::TAR, "healthCheckedAt"),
+        health_detail: p.str(ns::TAR, "healthDetail"),
+        health_endpoint: p.iri(ns::TAR, "healthEndpoint"),
+        self_registered_by: p.str(ns::TAR, "selfRegisteredBy"),
+        instance_key: p.str(ns::TAR, "instanceKey"),
+        last_seen_at: p.str(ns::TAR, "lastSeenAt"),
         home_registry: p.iri(ns::DCAT, "inCatalog").or_else(|| p.iri(ns::TAR, "homeRegistry")),
         capability: p.iri(ns::TAR, "hasCapability").and_then(|c| super::software::capability_from(ctx, &c, "instance")),
         last_run_at: None,

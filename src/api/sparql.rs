@@ -65,7 +65,7 @@ async fn run(
     q: String,
     format: Option<String>,
 ) -> AppResult<impl IntoResponse> {
-    if !state.config.public_read {
+    if !state.config.sparql_public {
         principal.require_authenticated()?;
     }
     // Read-only: updates are rejected outright rather than silently ignored.

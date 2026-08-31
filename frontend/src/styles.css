@@ -441,3 +441,28 @@ table td .mono { overflow-wrap: anywhere; }
 pre.report.sparql-parse-error {
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto;
 }
+
+/* ---------------------------------------------------------------- API documents */
+
+.api-doc { margin-bottom: 12px; }
+.api-doc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.api-doc-head p { margin: 4px 0 0; }
+.api-doc-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.api-doc-body h4 { margin: 16px 0 6px; }
+.api-doc-body h5 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+
+.api-op { border-top: 1px solid var(--border); }
+.api-op:first-of-type { border-top: none; }
+.api-op-head {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  background: none; border: 0; padding: 8px 0; text-align: left;
+  font: inherit; color: inherit; cursor: pointer;
+}
+.api-op-head:disabled { cursor: default; }
+.api-op-head:hover:not(:disabled) { background: var(--surface-hover, rgba(127,127,127,.06)); }
+/* The path is the thing being scanned for, so it never wraps mid-token or gets truncated. */
+.api-op-path { flex-shrink: 0; font-weight: 600; }
+.api-op-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.api-op-body { padding: 0 0 12px 12px; border-left: 2px solid var(--border); margin-left: 4px; }
+.api-params { list-style: none; padding: 0; margin: 0; }
+.api-params li { padding: 4px 0; }

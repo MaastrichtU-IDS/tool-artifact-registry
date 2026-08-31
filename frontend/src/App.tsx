@@ -9,6 +9,7 @@ import InstanceList from './routes/InstanceList'
 import InstanceDetail from './routes/InstanceDetail'
 import InstanceForm from './routes/InstanceForm'
 import Tokens from './routes/Tokens'
+import SoftwareTokens from './routes/SoftwareTokens'
 import Subscriptions from './routes/Subscriptions'
 import ArtifactList from './routes/ArtifactList'
 import ArtifactDetail from './routes/ArtifactDetail'
@@ -38,6 +39,7 @@ export default function App() {
           <Route path="/instance/:id" element={<InstanceDetail />} />
           <Route path="/instances/:id/edit" element={<InstanceForm />} />
           <Route path="/instances/:id/tokens" element={<Tokens />} />
+          <Route path="/software/:id/tokens" element={<SoftwareTokens />} />
           <Route path="/instances/:id/subscriptions" element={<Subscriptions />} />
           <Route path="/artifacts" element={<ArtifactList />} />
           <Route path="/artifacts/:id" element={<ArtifactDetail />} />

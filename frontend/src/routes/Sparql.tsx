@@ -35,7 +35,7 @@ const GRAPHS: { name: string; what: string }[] = [
   { name: 'urn:tar:local', what: 'authoritative — triples this registry minted' },
   { name: 'urn:tar:peer:{id}', what: 'cached foreign stubs, read-only' },
   { name: 'urn:tar:shapes', what: 'SHACL shapes used for write validation' },
-  { name: 'urn:tar:vocab', what: 'preloaded EDAM / SPDX / DCAT terms' },
+  { name: 'urn:tar:vocab', what: 'preloaded vocabulary terms (topics, data types, licences)' },
 ]
 
 interface Example {

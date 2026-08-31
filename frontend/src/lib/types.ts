@@ -72,6 +72,23 @@ export const SYNCABLE_FIELDS = [
   'releases', 'image',
 ] as const
 
+export type ApiFormat =
+  | 'openapi'
+  | 'asyncapi'
+  | 'graphql'
+  | 'sparql-service-description'
+  | 'ols4'
+  | 'postman'
+  | 'other'
+
+/** A machine-readable description of a software's API — `dcat:endpointDescription`. */
+export interface ApiDoc {
+  url: string
+  format: ApiFormat | string
+  title?: string
+  description?: string
+}
+
 export interface Software {
   iri: string
   id: string
@@ -86,6 +103,10 @@ export interface Software {
   screenshots: string[]
   readme?: string
   readme_base_url?: string
+  /** Machine-readable API descriptions: openapi.json and its equivalents. */
+  api_docs: ApiDoc[]
+  /** OIDC client ids allowed to register deployments of this software for themselves. */
+  registration_clients: string[]
   license?: string
   /** What the software is, as a set — one program is routinely several of these. */
   kinds: string[]
@@ -93,7 +114,7 @@ export interface Software {
   kind?: string
   maturity?: string
   deployable: boolean
-  edam_topics: TypeRef[]
+  topics: TypeRef[]
   keywords: string[]
   publisher?: AgentRef
   contact?: AgentRef
@@ -127,6 +148,16 @@ export interface Instance {
   availability?: string
   jurisdiction?: string
   health: 'up' | 'down' | 'unknown'
+  /** Why the last probe said what it said. */
+  health_detail?: string
+  health_checked_at?: string
+  /** Where the registry probes, when that is not the endpoint itself. Must answer 2xx. */
+  health_endpoint?: string
+  /** Last announcement or advertisement — the only liveness signal a CLI or desktop app has. */
+  last_seen_at?: string
+  /** Set when the deployment registered itself rather than being created by a curator. */
+  self_registered_by?: string
+  instance_key?: string
   home_registry?: string
   capability?: Capability
   last_run_at?: string

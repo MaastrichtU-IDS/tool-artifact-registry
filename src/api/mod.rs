@@ -2,9 +2,11 @@
 //! SPA.
 
 pub mod advertise;
+pub mod apidocs;
 pub mod artifacts;
 pub mod deref;
 pub mod instances;
+pub mod llms;
 pub mod openlineage;
 pub mod peers;
 pub mod registry;
@@ -22,8 +24,9 @@ use crate::error::{AppError, AppResult};
 use crate::negotiate::{negotiate, serialize, Negotiated, Repr, Signposting};
 use crate::ns;
 use crate::state::AppState;
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::HeaderMap;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 use serde::Deserialize;
@@ -45,6 +48,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/software/{id}/releases/{release_id}", delete(software::delete_release))
         .route("/software/{id}/capability", put(software::put_capability))
         .route("/software/{id}/sync", post(software::sync))
+        // The record's API description, fetched server-side: browsers cannot fetch most of
+        // them directly, because almost no `openapi.json` is served with CORS headers.
+        .route("/software/{id}/api-doc", get(apidocs::fetch))
+        // Auto-registration credentials: a key bound to the software, not to one deployment.
+        .route("/software/{id}/tokens", get(tokens::list_for_software).post(tokens::create_for_software))
+        .route("/software/{id}/tokens/{token_id}", delete(tokens::revoke_for_software))
         .route("/software/{id}/export/biotools", get(software::export_biotools))
         // capability matchmaking
         .route("/capabilities", get(search::capabilities))
@@ -55,6 +64,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/types/{id}", get(types::get))
         // instances
         .route("/instances", get(instances::list).post(instances::create))
+        // A running service records what it is. Must precede /instances/{id}.
+        .route("/instances/self", put(instances::announce_self))
         .route("/instances/{id}", get(instances::get).patch(instances::patch).delete(instances::soft_delete))
         .route("/instances/{id}/capability", put(instances::put_capability))
         .route("/instances/{id}/runs", get(instances::runs))
@@ -103,6 +114,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/readyz", get(registry::readyz))
         .route("/metrics", get(registry::metrics))
         .route("/sparql", post(sparql::query).get(sparql::query_get))
+        // The agent's front door: what this registry is and how to read any record in it,
+        // in the format an LLM reads without a parser (https://llmstxt.org).
+        .route("/llms.txt", get(llms::llms_txt))
         .route("/admin/dump", get(registry::dump))
         // Registry IRIs and UI routes are the same URLs (handoff §3).
         .route("/software/{id}", get(deref::deref_software))
@@ -119,10 +133,69 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/distribution/{id}", get(deref::deref_generic))
         .route("/agent/{id}", get(deref::deref_generic))
         .fallback(web::spa)
+        // `TAR_PUBLIC_READ=false` closes anonymous reads. Enforced here rather than in each
+        // handler: there are more than twenty read routes, and a setting that is enforced in
+        // nineteen of them is not a setting.
+        .layer(axum::middleware::from_fn_with_state(state.clone(), require_read_access))
         .layer(DefaultBodyLimit::max(limit))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Paths that stay open on a registry with anonymous reads closed.
+///
+/// Discovery and liveness: a client has to be able to learn *that* it needs a credential, and
+/// what to authenticate against, without already holding one. `/sparql` is here because it
+/// carries its own `TAR_SPARQL_PUBLIC` switch and enforces it itself.
+fn is_always_public(path: &str) -> bool {
+    const OPEN: [&str; 8] = [
+        "/healthz",
+        "/readyz",
+        "/metrics",
+        "/sparql",
+        "/api/v1/registry",
+        "/api/v1/context",
+        "/api/v1/whoami",
+        "/.well-known/",
+    ];
+    OPEN.iter().any(|p| path == *p || path.starts_with(p) && p.ends_with('/'))
+        // The OAuth metadata an MCP client fetches before it has a token, and the handshake
+        // that tells it so.
+        || path.starts_with("/.well-known/")
+        || path == crate::mcp::ENDPOINT_PATH
+}
+
+async fn require_read_access(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if state.config.public_read {
+        return next.run(req).await;
+    }
+    // Writes carry their own authorisation, and every handler already enforces it. This gate is
+    // only about anonymous *reading*.
+    let is_read = matches!(req.method(), &axum::http::Method::GET | &axum::http::Method::HEAD);
+    if !is_read || is_always_public(req.uri().path()) {
+        return next.run(req).await;
+    }
+    // Presence, not validity. Whether a credential is *good* is the handler's question, and
+    // answering it here would replace each route's own challenge — the MCP endpoint's
+    // `WWW-Authenticate: Bearer resource_metadata=...`, for one — with a bare 401 that tells a
+    // client nothing about how to authenticate.
+    let anonymous = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .is_none_or(|v| v.trim().is_empty());
+    if anonymous {
+        return AppError::unauthorized(
+            "this registry does not serve anonymous reads; present a credential",
+        )
+        .into_response();
+    }
+    next.run(req).await
 }
 
 // --------------------------------------------------------------- pagination
@@ -209,7 +282,7 @@ pub fn page_iris(state: &AppState, where_body: &str, paging: &Paging) -> AppResu
 }
 
 /// Respond to a resource GET honouring `Accept`, with Signposting attached (spec §6.3).
-pub fn resource_response(
+pub async fn resource_response(
     state: &AppState,
     headers: &HeaderMap,
     iri: &str,
@@ -225,6 +298,21 @@ pub fn resource_response(
             signposting: Some(signposting),
             status: axum::http::StatusCode::OK,
         }),
+        // An agent that asks the JSON API for markdown gets the same rendering the IRI
+        // serves, rather than a 406 or, worse, JSON under a markdown content type.
+        Repr::Markdown => {
+            let quads = state.store.describe(iri).map_err(AppError::from)?;
+            let kind = crate::ids::local_id(&state.config.base_iri, iri)
+                .map(|(k, _)| k)
+                .ok_or_else(|| AppError::not_found(format!("{iri} is not a record of this registry")))?;
+            let ctx = crate::domain::Ctx::new(state).await?;
+            Ok(Negotiated {
+                repr,
+                body: llms::render_record(state, &ctx, kind, iri, &quads)?,
+                signposting: Some(signposting),
+                status: axum::http::StatusCode::OK,
+            })
+        }
         Repr::Turtle | Repr::JsonLd | Repr::NQuads => {
             let quads = state.store.describe(iri).map_err(AppError::from)?;
             Ok(Negotiated {

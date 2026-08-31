@@ -78,6 +78,80 @@ pub struct TypeRef {
     pub source: String,
 }
 
+
+/// A machine-readable description of a software's API.
+///
+/// Modelled as `dcat:endpointDescription` — DCAT defines that property as exactly this, "a
+/// description of the service endpoint including its operations, parameters", and names
+/// OpenAPI as an example — with `dct:conformsTo` naming which standard the document follows.
+/// Nothing new is invented, and nothing is OpenAPI-only: this estate already needs SPARQL
+/// service descriptions and an OLS4-compatible API alongside `openapi.json`.
+///
+/// It sits on Software rather than Instance because the *contract* is a property of the
+/// version — every deployment of v2.1 exposes the same operations — while the server URL is a
+/// property of the deployment, which keeps its own `dcat:endpointDescription` for the concrete
+/// document it serves.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ApiDoc {
+    /// Where the document itself lives, e.g. `https://example.org/openapi.json`.
+    pub url: String,
+    /// `openapi` | `asyncapi` | `graphql` | `sparql-service-description` | `ols4` | `postman`
+    /// | `other`. Free-form on the way in; normalised by `ApiDocIn::normalised_format`.
+    #[serde(default)]
+    pub format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// The IRI of the standard an API description conforms to, for `dct:conformsTo`. These are the
+/// specifications' own IRIs, so a consumer that does not know our vocabulary still recognises
+/// them.
+pub fn api_format_iri(format: &str) -> Option<&'static str> {
+    Some(match format {
+        "openapi" => "https://spec.openapis.org/oas/latest.html",
+        "asyncapi" => "https://www.asyncapi.com/docs/reference/specification/latest",
+        "graphql" => "https://spec.graphql.org/",
+        "sparql-service-description" => "http://www.w3.org/ns/sparql-service-description",
+        "ols4" => "https://www.ebi.ac.uk/ols4/api",
+        "postman" => "https://schema.postman.com/collection/",
+        _ => return None,
+    })
+}
+
+pub fn api_format_from_iri(iri: &str) -> Option<&'static str> {
+    for f in ["openapi", "asyncapi", "graphql", "sparql-service-description", "ols4", "postman"] {
+        if api_format_iri(f) == Some(iri) {
+            return Some(f);
+        }
+    }
+    None
+}
+
+impl ApiDoc {
+    /// Guess the format from the URL when the caller did not say. `openapi.json`,
+    /// `swagger.yaml` and `/openapi` are overwhelmingly the common case, and refusing to guess
+    /// only means the record carries "other" for a document everyone can identify by name.
+    pub fn normalised_format(&self) -> String {
+        if !self.format.trim().is_empty() {
+            return self.format.trim().to_ascii_lowercase();
+        }
+        let u = self.url.to_ascii_lowercase();
+        if u.contains("openapi") || u.contains("swagger") {
+            "openapi".into()
+        } else if u.contains("asyncapi") {
+            "asyncapi".into()
+        } else if u.contains("graphql") {
+            "graphql".into()
+        } else if u.contains("sparql") {
+            "sparql-service-description".into()
+        } else {
+            "other".into()
+        }
+    }
+}
+
 // ------------------------------------------------------------------ software
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -112,6 +186,18 @@ pub struct SoftwareIn {
     /// repository's raw content root. Without it, `![](docs/images/x.png)` resolves nowhere.
     #[serde(default)]
     pub readme_base_url: Option<String>,
+    /// Machine-readable API descriptions: `openapi.json` and its equivalents.
+    #[serde(default)]
+    pub api_docs: Vec<ApiDoc>,
+    /// OIDC client ids permitted to register deployments of this software *for themselves* —
+    /// the auto-registration mode. A credential holding one of these can call
+    /// `PUT /api/v1/instances/self` and have its deployment record created on first contact.
+    ///
+    /// Distinct from `Instance::oidc_client_id`, which says "this credential *is* that
+    /// deployment". This says "this credential may create deployments of this software", which
+    /// is a different permission and deserves a different field.
+    #[serde(default)]
+    pub registration_clients: Vec<String>,
     #[serde(default)]
     pub license: Option<String>,
     /// What the software *is*, as a set: `service`, `library`, `cli`, `desktop`, `workflow`.
@@ -137,7 +223,7 @@ pub struct SoftwareIn {
     #[serde(default)]
     pub deployable: Option<bool>,
     #[serde(default)]
-    pub edam_topics: Vec<String>,
+    pub topics: Vec<String>,
     #[serde(default)]
     pub keywords: Vec<String>,
     #[serde(default)]
@@ -245,6 +331,9 @@ pub struct Software {
     pub readme: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readme_base_url: Option<String>,
+    pub api_docs: Vec<ApiDoc>,
+    /// See `SoftwareIn::registration_clients`.
+    pub registration_clients: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
     pub kinds: Vec<String>,
@@ -259,7 +348,7 @@ pub struct Software {
     /// then both `desktop` and `service` and deployable. What this flag governs is only
     /// whether an instance of it may carry an endpoint.
     pub deployable: bool,
-    pub edam_topics: Vec<TypeRef>,
+    pub topics: Vec<TypeRef>,
     pub keywords: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub publisher: Option<AgentRef>,
@@ -375,6 +464,14 @@ pub struct Capability {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct InstanceIn {
     pub label: String,
+    /// Set by the registry, never by the caller: the credential subject that self-registered
+    /// this deployment. Together with `instance_key` it is how the next announcement from the
+    /// same deployment finds this record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_registered_by: Option<String>,
+    /// See `SelfAnnounceIn::instance_key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_key: Option<String>,
     #[serde(default)]
     pub software: Option<String>,
     #[serde(default)]
@@ -400,6 +497,57 @@ pub struct InstanceIn {
     /// Scopes granted to that workload identity when its token carries none of ours.
     #[serde(default)]
     pub allowed_scopes: Vec<String>,
+    /// Where the liveness probe goes, when it is not `endpoint_url`.
+    #[serde(default)]
+    pub health_endpoint: Option<String>,
+    #[serde(default)]
+    pub capability: Option<CapabilityIn>,
+}
+
+/// What a running service says about itself at `PUT /api/v1/instances/self`.
+///
+/// Deliberately not `InstanceIn`: a service may describe *itself*, and nothing else. There is
+/// no `oidc_client_id` here — the binding is taken from the presenting credential, never from
+/// the body, which is the same rule that governs advertisement (spec §8.3). Nor
+/// `allowed_scopes`: a workload cannot widen its own authority by announcing.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SelfAnnounceIn {
+    /// Omitted on later announcements; the stored label stands.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Required the first time, so the registry knows what this is a deployment *of*. Ignored
+    /// when the credential is already bound to a piece of software, which decides on its own.
+    #[serde(default)]
+    pub software: Option<String>,
+    /// A stable name this deployment calls itself, so repeated announcements update one record
+    /// instead of creating a new one each time. A hostname, a cluster name, a namespace.
+    ///
+    /// Needed because a credential in the auto-registration mode belongs to the *application*,
+    /// not to one deployment of it: without something to tell two deployments apart, every
+    /// announcement from the same key would either collide or multiply. Defaults to the
+    /// credential's own subject, which is right when one key means one deployment.
+    #[serde(default)]
+    pub instance_key: Option<String>,
+    #[serde(default)]
+    pub release: Option<String>,
+    /// The version string, when the deployment knows it but no Release is registered yet. The
+    /// registry matches it against the software's releases and links one if it finds a match.
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
+    #[serde(default)]
+    pub endpoint_description: Option<String>,
+    /// Where the registry should probe for liveness, if not the endpoint itself.
+    #[serde(default)]
+    pub health_endpoint: Option<String>,
+    #[serde(default)]
+    pub availability: Option<String>,
+    #[serde(default)]
+    pub jurisdiction: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// A deployment may narrow what its software declares, never widen it.
     #[serde(default)]
     pub capability: Option<CapabilityIn>,
 }
@@ -434,8 +582,28 @@ pub struct Instance {
     pub availability: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jurisdiction: Option<String>,
-    /// `up` | `down` | `unknown`
+    /// `up` | `down` | `unknown`. Written by the registry's own probe, never by the caller —
+    /// a deployment asserting its own health is just a claim, and the interesting case is the
+    /// one where it cannot answer at all.
     pub health: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_checked_at: Option<String>,
+    /// Why the last probe said what it said.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_detail: Option<String>,
+    /// Where the probe goes, when it is not the endpoint itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_endpoint: Option<String>,
+    /// The last time this deployment announced itself or advertised a run. For a deployment
+    /// with no endpoint — a CLI, a desktop install — this is the only liveness signal there is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<String>,
+    /// Present when the deployment registered itself rather than being created by a curator.
+    /// Together these say which credential owns the record and which deployment it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_registered_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub home_registry: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

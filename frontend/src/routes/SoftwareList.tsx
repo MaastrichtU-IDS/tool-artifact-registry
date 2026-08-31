@@ -8,7 +8,7 @@ import { ArtifactTypeChip, KindChip, LicenseChip, OriginChip } from '../componen
 const FACET_LABELS: Record<string, string> = {
   license: 'Licence',
   kind: 'Kind',
-  edam_topic: 'EDAM topic',
+  topic: 'Topic',
 }
 
 export default function SoftwareList() {
@@ -18,13 +18,13 @@ export default function SoftwareList() {
     q: params.get('q') ?? undefined,
     license: params.get('license') ?? undefined,
     kind: params.get('kind') ?? undefined,
-    edam_topic: params.get('edam_topic') ?? undefined,
+    topic: params.get('topic') ?? undefined,
     consumes: params.get('consumes') ?? undefined,
     produces: params.get('produces') ?? undefined,
     cursor: params.get('cursor') ?? undefined,
   }
   const { data, error, loading, reload } = useAsync(() => api.listSoftware(filters), [params.toString()])
-  const filtered = Boolean(filters.q || filters.license || filters.kind || filters.edam_topic || filters.consumes || filters.produces)
+  const filtered = Boolean(filters.q || filters.license || filters.kind || filters.topic || filters.consumes || filters.produces)
 
   const setParam = (key: string, value?: string) => {
     const next = new URLSearchParams(params)
@@ -126,7 +126,7 @@ export default function SoftwareList() {
               <LicenseChip license={sw.license} interactive={false} />
               <span className="chip plain">{sw.instance_count} {sw.instance_count === 1 ? 'instance' : 'instances'}</span>
               {sw.runs_30d > 0 && <span className="chip plain">{sw.runs_30d} runs/30d</span>}
-              {sw.edam_topics.slice(0, 2).map((t) => <ArtifactTypeChip key={t.iri} type={t} interactive={false} />)}
+              {sw.topics.slice(0, 2).map((t) => <ArtifactTypeChip key={t.iri} type={t} interactive={false} />)}
               {sw.tombstoned && <span className="chip warn">withdrawn</span>}
             </div>
           </Link>

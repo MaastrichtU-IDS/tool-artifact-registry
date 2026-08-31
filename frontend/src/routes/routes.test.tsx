@@ -15,9 +15,11 @@ const software: Software = {
   license: 'https://spdx.org/licenses/Apache-2.0',
   kind: 'service',
   kinds: ['service'],
-  edam_topics: [{ iri: 'http://edamontology.org/topic_3071', label: 'Data management', source: 'edam' }],
+  topics: [{ iri: 'http://edamontology.org/topic_3071', label: 'Data management', source: 'edam' }],
   keywords: ['shacl'],
   screenshots: [],
+  api_docs: [],
+  registration_clients: [],
   deployable: true,
   publications: [],
   capability: {

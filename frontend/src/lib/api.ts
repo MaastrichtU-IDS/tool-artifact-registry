@@ -66,7 +66,30 @@ export function qs(params: Record<string, string | number | boolean | undefined 
   return s ? `?${s}` : ''
 }
 
+/** A response that is not JSON — an API description document, fetched through the registry. */
+async function requestText(path: string): Promise<string> {
+  const headers = new Headers()
+  if (authToken) headers.set('authorization', `Bearer ${authToken}`)
+  const resp = await fetch(`/api/v1${path}`, { headers })
+  const text = await resp.text()
+  if (!resp.ok) {
+    // The error body *is* JSON even when the success body is not.
+    let problem: ProblemJson | null = null
+    try {
+      problem = JSON.parse(text)
+    } catch {
+      problem = null
+    }
+    throw new ApiError(
+      problem ?? { type: 'about:blank', title: resp.statusText, status: resp.status },
+      resp.status,
+    )
+  }
+  return text
+}
+
 export const api = {
+  raw: requestText,
   wellKnown: () => request<WellKnown>('/.well-known/tar-registry'),
   registry: () => request<Record<string, unknown>>('/api/v1/registry'),
   whoami: () => request<WhoAmI>('/api/v1/whoami'),
@@ -100,6 +123,16 @@ export const api = {
     request<Page<Artifact>>(`/api/v1/instances/${id}/artifacts${qs(p)}`),
 
   listTokens: (id: string) => request<{ items: TokenRecord[] }>(`/api/v1/instances/${id}/tokens`),
+  // Auto-registration keys: bound to the software, so any deployment of it can register itself.
+  listSoftwareTokens: (id: string) =>
+    request<{ items: TokenRecord[] }>(`/api/v1/software/${id}/tokens`),
+  mintSoftwareToken: (id: string, body: unknown) =>
+    request<{ token: string; record: TokenRecord; usage: string }>(`/api/v1/software/${id}/tokens`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  revokeSoftwareToken: (id: string, tokenId: string) =>
+    request<void>(`/api/v1/software/${id}/tokens/${tokenId}`, { method: 'DELETE' }),
   mintToken: (id: string, body: unknown) =>
     request<{ token: string; record: TokenRecord }>(`/api/v1/instances/${id}/tokens`, {
       method: 'POST',

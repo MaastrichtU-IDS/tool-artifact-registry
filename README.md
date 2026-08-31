@@ -116,6 +116,72 @@ nothing it does not model is lost.
 
 ---
 
+## Registering a deployment
+
+Two modes, because deployments arrive in two very different ways.
+
+**Curated.** Someone who knows the estate creates the record: `POST /api/v1/instances`, or the
+form in the UI. Right when deployments are few and long-lived. The record may declare a
+`health_endpoint` — a URL whose only job is to say the deployment is alive, and which is held
+to a **2xx**. Leave it out and the endpoint URL itself is probed, where anything that answers
+counts as up, because a great many healthy services return `401` or `404` at their root and
+marking those down would be a false alarm about a working deployment.
+
+**Self-registering.** The application is handed one credential and every deployment of it
+creates and maintains its own record:
+
+```bash
+# A curator issues the key once, for the software rather than for a deployment.
+curl -X POST -H "Authorization: Bearer $CURATOR" \
+     localhost:8080/api/v1/software/$SOFTWARE_ID/tokens
+
+# Every deployment then announces itself, and repeats this whenever anything changes.
+curl -X PUT -H "Authorization: Bearer $APP_KEY" -H 'content-type: application/json' \
+     -d '{"label": "sulo on prod", "instance_key": "prod-cluster",
+          "endpoint_url": "https://sulo.example.org",
+          "health_endpoint": "https://sulo.example.org/healthz"}' \
+     localhost:8080/api/v1/instances/self
+```
+
+The first call creates the record; every call after it updates the same one. `instance_key`
+tells two deployments sharing a key apart — without it, one key would mean one deployment.
+The credential decides which software this is a deployment *of*: naming a different one in the
+body is a 403, not a hint.
+
+With an identity provider there is no key to issue or leak at all — list the OIDC client ids in
+the software's `registration_clients`, and a deployment presenting a token from its own issuer
+registers itself the same way. `TAR_OIDC_AUTO_REGISTER_INSTANCES` is the looser third option:
+it lets *any* accepted credential name its own software, which is convenient in a trusted
+cluster and much weaker.
+
+---
+
+## For agents
+
+Every record IRI serves Markdown. Append `.md`, or send `Accept: text/markdown`:
+
+```bash
+curl -H 'accept: text/markdown' localhost:8080/software/01a0…
+curl localhost:8080/software/01a0….md          # the same bytes
+curl localhost:8080/llms.txt                    # what this registry is, and everything in it
+```
+
+`/llms.txt` follows [llmstxt.org](https://llmstxt.org): what the registry is, how to read any
+record without an RDF parser, the entry points, and a link to every record. It is public
+whenever reads are, because a file whose whole purpose is to tell an unfamiliar client how to
+read the registry is worth nothing behind a credential the client does not know it needs.
+
+The markdown is a *representation*, not a second copy — same graph, same code path as `.ttl`,
+so the prose cannot drift from the RDF. It states the things an agent otherwise gets wrong:
+that `deployable: no` means there is no endpoint to call, that a peer's record is a cached stub,
+that a withdrawn record still resolves, and that vocabulary terms must be looked up rather than
+guessed.
+
+Agents that would rather call tools than compose URLs can use the hosted MCP server at `/mcp`
+(see `docs/mcp.md`). Nothing needs installing.
+
+---
+
 ## How a tool authenticates
 
 Three credentials, one rule: **an Instance may only advertise runs in which it is itself the
@@ -243,6 +309,17 @@ adapter, peer announcement, and the read-only SPARQL endpoint.
 ---
 
 ## Configuration
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `TAR_PUBLIC_READ` | `true` | Serve reads without a credential. |
+| `TAR_SPARQL_PUBLIC` | `true` | Serve SPARQL without a credential — independent of the above, so closing REST reads does not close the query endpoint. |
+| `TAR_HEALTH_CHECK_ENABLED` | `true` | Probe deployments in the background. |
+| `TAR_HEALTH_CHECK_INTERVAL` | `5m` | How often. |
+| `TAR_HEALTH_ALLOW_PRIVATE` | `true` | Probe private addresses. |
+| `TAR_OIDC_AUTO_REGISTER_INSTANCES` | `false` | Let any accepted credential register a deployment of software it names itself. |
+| `TAR_APIDOC_ALLOW_PRIVATE` | `true` | Fetch API descriptions from private addresses. |
+
 
 `TAR_BASE_IRI` is the only universally required setting. Everything else has a working default
 — see spec §10.5 and addendum §4. `tar config` prints the effective configuration with secrets

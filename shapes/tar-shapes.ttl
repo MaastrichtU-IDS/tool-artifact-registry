@@ -49,7 +49,25 @@ tar:SoftwareShape a sh:NodeShape ;
     sh:property [ sh:path schema:applicationCategory ; sh:in ( "service" "library" "cli" "desktop" "workflow" ) ;
                   sh:message "kind must be one of service, library, cli, desktop, workflow" ] ;
     sh:property [ sh:path dct:subject ; sh:nodeKind sh:IRI ;
-                  sh:message "an EDAM topic must be an IRI" ] .
+                  sh:message "a topic must be an IRI from one of the registry's topic vocabularies" ] ;
+    sh:property [ sh:path dcat:endpointDescription ; sh:nodeKind sh:IRI ;
+                  sh:message "an API description must be an absolute IRI — the URL the document is served from" ] ;
+    sh:property [ sh:path tar:registrationClient ; sh:datatype xsd:string ;
+                  sh:message "a registration client is an OIDC client id, as a string" ] .
+
+# An API description document: dcat:endpointDescription is DCAT's own term for "a description
+# of the service endpoint, including its operations, parameters", with OpenAPI as its worked
+# example. dct:conformsTo names which specification, so a consumer that has never seen this
+# registry still knows what it is being handed.
+tar:ApiDocShape a sh:NodeShape ;
+    sh:targetObjectsOf dcat:endpointDescription ;
+    sh:property [ sh:path tar:apiFormat ; sh:maxCount 1 ; sh:datatype xsd:string ;
+                  sh:in ( "openapi" "asyncapi" "graphql" "sparql-service-description" "ols4" "postman" "other" ) ;
+                  sh:message "api format must be one of openapi, asyncapi, graphql, sparql-service-description, ols4, postman, other" ] ;
+    sh:property [ sh:path dct:conformsTo ; sh:nodeKind sh:IRI ; sh:maxCount 1 ;
+                  sh:message "conformsTo must be the IRI of the specification the document follows" ] ;
+    sh:property [ sh:path dct:title ; sh:maxCount 1 ; sh:datatype xsd:string ;
+                  sh:message "an API description has at most one title" ] .
 
 tar:ReleaseShape a sh:NodeShape ;
     sh:targetClass tar:Release ;
@@ -61,9 +79,9 @@ tar:ReleaseShape a sh:NodeShape ;
 tar:CapabilityShape a sh:NodeShape ;
     sh:targetClass tar:Capability ;
     sh:property [ sh:path tar:produces ; sh:nodeKind sh:IRI ;
-                  sh:message "an ArtifactType must be an IRI (EDAM recommended)" ] ;
+                  sh:message "an ArtifactType must be an IRI" ] ;
     sh:property [ sh:path tar:consumes ; sh:nodeKind sh:IRI ;
-                  sh:message "an ArtifactType must be an IRI (EDAM recommended)" ] .
+                  sh:message "an ArtifactType must be an IRI" ] .
 
 tar:InstanceShape a sh:NodeShape ;
     sh:targetClass tar:Instance ;
@@ -73,6 +91,12 @@ tar:InstanceShape a sh:NodeShape ;
                   sh:message "an Instance must name the Software it deploys, or the Release it runs" ] ;
     sh:property [ sh:path dcat:endpointURL ; sh:nodeKind sh:IRI ; sh:maxCount 1 ;
                   sh:message "endpoint_url must be an absolute IRI" ] ;
+    sh:property [ sh:path tar:healthEndpoint ; sh:nodeKind sh:IRI ; sh:maxCount 1 ;
+                  sh:message "health_endpoint must be a single absolute IRI — the URL the registry probes, which must answer 2xx" ] ;
+    sh:property [ sh:path tar:instanceKey ; sh:maxCount 1 ; sh:datatype xsd:string ;
+                  sh:message "instance_key is a single string naming this deployment" ] ;
+    sh:property [ sh:path tar:selfRegisteredBy ; sh:maxCount 1 ; sh:datatype xsd:string ;
+                  sh:message "self_registered_by is written by the registry, not by the caller" ] ;
     sh:property [ sh:path tar:availability ; sh:in ( "public" "restricted" "embargoed" "metadata-only" ) ;
                   sh:message "availability must be one of public, restricted, embargoed, metadata-only" ] ;
     # The standard supplement written beside tar:availability (EU access-right table).

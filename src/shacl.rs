@@ -269,7 +269,7 @@ fn field_for(path: &str, focus: &str, hints: &HashMap<String, String>) -> String
         (local(ns::DCT, "license"), "license"),
         (local(ns::SCHEMA, "applicationCategory"), "kind"),
         (local(ns::CODEMETA, "developmentStatus"), "maturity"),
-        (local(ns::DCT, "subject"), "edam_topics"),
+        (local(ns::DCT, "subject"), "topics"),
         (local(ns::SCHEMA, "keywords"), "keywords"),
         (local(ns::RDFS, "label"), "label"),
         (local(ns::TAR, "instanceOf"), "software"),

@@ -25,8 +25,14 @@ pub async fn well_known(State(state): State<Arc<AppState>>) -> AppResult<impl In
         "software": "tool-artifact-registry",
         "software_version": state.version,
         "public_read": cfg.public_read,
+        "sparql_public": cfg.sparql_public,
         "sparql_url": format!("{}/sparql", cfg.base_iri),
         "api_base": format!("{}/api/v1", cfg.base_iri),
+        // For agents: the llmstxt.org map of this registry, and the note that every record
+        // IRI also serves markdown. Advertised here so a client learns it from discovery
+        // rather than having to know the convention.
+        "llms_txt": format!("{}/llms.txt", cfg.base_iri),
+        "record_markdown": "append .md to any record IRI, or send Accept: text/markdown",
         "capabilities": ["software", "instances", "artifacts", "runs", "capabilities", "federation", "openlineage", "sparql"],
         // How a client should authenticate. A peer or a tool reads this to learn whether it
         // needs a registry token or can present an OIDC token it already holds.
@@ -81,6 +87,10 @@ pub async fn whoami(principal: Principal) -> AppResult<impl IntoResponse> {
         "subject": principal.subject,
         "display_name": principal.display_name,
         "instance": principal.instance_iri,
+        // Set instead of `instance` for an auto-registration credential. Named here because
+        // `whoami` is the first thing anyone curls when a deployment gets a 403, and "you are
+        // allowed to register deployments of *this*" is the answer they need.
+        "may_register_deployments_of": principal.software_iri,
         "issuer": principal.issuer,
         "scopes": principal.scopes,
         "roles": principal.roles,

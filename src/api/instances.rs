@@ -111,7 +111,7 @@ pub async fn get(
     if let Some(o) = &inst.operator {
         sp = sp.author(&o.iri);
     }
-    Ok(resource_response(&state, &headers, &iri, &inst, sp, Repr::Json)?)
+    Ok(resource_response(&state, &headers, &iri, &inst, sp, Repr::Json).await?)
 }
 
 /// Reject an endpoint on an instance of software that cannot be hosted.
@@ -164,6 +164,11 @@ pub async fn create(
     if !principal.is_curator() {
         principal.require_scope(crate::auth::SCOPE_REGISTER_INSTANCE)?;
     }
+    // These two are the registry's record of which credential owns a self-registered
+    // deployment. A caller that could set them could claim another deployment's record on its
+    // next announcement, so they are dropped from anything that arrives over the wire.
+    input.self_registered_by = None;
+    input.instance_key = None;
     // Accept a bare id or a full IRI in `software` / `release`.
     if let Some(sw) = input.software.clone() {
         input.software = Some(ids::iri_for(state.base(), Kind::Software, &sw));
@@ -187,11 +192,74 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(dom::load_instance(&ctx, &iri)?)))
 }
 
+/// Round-trip a stored Instance back into the input shape, so a PATCH can merge onto it.
+pub fn instance_in_from(i: &Instance) -> InstanceIn {
+    InstanceIn {
+        label: i.label.clone(),
+        // Carried through, or a PATCH would drop the triples that let a self-registered
+        // deployment find its own record on the next announcement.
+        self_registered_by: i.self_registered_by.clone(),
+        instance_key: i.instance_key.clone(),
+        software: i.software.clone(),
+        release: i.release.clone(),
+        endpoint_url: i.endpoint_url.clone(),
+        endpoint_description: i.endpoint_description.clone(),
+        operator: i.operator.as_ref().map(|a| crate::model::AgentIn {
+            iri: Some(a.iri.clone()),
+            name: a.name.clone(),
+            kind: a.kind.clone(),
+            identifier: a.identifier.clone(),
+            email: a.email.clone(),
+            homepage: a.homepage.clone(),
+        }),
+        availability: i.availability.clone(),
+        jurisdiction: i.jurisdiction.clone(),
+        description: i.description.clone(),
+        oidc_client_id: i.oidc_client_id.clone(),
+        oidc_issuer: i.oidc_issuer.clone(),
+        allowed_scopes: i.allowed_scopes.clone(),
+        health_endpoint: i.health_endpoint.clone(),
+        capability: i.capability.as_ref().map(|c| CapabilityIn {
+            produces: c.produces.iter().map(|t| t.iri.clone()).collect(),
+            consumes: c.consumes.iter().map(|t| t.iri.clone()).collect(),
+        }),
+    }
+}
+
+/// Overlay the JSON a caller sent onto the JSON of the record as it stands.
+///
+/// PATCH means merge to almost everyone, and this used to replace: a deployment recording its
+/// own endpoint with `{label, endpoint_url}` silently dropped its operator, jurisdiction,
+/// scopes and OIDC binding. Merging at the JSON level rather than on the typed struct is what
+/// makes "absent" and "explicitly null" different things — absent keeps the stored value, and
+/// `null` clears it, which is the only way to erase a field through a merging PATCH.
+pub fn merge_json(base: serde_json::Value, patch: serde_json::Value) -> serde_json::Value {
+    match (base, patch) {
+        (serde_json::Value::Object(mut b), serde_json::Value::Object(p)) => {
+            for (k, v) in p {
+                match v {
+                    // Arrays and scalars replace wholesale; only objects recurse. Merging
+                    // arrays element-wise would make it impossible to remove one.
+                    serde_json::Value::Object(_) => {
+                        let existing = b.remove(&k).unwrap_or(serde_json::Value::Null);
+                        b.insert(k, merge_json(existing, v));
+                    }
+                    _ => {
+                        b.insert(k, v);
+                    }
+                }
+            }
+            serde_json::Value::Object(b)
+        }
+        (_, patch) => patch,
+    }
+}
+
 pub async fn patch(
     State(state): State<Arc<AppState>>,
     principal: Principal,
     Path(id): Path<String>,
-    Json(mut input): Json<InstanceIn>,
+    Json(body): Json<serde_json::Value>,
 ) -> AppResult<impl IntoResponse> {
     let iri = ids::iri_for(state.base(), Kind::Instance, &id);
     // A deployment may maintain its own record; anyone else needs curator.
@@ -204,6 +272,18 @@ pub async fn patch(
     if !state.store.exists(&iri).map_err(AppError::from)? {
         return Err(AppError::not_found(format!("no instance at {iri}")));
     }
+    let ctx = Ctx::new(&state).await?;
+    let current = dom::load_instance(&ctx, &iri)?;
+    let merged = merge_json(
+        serde_json::to_value(instance_in_from(&current)).map_err(|e| AppError::internal(e.to_string()))?,
+        body,
+    );
+    let mut input: InstanceIn = serde_json::from_value(merged)
+        .map_err(|e| AppError::bad_request(format!("could not apply the change: {e}")))?;
+    // Ownership of a self-registered record is the registry's to state, not the caller's to
+    // edit: whatever the body said, the stored values stand.
+    input.self_registered_by = current.self_registered_by.clone();
+    input.instance_key = current.instance_key.clone();
     if let Some(sw) = input.software.clone() {
         input.software = Some(ids::iri_for(state.base(), Kind::Software, &sw));
     }
@@ -248,6 +328,186 @@ pub async fn put_capability(
     super::software::put_capability_on(&state, &principal, &iri, &input, "instance").await
 }
 
+/// `PUT /api/v1/instances/self` — a running service records what it is.
+///
+/// The deployment describes itself and nothing else. Which Instance it *is* comes from the
+/// presenting credential, never from the body: a Kubernetes pod presenting its projected
+/// ServiceAccount token, or a service with Keycloak client credentials, is already identified
+/// by the time it gets here. That is the same rule that governs advertisement (§8.3), and it is
+/// what stops one deployment rewriting another's record.
+///
+/// First announcement creates the Instance, but only when the operator has opted in with
+/// `TAR_OIDC_AUTO_REGISTER_INSTANCES=1`. Off by default, because a registry that silently gains
+/// a record for anything holding a trusted token has no idea what is in it. Later announcements
+/// update the record and always work, since the credential is bound to it by then.
+pub async fn announce_self(
+    State(state): State<Arc<AppState>>,
+    principal: Principal,
+    Json(input): Json<SelfAnnounceIn>,
+) -> AppResult<impl IntoResponse> {
+    principal.require_authenticated()?;
+    let client_id = match principal.credential {
+        crate::auth::CredentialKind::OidcWorkload | crate::auth::CredentialKind::LocalToken => {
+            principal.subject.clone()
+        }
+        _ => {
+            return Err(AppError::forbidden(
+                "only a deployment may announce itself; this is a person's or an administrator's \
+                 credential, so use POST /api/v1/instances",
+            ))
+        }
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    // A software-bound credential has no instance of its own, so the deployment is identified
+    // by the credential plus the name it calls itself. Look for the record it made last time
+    // before deciding this is a first announcement.
+    let self_key = input.instance_key.clone().unwrap_or_else(|| principal.subject.clone());
+    let existing = principal
+        .instance_iri
+        .clone()
+        .or_else(|| find_self_registered(&state, &principal.subject, &self_key));
+
+    if let Some(iri) = existing {
+        // Known deployment: merge what it said onto what we hold.
+        let ctx = Ctx::new(&state).await?;
+        let current = dom::load_instance(&ctx, &iri)?;
+        let mut merged = instance_in_from(&current);
+        apply_announcement(&mut merged, &input, state.base());
+        shacl::enforce(
+            state.shapes.validate_quads(&dom::instance_quads(state.base(), &iri, &merged, &principal.subject, merged.software.as_deref())),
+            state.config.shacl_validate_writes,
+        )?;
+        let software = resolve_software_for(&state, &merged)?;
+        check_deployable(&state, software.as_deref(), &merged)?;
+        let mut tx = dom::replace_instance(state.base(), &iri, &merged, &principal.subject, software.as_deref());
+        stamp_seen(&mut tx, &iri, &now);
+        state.store.apply(tx).map_err(AppError::from)?;
+        let _ = state
+            .ops
+            .audit(Some(&principal.subject), principal.actor_kind(), "instance.announce", Some(&iri), None, None)
+            .await;
+        let ctx = Ctx::new(&state).await?;
+        return Ok((StatusCode::OK, Json(dom::load_instance(&ctx, &iri)?)));
+    }
+
+    // Which software may this credential register a deployment of?
+    //
+    // Two modes, and the difference is where the authority comes from:
+    //
+    // 1. **Bound to the software.** The credential itself names it — an auto-registration key
+    //    minted at `POST /api/v1/software/{id}/tokens`, or an OIDC client the software lists in
+    //    `registration_clients`. The caller does not get to choose; the credential decides, so
+    //    a key for one application cannot register deployments of another.
+    // 2. **Open auto-registration.** `TAR_OIDC_AUTO_REGISTER_INSTANCES` lets any authenticated
+    //    workload name its own software. Convenient in a trusted cluster, and much weaker: it
+    //    is the operator saying every credential this registry accepts may add records.
+    let bound_software = principal.software_iri.clone();
+    let software_iri = match (&bound_software, &input.software) {
+        (Some(bound), Some(claimed)) => {
+            let claimed_iri = ids::iri_for(state.base(), Kind::Software, claimed);
+            if &claimed_iri != bound {
+                return Err(AppError::forbidden(format!(
+                    "this credential registers deployments of {bound}, not of {claimed_iri}"
+                )));
+            }
+            bound.clone()
+        }
+        (Some(bound), None) => bound.clone(),
+        (None, claimed) => {
+            if !state.config.oidc.auto_register_instances {
+                return Err(AppError::forbidden(format!(
+                    "no deployment is bound to {client_id}, and no software authorises it to \
+                     register one. Either an administrator creates the deployment with POST \
+                     /api/v1/instances setting oidc_client_id to {client_id}, or a curator issues \
+                     an auto-registration key with POST /api/v1/software/{{id}}/tokens (or lists \
+                     {client_id} in that software's registration_clients), or the operator \
+                     enables TAR_OIDC_AUTO_REGISTER_INSTANCES."
+                )));
+            }
+            let Some(claimed) = claimed.clone() else {
+                return Err(AppError::bad_request(
+                    "a first announcement must say which software this is a deployment of",
+                ));
+            };
+            ids::iri_for(state.base(), Kind::Software, &claimed)
+        }
+    };
+    let mut fresh = InstanceIn {
+        label: input.label.clone().unwrap_or_else(|| client_id.clone()),
+        software: Some(software_iri.clone()),
+        // Bind the record to the credential that announced it, so the next announcement from
+        // the same workload finds this record instead of making another.
+        // Only bind the client id when the credential *is* this deployment. A software-scoped
+        // credential is shared by every deployment of the application, and writing it here
+        // would make the next one authenticate as this one.
+        oidc_client_id: bound_software.is_none().then(|| client_id.clone()),
+        oidc_issuer: principal.issuer.clone(),
+        allowed_scopes: vec!["advertise:produce".into(), "advertise:consume".into()],
+        ..Default::default()
+    };
+    apply_announcement(&mut fresh, &input, state.base());
+    // `apply_announcement` copies `software` from the payload; put the authorised value back,
+    // so a credential bound to one application cannot register a deployment of another by
+    // naming it twice.
+    fresh.software = Some(software_iri);
+    fresh.self_registered_by = Some(principal.subject.clone());
+    fresh.instance_key = Some(self_key.clone());
+    let iri = ids::mint(state.base(), Kind::Instance);
+    let resolved = resolve_software_for(&state, &fresh)?;
+    check_deployable(&state, resolved.as_deref(), &fresh)?;
+    let quads = dom::instance_quads(state.base(), &iri, &fresh, &principal.subject, resolved.as_deref());
+    shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes)?;
+    let mut tx = GraphTx::new();
+    tx.extend(quads);
+    stamp_seen(&mut tx, &iri, &now);
+    state.store.apply(tx).map_err(AppError::from)?;
+    let _ = state
+        .ops
+        .audit(Some(&principal.subject), principal.actor_kind(), "instance.self-register", Some(&iri), Some(&client_id), None)
+        .await;
+    let ctx = Ctx::new(&state).await?;
+    Ok((StatusCode::CREATED, Json(dom::load_instance(&ctx, &iri)?)))
+}
+
+/// Copy the fields a deployment is allowed to say about itself. Everything absent is left as
+/// it stands, so announcing an endpoint does not erase the jurisdiction a curator set.
+fn apply_announcement(target: &mut InstanceIn, input: &SelfAnnounceIn, base: &str) {
+    if let Some(v) = &input.label {
+        target.label = v.clone();
+    }
+    if let Some(v) = &input.software {
+        target.software = Some(ids::iri_for(base, Kind::Software, v));
+    }
+    if let Some(v) = &input.release {
+        target.release = Some(ids::iri_for(base, Kind::Release, v));
+    }
+    for (from, to) in [
+        (&input.endpoint_url, &mut target.endpoint_url),
+        (&input.endpoint_description, &mut target.endpoint_description),
+        (&input.health_endpoint, &mut target.health_endpoint),
+        (&input.availability, &mut target.availability),
+        (&input.jurisdiction, &mut target.jurisdiction),
+        (&input.description, &mut target.description),
+    ] {
+        if from.is_some() {
+            *to = from.clone();
+        }
+    }
+    if input.capability.is_some() {
+        target.capability = input.capability.clone();
+    }
+}
+
+/// Record that we heard from this deployment. For one with no endpoint — a CLI, a desktop
+/// install — this is the only liveness signal that exists.
+fn stamp_seen(tx: &mut GraphTx, iri: &str, now: &str) {
+    tx.replace_property(iri, &format!("{}lastSeenAt", ns::TAR), ns::G_LOCAL);
+    let mut n = crate::rdf::Node::local(iri);
+    n.datetime(ns::TAR, "lastSeenAt", now);
+    tx.extend(n.finish());
+}
+
 pub async fn runs(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -289,4 +549,26 @@ pub async fn artifacts(
         .filter_map(|a| crate::domain::artifact::load_artifact(&ctx, a).ok())
         .collect();
     Ok(Json(Page::new(items, total, next)))
+}
+
+/// The deployment this credential registered previously, if any.
+///
+/// Keyed on the credential's subject *and* the name the deployment gave, so one auto-
+/// registration key can maintain several deployments (one per cluster, say) while each
+/// announcement still lands on the right record.
+fn find_self_registered(state: &AppState, subject: &str, key: &str) -> Option<String> {
+    let q = format!(
+        r#"{p}
+SELECT ?i WHERE {{
+  GRAPH <{g}> {{
+    ?i tar:selfRegisteredBy {subject} ; tar:instanceKey {key} .
+  }}
+  FILTER NOT EXISTS {{ GRAPH ?tg {{ ?i tar:tombstoned true }} }}
+}} LIMIT 1"#,
+        p = ns::PREFIXES,
+        g = ns::G_LOCAL,
+        subject = format!("\"{}\"", super::escape_literal(subject)),
+        key = format!("\"{}\"", super::escape_literal(key)),
+    );
+    state.store.select(&q).ok()?.rows.first()?.iri("i")
 }

@@ -50,6 +50,11 @@ impl AppError {
     pub fn gone(d: impl Into<String>) -> Self {
         Self::new(StatusCode::GONE, "tombstoned", "Record is tombstoned").detail(d)
     }
+    /// An upstream the registry depends on failed. Distinct from `internal` because the fault
+    /// is somebody else's server and the caller can usually see that from the message.
+    pub fn bad_gateway(d: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_GATEWAY, "upstream-failed", "Upstream request failed").detail(d)
+    }
     pub fn internal(d: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "Internal error").detail(d)
     }

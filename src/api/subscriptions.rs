@@ -464,7 +464,7 @@ fn require_iri(field: &str, value: &str) -> AppResult<()> {
         return Ok(());
     }
     Err(AppError::bad_request(format!(
-        "{field} must be a full IRI (an EDAM or local type IRI, or an SPDX licence IRI), got {value:?}"
+        "{field} must be a full IRI (a vocabulary term, a registry-local type, or an SPDX licence), got {value:?}"
     )))
 }
 

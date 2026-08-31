@@ -69,5 +69,5 @@ pub async fn get(
     let iri = ids::iri_for(state.base(), Kind::Run, &id);
     let run = dom::load_run(&ctx, &iri)?;
     let sp = Signposting::new(&iri).collection(&format!("{}/api/v1/runs", state.base()));
-    Ok(resource_response(&state, &headers, &iri, &run, sp, Repr::Json)?)
+    Ok(resource_response(&state, &headers, &iri, &run, sp, Repr::Json).await?)
 }

@@ -85,6 +85,7 @@ async fn main() -> Result<()> {
             println!("data_dir              {}", c.data_dir);
             println!("listen                {}", c.listen);
             println!("public_read           {}", c.public_read);
+            println!("sparql_public         {}", c.sparql_public);
             println!("shacl_validate_writes {}", c.shacl_validate_writes);
             println!("root_token            {}", if c.root_token.is_some() { "set" } else { "unset" });
             println!("static_dir            {}", c.static_dir.unwrap_or_else(|| "(none — API only)".into()));
@@ -125,6 +126,7 @@ async fn serve() -> Result<()> {
     if state.config.peer_resolve_enabled {
         tokio::spawn(api::peers::resolver_loop(state.clone()));
     }
+    tokio::spawn(tar::health::check_loop(state.clone()));
     // Webhook delivery, off the request path for the same reason peer resolution is: nothing a
     // subscriber's endpoint does may be felt by the deployment that advertised.
     tokio::spawn(api::subscriptions::delivery_loop(state.clone()));

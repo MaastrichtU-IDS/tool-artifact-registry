@@ -52,12 +52,26 @@ async fn deref(
         return Ok(resp);
     }
 
+    // Markdown: the same record the Turtle describes, rendered as prose for an agent. Built
+    // from the loaded model rather than from the quads, so it says "outdated" and "health" and
+    // the other things the model computes and the raw graph does not carry.
+    if repr == Repr::Markdown {
+        let body = super::llms::render_record(&state, &ctx, kind, &iri, &quads)?;
+        return Ok(Negotiated { repr, body, signposting: Some(sp), status: axum::http::StatusCode::OK }.into_response());
+    }
+
     if repr == Repr::Json {
         let body = match kind {
             Kind::Software => serde_json::to_string(&swdom::load_software(&ctx, &iri)?),
             Kind::Instance => serde_json::to_string(&instdom::load_instance(&ctx, &iri)?),
             Kind::Artifact => serde_json::to_string(&artdom::load_artifact(&ctx, &iri)?),
             Kind::Run => serde_json::to_string(&rundom::load_run(&ctx, &iri)?),
+            // A release has a JSON shape like everything else; without this arm the `_` below
+            // returned Turtle under a `Content-Type: application/json`.
+            Kind::Release => {
+                let p = crate::rdf::Props::from_quads(&iri, &quads);
+                serde_json::to_string(&swdom::release_from_props(&ctx, &iri, &p))
+            }
             _ => Ok(serialize(&quads, Repr::Turtle, state.base())?),
         }
         .map_err(|e| AppError::internal(e.to_string()))?;

@@ -97,13 +97,21 @@ pub async fn list(
     Query(paging): Query<Paging>,
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    // Every type actually in use, whether registry-minted or external (EDAM and friends), not
-    // just the ones this registry happens to have minted a concept for.
+    // Types this registry *knows as types*: the ones it minted, plus any IRI something
+    // actually declares itself as or claims to produce or consume.
+    //
+    // Deliberately not "every skos:Concept in the store". The bundled EDAM vocabulary is over
+    // a thousand concepts and lives in the same graph; listing it here would answer "which
+    // types does this registry use?" with "all of EDAM", which is not an answer. Searching the
+    // whole vocabulary is what /api/v1/vocab/search is for.
+    let minted_prefix = format!("{}/type/", ctx.base());
     let q = format!(
         r#"{p}
 SELECT DISTINCT ?s WHERE {{
-  GRAPH ?g {{ {{ ?s a <{TYPE_CONCEPT}> }} UNION {{ ?a dct:conformsTo ?s }}
-              UNION {{ ?c tar:produces ?s }} UNION {{ ?c tar:consumes ?s }} }}
+  GRAPH ?g {{
+    {{ ?a dct:conformsTo ?s }} UNION {{ ?c tar:produces ?s }} UNION {{ ?c tar:consumes ?s }}
+    UNION {{ ?s a <{TYPE_CONCEPT}> . FILTER(STRSTARTS(STR(?s), "{minted_prefix}")) }}
+  }}
 }} ORDER BY STR(?s)"#,
         p = ns::PREFIXES
     );

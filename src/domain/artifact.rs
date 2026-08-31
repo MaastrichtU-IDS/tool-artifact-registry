@@ -14,6 +14,8 @@ use oxigraph::model::Quad;
 pub const TYPE_DATASET: &str = "http://www.w3.org/ns/dcat#Dataset";
 pub const TYPE_ENTITY: &str = "http://www.w3.org/ns/prov#Entity";
 pub const TYPE_DISTRIBUTION: &str = "http://www.w3.org/ns/dcat#Distribution";
+/// The version-series concept an artifact belongs to (D10).
+pub const TYPE_ARTIFACT_SERIES: &str = "https://w3id.org/tar/ns#ArtifactSeries";
 
 pub const AVAILABILITIES: [&str; 4] = ["public", "restricted", "embargoed", "metadata-only"];
 /// `http` is here deliberately. An intranet service or a local deployment really does serve
@@ -62,7 +64,10 @@ pub fn artifact_quads(base: &str, iri: &str, input: &ArtifactIn, actor: &str, ru
     let series = input.is_version_of.clone().unwrap_or_else(|| ids::mint(base, Kind::ArtifactSeries));
     n.link(ns::DCT, "isVersionOf", &series);
     let mut s = Node::local(&series);
-    s.a(&format!("{}Concept", ns::SKOS));
+    // Deliberately NOT skos:Concept. It is a concept in the Zenodo sense — the idea of "this
+    // artifact, any version" — but typing it that way put every artifact's *title* into the
+    // artifact-type picker, where it is not a type and must never be offered as one.
+    s.a(TYPE_ARTIFACT_SERIES);
     s.opt_text(ns::SKOS, "prefLabel", &input.title);
     quads.extend(s.finish());
     crate::rdf::attribution(&mut n, actor);

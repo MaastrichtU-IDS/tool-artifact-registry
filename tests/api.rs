@@ -934,6 +934,36 @@ async fn sparql_is_read_only_and_answers_select_ask_and_construct() {
         .unwrap();
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN, "the SPARQL endpoint must refuse writes");
+
+    // The query form is read past the prologue: every realistic ASK and DESCRIBE begins with
+    // PREFIX declarations, and matching on the raw first word sent those down the SELECT path.
+    let q = "PREFIX schema: <https://schema.org/> ASK { GRAPH ?g { ?s schema:name \"shacl-manager\" } }";
+    let req = Request::builder().method("POST").uri("/sparql").body(Body::from(q.to_string())).unwrap();
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "a prefixed ASK is still an ASK");
+    let body: Value = serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["boolean"], true);
+
+    let q = "PREFIX schema: <https://schema.org/>\n# a comment before the form\nCONSTRUCT { ?s schema:name ?n } WHERE { GRAPH ?g { ?s schema:name ?n } }";
+    let req = Request::builder().method("POST").uri("/sparql").body(Body::from(q.to_string())).unwrap();
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()[axum::http::header::CONTENT_TYPE], "text/turtle; charset=utf-8");
+
+    // A syntax error is the client's fault and says where it is, rather than a 500 whose
+    // detail only echoes the query back.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/sparql")
+        .body(Body::from("SELECT ?s WHERE { ?s ?p".to_string()))
+        .unwrap();
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body: Value = serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert!(
+        body["detail"].as_str().unwrap().starts_with("SPARQL syntax error:"),
+        "{body}"
+    );
 }
 
 #[tokio::test]
@@ -1592,4 +1622,50 @@ async fn plain_http_is_a_nameable_access_protocol() {
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{out}");
+}
+
+
+#[tokio::test]
+async fn an_artifact_title_never_becomes_a_selectable_artifact_type() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    h.post(
+        "/api/v1/advertise/produced",
+        &f.token,
+        json!({"run": {"external_key": "t-1"}, "artifacts": [{
+            "title": "Cohort extract, March",
+            "conforms_to": "http://edamontology.org/data_2048",
+            "distributions": [{"access_url": "https://x.example/1", "availability": "public"}]
+        }]}),
+    )
+    .await;
+
+    // Every artifact gets a version-series node (D10). It is a "concept" in the Zenodo sense,
+    // but it is not a *type*, and offering an artifact's own title as a type to classify the
+    // next artifact with would be nonsense that compounds with every advertisement.
+    let (_, types) = h.get("/api/v1/types?limit=200").await;
+    let labels: Vec<&str> = types["items"].as_array().unwrap().iter().map(|t| t["label"].as_str().unwrap()).collect();
+    assert!(!labels.contains(&"Cohort extract, March"), "{labels:?}");
+
+    let (_, hits) = h.get("/api/v1/vocab/search?q=Cohort").await;
+    assert_eq!(hits["items"].as_array().unwrap().len(), 0, "nor in the picker: {hits}");
+
+    // The type it actually conforms to is listed, because something declares itself as it.
+    assert!(labels.iter().any(|l| *l == "Report"), "the EDAM type in use should be listed: {labels:?}");
+}
+
+#[tokio::test]
+async fn the_type_list_is_types_in_use_not_the_whole_bundled_vocabulary() {
+    let h = harness().await;
+    h.fixture().await;
+    // EDAM ships bundled for the pickers — over a thousand concepts. Answering "which types
+    // does this registry use?" with all of them is not an answer; /vocab/search is for
+    // searching the vocabulary.
+    let (status, types) = h.get("/api/v1/types?limit=500").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(types["total"].as_i64().unwrap() < 50, "expected types in use, got {}", types["total"]);
+
+    // The picker still sees the whole bundle.
+    let (_, hits) = h.get("/api/v1/vocab/search?q=sequence%20alignment&branch=data&limit=5").await;
+    assert!(!hits["items"].as_array().unwrap().is_empty(), "vocabulary search should still reach EDAM");
 }

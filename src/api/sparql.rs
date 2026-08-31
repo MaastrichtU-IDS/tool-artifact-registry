@@ -58,6 +58,13 @@ async fn run(
             ));
         }
     }
+    // Parse here so a malformed query is a 400 carrying the parser's own message (line and
+    // column), rather than a 500 whose detail only echoes the query back. The store parses
+    // again when it evaluates; queries are small and this runs once per request.
+    if let Err(e) = oxigraph::sparql::SparqlEvaluator::new().parse_query(&q) {
+        return Err(AppError::bad_request(format!("SPARQL syntax error: {e}")));
+    }
+
     let wants_json = format.as_deref() == Some("json")
         || headers
             .get(axum::http::header::ACCEPT)
@@ -65,14 +72,18 @@ async fn run(
             .is_some_and(|a| a.contains("json"));
 
     // ASK and CONSTRUCT are answered too — a peer registry uses CONSTRUCT for stubs.
-    if upper.trim_start().starts_with("ASK") {
+    // The form is read after the prologue: `PREFIX … ASK { … }` is the normal way to write an
+    // ASK, and matching on the raw first word sent every prefixed ASK and DESCRIBE down the
+    // SELECT path, where the store answers "expected a SELECT query" with a 500.
+    let form = query_form(&q);
+    if form == "ASK" {
         let b = state.store.ask(&q).map_err(AppError::from)?;
         return Ok((
             [(axum::http::header::CONTENT_TYPE, "application/sparql-results+json")],
             serde_json::json!({"head": {}, "boolean": b}).to_string(),
         ));
     }
-    if upper.contains("CONSTRUCT") || upper.trim_start().starts_with("DESCRIBE") {
+    if form == "CONSTRUCT" || form == "DESCRIBE" {
         let triples = state.store.construct(&q).map_err(AppError::from)?;
         let quads: Vec<oxigraph::model::Quad> = triples
             .into_iter()
@@ -102,6 +113,35 @@ async fn run(
     });
     let ct = if wants_json { "application/json" } else { "application/sparql-results+json" };
     Ok(([(axum::http::header::CONTENT_TYPE, ct)], doc.to_string()))
+}
+
+/// The query form — `SELECT`, `ASK`, `CONSTRUCT` or `DESCRIBE` — read past the SPARQL
+/// prologue, since `BASE`/`PREFIX` declarations and comments legally precede it.
+fn query_form(q: &str) -> &'static str {
+    let mut rest = q;
+    loop {
+        rest = rest.trim_start();
+        if let Some(after) = rest.strip_prefix('#') {
+            // A comment runs to the end of the line; an unterminated one ends the query.
+            rest = after.split_once('\n').map(|(_, r)| r).unwrap_or("");
+            continue;
+        }
+        let head: String = rest.chars().take(9).collect::<String>().to_uppercase();
+        if head.starts_with("PREFIX") || head.starts_with("BASE") {
+            // Both declarations end with an IRIREF, so skip past its closing '>'.
+            match rest.split_once('>') {
+                Some((_, after)) => rest = after,
+                None => return "SELECT",
+            }
+            continue;
+        }
+        for form in ["SELECT", "ASK", "CONSTRUCT", "DESCRIBE"] {
+            if head.starts_with(form) {
+                return form;
+            }
+        }
+        return "SELECT";
+    }
 }
 
 fn term_json(t: &oxigraph::model::Term) -> serde_json::Value {

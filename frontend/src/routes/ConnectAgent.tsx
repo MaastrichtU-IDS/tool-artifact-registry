@@ -72,7 +72,7 @@ export default function ConnectAgent() {
             <p>
               For a client that does not, or for a script, use a registry API token instead:
               mint one from a deployment's <strong>Credentials</strong> page, or from a
-              software's <strong>Auto-registration</strong> page, and send it as a bearer token.
+              software's <strong>Create deployment</strong> page, and send it as a bearer token.
             </p>
           </>
         ) : (

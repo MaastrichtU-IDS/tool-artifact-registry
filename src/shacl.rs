@@ -316,6 +316,29 @@ fn field_for(path: &str, focus: &str, hints: &HashMap<String, String>) -> String
     }
 }
 
+/// Everything a write must satisfy before it is committed: the shapes, and the vocabulary rule
+/// the shapes cannot express.
+///
+/// The two are merged into one report rather than checked one after the other, so a write that
+/// is wrong in both ways comes back naming both fields instead of sending the caller round the
+/// loop twice.
+///
+/// `TAR_SHACL_VALIDATE_WRITES=false` downgrades shape violations to warnings, as it always has —
+/// an estate that would rather have a half-described artifact than none. It deliberately does
+/// not reach the vocabulary rule: an unknown type is not a half-described artifact, it is a new
+/// tag minted by accident, and that is the one thing the switch must not turn off.
+pub fn enforce_write(state: &crate::state::AppState, quads: &[Quad]) -> Result<Report, crate::error::AppError> {
+    let mut report = state.shapes.validate_quads(quads);
+    if !state.config.shacl_validate_writes {
+        for f in &mut report.findings {
+            f.severity = Severity::Warning;
+        }
+    }
+    report.findings.extend(crate::domain::vocabulary::findings(state, quads));
+    report.findings.sort_by(|a, b| a.field.cmp(&b.field).then_with(|| a.message.cmp(&b.message)));
+    enforce(report, true)
+}
+
 /// Turn a report into the `422` of spec §7.9, or let the write through.
 pub fn enforce(report: Report, blocking: bool) -> Result<Report, crate::error::AppError> {
     if blocking && !report.conforms() {

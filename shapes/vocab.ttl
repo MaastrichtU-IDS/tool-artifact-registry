@@ -1,8 +1,9 @@
 # Vocabulary preload for <urn:tar:vocab> (spec §5.4).
 #
-# EDAM is the recommended default for ArtifactType (D11) but is not vendored in full: this is
+# EDAM is the recommended default for artifact types (D11) but is not vendored in full: this is
 # the working subset that IDS artifacts use, so chips render labels without a network call.
-# Any other IRI still works — ArtifactType is any IRI.
+# What a write may name is what the registry holds, and what kind it may name it as is the
+# class each concept carries — see the concept classes below.
 
 @prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 @prefix tar:  <https://w3id.org/tar/ns#> .
@@ -13,29 +14,43 @@
 
 # --- EDAM data types -------------------------------------------------------
 
-<http://edamontology.org/data_2600> a skos:Concept ;
+<http://edamontology.org/data_2600> a skos:Concept, tar:ArtifactType ;
     skos:prefLabel "Pathway or network" ;
     skos:definition "An EDAM data type. Kept here only so the label resolves if a record cites it; the registry's own RDF payloads use tar's rdf-graph type instead." .
 
-<http://edamontology.org/data_2048> a skos:Concept ;
+<http://edamontology.org/data_2048> a skos:Concept, tar:ArtifactType ;
     skos:prefLabel "Report" ;
     skos:definition "A human- or machine-readable report produced by an analysis." ;
     tar:defaultMediaType "text/turtle" .
 
-<http://edamontology.org/data_0006> a skos:Concept ;
+<http://edamontology.org/data_0006> a skos:Concept, tar:ArtifactType ;
     skos:prefLabel "Data" ;
     skos:definition "A generic data artifact of unspecified type." .
 
 # --- EDAM topics -----------------------------------------------------------
 
-<http://edamontology.org/topic_3071> a skos:Concept ;
+<http://edamontology.org/topic_3071> a skos:Concept, tar:LegacyTopic ;
     skos:prefLabel "Data management" .
 
-<http://edamontology.org/topic_0089> a skos:Concept ;
+<http://edamontology.org/topic_0089> a skos:Concept, tar:LegacyTopic ;
     skos:prefLabel "Ontology and terminology" .
 
-<http://edamontology.org/topic_3068> a skos:Concept ;
+<http://edamontology.org/topic_3068> a skos:Concept, tar:LegacyTopic ;
     skos:prefLabel "Literature and language" .
+
+# --- artifact types the registry defines for itself ------------------------
+#
+# The OpenLineage adapter types a dataset carrying a schema facet, and had been writing this
+# IRI without anything anywhere declaring it: the chip rendered "TabularDataset" from the IRI
+# tail, and no picker could offer it. Declared here, it is an ordinary term like any other, and
+# the write path that mints it passes the same vocabulary check every other write does.
+
+tar:TabularDataset a skos:Concept, tar:ArtifactType ;
+    skos:prefLabel "Tabular dataset" ;
+    skos:definition "Data in rows and columns with a declared schema — a table, a CSV export, a relational extract." ;
+    skos:altLabel "table" ;
+    skos:altLabel "CSV" ;
+    tar:defaultMediaType "text/csv" .
 
 # --- the tar: vocabulary itself -------------------------------------------
 #
@@ -45,6 +60,45 @@
 # says what was checked and why nothing standard fit; terms a standard vocabulary does
 # cover are marked owl:deprecated and are no longer written, only read as fallbacks for
 # graphs written before the audit.
+
+# ---- concept classes ------------------------------------------------------
+#
+# A vocabulary-valued field needs more than a term that exists. Pointed at this registry and
+# told to classify a tool, a real coding agent produced `edamontology.org/topic_3170`, which
+# does exist — it is EDAM's "RNA-Seq" — and an existence check waved it onto a record that had
+# nothing to do with RNA-Seq. So every write asks which *kind* of concept it was handed.
+#
+# That kind used to be a `tar:conceptBranch` string written beside the concept, and the string
+# came apart from the concept the first time the two were written by different code paths: the
+# registry's own types were created by the type handler into <urn:tar:local>, a later backfill
+# put their markers into <urn:tar:vocab>, and every query asking for both inside one GRAPH
+# block then found neither. Those types stayed held and accepted on write while no picker would
+# offer them, which reads as "this registry has no types of its own".
+#
+# So the kind is a class now, asserted in the same statement that makes the concept. A marker
+# that *is* the `a skos:Concept` statement cannot be written into a different graph from it,
+# and rdfs:subClassOf keeps every one of these a skos:Concept to a reader that has never heard
+# of tar:.
+
+tar:ArtifactType a rdfs:Class ;
+    rdfs:subClassOf skos:Concept ;
+    rdfs:label "Artifact type" ;
+    rdfs:comment "What an artifact *is*: the range of dct:conformsTo on an artifact, and of tar:produces and tar:consumes on a capability. Every capability query and every subscription filter matches this exactly, so a near-synonym costs more here than anywhere else in the model — which is why a value that is not one of these is refused rather than stored as the free IRI the spec originally allowed." .
+
+tar:ResearchTopic a rdfs:Class ;
+    rdfs:subClassOf skos:Concept ;
+    rdfs:label "Research topic" ;
+    rdfs:comment "A field of science a Software record is about: the range of dct:subject. A separate class from tar:ArtifactType because the two are not interchangeable and the confusion is the common one — a subject area put in conforms_to describes nothing, and without distinct kinds the registry has no way to notice." .
+
+tar:ArtifactKeyword a rdfs:Class ;
+    rdfs:subClassOf skos:Concept ;
+    rdfs:label "Artifact keyword" ;
+    rdfs:comment "A concept in the registry's own artifact-keyword scheme. A keyword is a label rather than a type, so it must never be accepted where a type or a topic is expected; it is a class rather than a bare member of the scheme so the pickers scope to it with the same query they use for every other kind, knowing nothing about that scheme in particular." .
+
+tar:LegacyTopic a rdfs:Class ;
+    rdfs:subClassOf skos:Concept ;
+    rdfs:label "Legacy topic" ;
+    rdfs:comment "A subject-area concept from the vocabulary this registry classified software by before the current one, bundled only so a record that already cites one still renders a label. Never offered by a picker and never accepted on a write — this is the class `topic_3170` belongs to. Deliberately its own class rather than an untyped skos:Concept: a term cached from a peer is also untyped, and a peer is authoritative for its own types where this is a term nobody should choose again, so the two must not collapse into one." .
 
 # ---- marker classes -------------------------------------------------------
 

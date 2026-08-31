@@ -151,7 +151,7 @@ near-duplicates make a model choose badly.
 | `vocab_search` | Search the controlled vocabulary. `branch=topic` (EuroSciVoc: what software is *about*), `branch=data` (EDAM: what an artifact *is*), or everything including locally minted types. |
 | `vocab_resolve` | Check that IRIs you were handed are real, and get their labels. |
 | `list_enumerations` | Every closed value set the registry validates against — kinds, maturity, availability, access protocols, auth methods, run statuses, scopes. |
-| `register_artifact_type` | Mint a local type when the vocabulary genuinely has no term. The honest alternative to a fabricated IRI. |
+| `register_artifact_type` | Make a type nameable when `vocab_search` has none: **adopt** an IRI the term already has elsewhere (pass `iri`), or **mint** one when nothing anywhere names it. The honest alternative to a fabricated IRI. |
 
 ### Reading
 
@@ -209,55 +209,63 @@ Every write tool's description ends with the same contract, and every vocabulary
 filling:
 
 > **DO NOT INVENT VALUES.** Ontology IRIs (topics, artifact types) MUST come from `vocab_search`
-> or `register_artifact_type`; this server refuses an IRI from a vocabulary it bundles that it
-> cannot resolve, so guessing fails loudly rather than quietly. Closed value sets MUST come from
-> `list_enumerations`. Omit any field you cannot confirm from the repository, the package
-> metadata or the user — the registry renders an absent field honestly ("licence not stated"),
-> while a plausible wrong value is undetectable.
+> or `register_artifact_type`; this server refuses any term it cannot resolve, so guessing fails
+> loudly rather than quietly. Closed value sets MUST come from `list_enumerations`. Omit any
+> field you cannot confirm from the repository, the package metadata or the user — the registry
+> renders an absent field honestly ("licence not stated"), while a plausible wrong value is
+> undetectable.
 
 ### 4.2 Looking up is cheaper than recalling
 
 `vocab_search` and `list_enumerations` exist so that the correct behaviour is also the easy one,
-and a search returning nothing says what to do next — omit the field, or mint a local type —
-rather than leaving the model to fill the silence.
+and a search returning nothing says what to do next — omit the field, adopt the IRI the term
+already has elsewhere, or register a new one — rather than leaving the model to fill the
+silence.
 
 ### 4.3 The server checks — this is the one that holds
 
-Prose is a suggestion. Before any write, `guard_vocabulary` extracts every ontology IRI from the
-arguments at any depth and asks two questions of the registry's own vocabulary graph.
+Prose is a suggestion. **A write may only name a term this registry holds**, and that rule lives
+in one place, `src/domain/vocabulary.rs`, enforced on every REST write path. It is not a second
+rule for agents: `guard_vocabulary` extracts every ontology IRI from the arguments at any depth
+and asks that same code for a verdict, purely so the refusal can be phrased in tool names rather
+than routes. There used to be two rules here, kept in step by hand, and they had already drifted
+— MCP warned about a foreign type IRI that REST accepted outright.
 
-**Does it exist?** An IRI in a vocabulary the registry bundles (EDAM, EuroSciVoc) or minted
-itself (`{base}/type/…`) that resolves to nothing is **fatal**, because the registry is
-authoritative about the contents of those. Any other unresolved IRI is only a **warning**
-attached to the successful result: a foreign type IRI belonging to another registry is
-legitimate by design (spec D11 — an ArtifactType is any IRI), and refusing it would break
-federation to prevent a mistake it cannot make.
+**Does the registry hold it?** A term it cannot resolve to a `skos:Concept` in any of its graphs
+is refused, whoever it belongs to. This is stricter than it was: an unrecognised foreign IRI used
+to be waved through with a warning, on the grounds that federation needs foreign types. It does —
+but a peer's record never passes through a write handler, so nothing about federation depended on
+*this registry* being allowed to mint an unvetted type. Adopting the term first, with
+`register_artifact_type` and its `iri`, is one call and leaves both registries agreeing on one
+identifier.
 
 **Is it the right kind of thing?** This half was found by pointing a real coding agent at this
 server and telling it to guess. It produced `http://edamontology.org/topic_3170`, which *does*
 exist — it is EDAM's "RNA-Seq" — and an existence check alone waved it onto a record that had
-nothing to do with RNA-Seq. But software topics come from EuroSciVoc here, and `build.rs` marks
-EDAM's topic branch `topic-edam` precisely so the picker never offers it. So the rule is not
-"does this term exist" but **"could `vocab_search` have returned this term for this field"**,
-which rejects a real term in the wrong branch as firmly as an invented one:
+nothing to do with RNA-Seq. Terms like it are bundled only so older records citing them still
+render a label, and are typed as a kind `vocab_search` never offers. So the rule is not "does this
+term exist" but **"could `vocab_search` have returned this term for this field"**, which rejects a
+real term of the wrong kind as firmly as an invented one:
 
 ```
 Refused before writing anything — 1 vocabulary problem(s) in these arguments:
-- http://edamontology.org/topic_3170 is an EDAM topic. EDAM's topic branch is bundled only so
-  that older records citing one still render a label; software is classified with EuroSciVoc
-  here, and `vocab_search` with branch=topic never returns an EDAM topic. Search again with
-  branch=topic and use what it gives you.
+- http://edamontology.org/topic_3170 is a term this registry holds, but not one it classifies
+  software by — it is kept so that records already citing it still render a label. Search with
+  `vocab_search` branch=topic and use what it gives you, or omit the field.
 ```
 
-Nothing is written when this fires.
+Nothing is written when this fires. The message names no vocabulary, deliberately: several are in
+play and more will follow, so a refusal that named one would be wrong the moment another arrives.
 
-### 4.4 The SHACL correction loop
+### 4.4 The correction loop
 
-A write the shapes reject comes back `422` with an RFC 9457 problem document whose `detail` is
-already `field: message`, built from `tar:jsonField` on each validation result. That is
+A write the shapes or the vocabulary rule reject comes back `422` with an RFC 9457 problem
+document whose `detail` is already `field: message`, built from `tar:jsonField` on each
+validation result — the vocabulary rule reports through the same report as a shape violation, so
+there is one error shape to handle, not two. That is
 surfaced verbatim with instructions:
 
-> The registry refused this write: it does not satisfy the registry's SHACL shapes.
+> The registry refused this write: one or more fields are not values it accepts.
 > Offending fields: `kind: value must be one of service, library, cli, desktop, workflow`
 > Fix exactly the named field(s) and retry. **If you cannot establish the true value of a field,
 > remove it from the request rather than substituting a plausible one** — the registry renders

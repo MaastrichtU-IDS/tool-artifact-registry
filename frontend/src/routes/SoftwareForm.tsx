@@ -415,9 +415,9 @@ export default function SoftwareForm() {
         <p className="hint" style={{ marginTop: 0 }}>
           Two ways a deployment gets into this registry. Either a curator creates it here by
           hand, or the application registers itself — list the OIDC client ids allowed to do
-          that below, or issue an auto-registration key from the software's page. A
-          self-registering deployment publishes its own endpoint, version and health endpoint,
-          and keeps them current.
+          that below, or issue a key from the software's <strong>Create deployment</strong>{' '}
+          page. A self-registering deployment publishes its own endpoint, version and health
+          endpoint, and keeps them current.
         </p>
         {registrationClients.map((c, i) => (
           <div className="row" key={i} style={{ alignItems: 'flex-end', gap: 8 }}>
@@ -454,8 +454,9 @@ export default function SoftwareForm() {
       <fieldset>
         <legend>Capability</legend>
         <p className="hint" style={{ marginTop: 0 }}>
-          Artifact types are any IRI. Search picks from the vocabularies this registry carries;
-          a registry-local type IRI works for the things none of them name.
+          Artifact types come from this registry's vocabularies. If nothing matches, the picker
+          will offer to record a new one — or to adopt an IRI you paste, under the identifier it
+          already has.
         </p>
         <TermPicker
           id="consumes"
@@ -464,7 +465,7 @@ export default function SoftwareForm() {
           value={consumes}
           onChange={setConsumes}
           placeholder="ontology, alignment, sequence…"
-          hint="What it takes in. Vocabulary terms and this registry's own types both appear; an IRI can be pasted directly."
+          hint="What it takes in. Vocabulary terms and this registry's own types both appear."
         />
         <TermPicker
           id="produces"

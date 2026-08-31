@@ -625,7 +625,8 @@ pub fn site_index(ix: &SiteIndex<'_>) -> String {
     out.push_str(&format!("- [Artifacts]({}/api/v1/artifacts): the data. Filter by `?conforms_to=`, `?availability=` and `?keyword=`.\n", ix.base));
     out.push_str(&format!("- [Runs]({}/api/v1/runs): executions, each linking the artifacts it used and generated.\n", ix.base));
     out.push_str(&format!("- [Capability matchmaking]({}/api/v1/capabilities?produces=): which software can produce or consume a given type of artifact.\n", ix.base));
-    out.push_str(&format!("- [Vocabulary search]({}/api/v1/vocab/search?q=&branch=topic): look up a controlled term before citing it. `branch=topic` for research topics, `branch=data` for artifact types. Never guess a term IRI — search for it.\n", ix.base));
+    out.push_str(&format!("- [Vocabulary search]({}/api/v1/vocab/search?q=&branch=topic): look up a controlled term before citing it. `branch=topic` for research topics, `branch=data` for artifact types. Never guess a term IRI — a write naming one this registry cannot resolve is refused, and the refusal says how to recover.\n", ix.base));
+    out.push_str(&format!("- [Artifact types]({}/api/v1/types): what an artifact may say it is. When the search has nothing, POST here — with an `iri` to adopt a term that already has one elsewhere, without to have this registry name it.\n", ix.base));
     out.push_str(&format!("- [Artifact types]({}/api/v1/types): the types this registry has minted or seen in use.\n", ix.base));
     out.push_str(&format!("- [Artifact keywords]({}/api/v1/keywords): the short list of keywords this registry recognises on artifacts. Use these spellings; anything else is kept as free text and will not match a keyword filter or a subscription written against the list.\n", ix.base));
     if ix.sparql_public {

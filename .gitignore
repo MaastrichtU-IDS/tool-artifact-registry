@@ -8,3 +8,6 @@ frontend/dist
 *.db-shm
 .env
 demo/.run/
+
+# Incremental build cache — churns on every build and belongs to no one.
+frontend/tsconfig.tsbuildinfo

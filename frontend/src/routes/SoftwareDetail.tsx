@@ -52,10 +52,10 @@ export default function SoftwareDetail() {
                 {isCurator && !foreign && !s.tombstoned && (
                   <Link className="chip" to={`/software/${s.id}/edit`}>Edit</Link>
                 )}
-                {/* Only offered where a deployment could exist: an auto-registration key for
-                    software that cannot be hosted would create records nothing can fill in. */}
+                {/* Only offered where a deployment could exist: software that cannot be hosted
+                    has none, so there would be nothing to register. */}
                 {isCurator && !foreign && !s.tombstoned && s.deployable && (
-                  <Link className="chip" to={`/software/${s.id}/tokens`}>Auto-registration</Link>
+                  <Link className="chip accent" to={`/software/${s.id}/deploy`}>Create deployment</Link>
                 )}
               </div>
             </div>

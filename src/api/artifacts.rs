@@ -151,7 +151,7 @@ pub async fn create(
     }
     let iri = ids::mint(state.base(), Kind::Artifact);
     let quads = dom::artifact_quads(state.base(), &iri, &input, &principal.subject, None);
-    shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes)?;
+    shacl::enforce_write(&state, &quads)?;
     let mut tx = GraphTx::new();
     tx.extend(quads);
     state.store.apply(tx).map_err(AppError::from)?;

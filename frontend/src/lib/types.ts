@@ -487,3 +487,21 @@ export type SparqlAnswer =
   | { form: 'select'; vars: string[]; rows: Record<string, SparqlTerm>[] }
   | { form: 'ask'; boolean: boolean }
   | { form: 'graph'; turtle: string }
+
+// ------------------------------------------------------- artifact types
+
+/** A type a write may name: one this registry minted, or one it adopted under the identifier the
+ *  term already had elsewhere. `POST /api/v1/types` is what puts a term in this set. */
+export interface ArtifactType {
+  iri: string
+  id: string
+  label: string
+  definition?: string
+  default_media_type?: string
+  artifact_count: number
+  source: string
+  /** False when this registry minted the IRI, true when it was taken from another vocabulary. */
+  adopted: boolean
+  scheme?: string
+  aliases?: string[]
+}

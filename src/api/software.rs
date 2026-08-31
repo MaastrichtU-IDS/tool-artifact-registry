@@ -165,7 +165,7 @@ pub async fn create(
     }
     let iri = ids::mint(state.base(), Kind::Software);
     let quads = dom::software_quads(state.base(), &iri, &input, &principal.subject, None);
-    shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes)?;
+    shacl::enforce_write(&state, &quads)?;
     let mut tx = GraphTx::new();
     tx.extend(quads);
     state.store.apply(tx).map_err(AppError::from)?;
@@ -210,7 +210,7 @@ pub async fn patch(
     }
     let created = Props::from_quads(&iri, &existing).str(ns::DCT, "created");
     let tx = dom::replace_software(state.base(), &iri, &input, &principal.subject, created);
-    shacl::enforce(state.shapes.validate_quads(&tx.insert), state.config.shacl_validate_writes)?;
+    shacl::enforce_write(&state, &tx.insert)?;
     state.store.apply(tx).map_err(AppError::from)?;
     let _ = state
         .ops
@@ -278,7 +278,7 @@ pub async fn create_release(
     }
     let iri = ids::mint(state.base(), Kind::Release);
     let quads = dom::release_quads(state.base(), &iri, &software_iri, &input, &principal.subject);
-    shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes)?;
+    shacl::enforce_write(&state, &quads)?;
     let mut tx = GraphTx::new();
     tx.extend(quads);
     state.store.apply(tx).map_err(AppError::from)?;
@@ -356,7 +356,7 @@ pub async fn sync(
     });
     let created = Props::from_quads(&iri, &quads).str(ns::DCT, "created");
     let tx = dom::replace_software(state.base(), &iri, &input, &principal.subject, created);
-    shacl::enforce(state.shapes.validate_quads(&tx.insert), state.config.shacl_validate_writes)?;
+    shacl::enforce_write(&state, &tx.insert)?;
     state.store.apply(tx).map_err(AppError::from)?;
     write_sync_status(&state, &iri, &status)?;
 
@@ -371,7 +371,7 @@ pub async fn sync(
             }
             let rel_iri = ids::mint(state.base(), Kind::Release);
             let quads = dom::release_quads(state.base(), &rel_iri, &iri, r, &principal.subject);
-            if shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes).is_err() {
+            if shacl::enforce_write(&state, &quads).is_err() {
                 continue;
             }
             let mut tx = GraphTx::new();
@@ -513,7 +513,7 @@ pub async fn put_capability_on(
     let props = Props::from_quads(subject, &existing);
     let cap_iri = props.iri(ns::TAR, "hasCapability").unwrap_or_else(|| ids::mint(state.base(), Kind::Capability));
     let cap_quads = dom::capability_quads(&cap_iri, input);
-    shacl::enforce(state.shapes.validate_quads(&cap_quads), state.config.shacl_validate_writes)?;
+    shacl::enforce_write(&state, &cap_quads)?;
     let mut tx = GraphTx::new();
     tx.replace_subject(&cap_iri, ns::G_LOCAL);
     tx.extend(cap_quads);

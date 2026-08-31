@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { Modal } from './components/common'
 import { useSession } from './lib/session'
 import SoftwareList from './routes/SoftwareList'
@@ -9,7 +9,7 @@ import InstanceList from './routes/InstanceList'
 import InstanceDetail from './routes/InstanceDetail'
 import InstanceForm from './routes/InstanceForm'
 import Tokens from './routes/Tokens'
-import SoftwareTokens from './routes/SoftwareTokens'
+import SoftwareDeploy from './routes/SoftwareDeploy'
 import ConnectAgent from './routes/ConnectAgent'
 import Subscriptions from './routes/Subscriptions'
 import ArtifactList from './routes/ArtifactList'
@@ -40,7 +40,8 @@ export default function App() {
           <Route path="/instance/:id" element={<InstanceDetail />} />
           <Route path="/instances/:id/edit" element={<InstanceForm />} />
           <Route path="/instances/:id/tokens" element={<Tokens />} />
-          <Route path="/software/:id/tokens" element={<SoftwareTokens />} />
+          <Route path="/software/:id/deploy" element={<SoftwareDeploy />} />
+          <Route path="/software/:id/tokens" element={<LegacyTokensRedirect />} />
           <Route path="/instances/:id/subscriptions" element={<Subscriptions />} />
           <Route path="/artifacts" element={<ArtifactList />} />
           <Route path="/artifacts/:id" element={<ArtifactDetail />} />
@@ -58,6 +59,13 @@ export default function App() {
       </main>
     </>
   )
+}
+
+/** The key page became one option on a page about registering a deployment; a link someone
+ *  kept to the old address should land on it rather than on Not Found. */
+function LegacyTokensRedirect() {
+  const { id } = useParams()
+  return <Navigate to={`/software/${id}/deploy`} replace />
 }
 
 function Header() {
@@ -99,17 +107,21 @@ function Header() {
             onChange={(e) => setQ(e.target.value)}
           />
         </form>
-        {who ? (
-          <div className="inline">
-            <span className="chip" title={`${who.credential} · ${who.subject}`}>
-              {who.display_name || who.subject}
-              {who.is_admin ? ' · admin' : who.is_curator ? ' · curator' : ''}
-            </span>
-            <button type="button" className="link" onClick={signOut}>Sign out</button>
-          </div>
-        ) : (
-          <SignIn />
-        )}
+        {/* One element whether or not anyone is signed in, so the header's narrow-width layout
+            has a single slot to place rather than two shapes to handle. */}
+        <div className="header-identity">
+          {who ? (
+            <>
+              <span className="chip" title={`${who.credential} · ${who.subject}`}>
+                {who.display_name || who.subject}
+                {who.is_admin ? ' · admin' : who.is_curator ? ' · curator' : ''}
+              </span>
+              <button type="button" className="link" onClick={signOut}>Sign out</button>
+            </>
+          ) : (
+            <SignIn />
+          )}
+        </div>
       </div>
     </header>
   )

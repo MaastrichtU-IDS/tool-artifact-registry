@@ -524,9 +524,9 @@ async fn an_invented_artifact_type_is_refused_on_advertisement_too() {
 
 /// Found by pointing a real coding agent at this server and telling it to guess: it produced
 /// `edamontology.org/topic_3170`, which *exists* — it is EDAM's "RNA-Seq" — and an existence
-/// check alone waved it onto a record with nothing to do with RNA-Seq. Software topics come from
-/// EuroSciVoc here, and `build.rs` marks EDAM's topic branch `topic-edam` so the picker never
-/// offers it, so the rule has to be "could `vocab_search` have returned this for this field".
+/// check alone waved it onto a record with nothing to do with RNA-Seq. That branch is bundled
+/// only for label resolution and `vocab_search` never returns it, so the rule has to be "could
+/// `vocab_search` have returned this for this field", not "does this term exist".
 #[tokio::test]
 async fn a_real_term_in_the_wrong_branch_is_refused_as_firmly_as_an_invented_one() {
     let h = harness().await;
@@ -552,9 +552,17 @@ async fn a_real_term_in_the_wrong_branch_is_refused_as_firmly_as_an_invented_one
         .await;
     assert!(is_error(&r), "a real term in the wrong branch must not be written: {}", text_of(&r));
     let text = text_of(&r);
-    assert!(text.contains("EDAM topic"), "{text}");
-    assert!(text.contains("EuroSciVoc"), "the refusal must say where topics come from: {text}");
-    assert!(text.contains("branch=topic"), "{text}");
+    assert!(text.contains("topic_3170"), "the refusal must name the term it refused: {text}");
+    assert!(
+        text.contains("not one it classifies software by"),
+        "the refusal must say what is wrong with the term, not merely that it is wrong: {text}"
+    );
+    assert!(text.contains("branch=topic"), "the refusal must say how to find a real one: {text}");
+    // Several vocabularies are in play and more will follow, so no message may name one.
+    assert!(
+        !text.contains("EDAM") && !text.contains("EuroSciVoc"),
+        "a user-facing message must not name a vocabulary: {text}"
+    );
 
     let (_, list, _) = h.get("/api/v1/software?q=wrong-branch-tool").await;
     assert_eq!(list["items"].as_array().unwrap().len(), 0);
@@ -571,7 +579,11 @@ async fn a_topic_used_as_an_artifact_type_is_refused_too() {
         .call(ROOT, "register_software", json!({ "name": "swapped", "capability": { "produces": [topic] } }))
         .await;
     assert!(is_error(&r), "{}", text_of(&r));
-    assert!(text_of(&r).contains("not an artifact type"), "{}", text_of(&r));
+    assert!(
+        text_of(&r).contains("cannot be what an artifact is"),
+        "the refusal must say why a topic is not a type: {}",
+        text_of(&r)
+    );
     assert!(text_of(&r).contains("branch=data"), "{}", text_of(&r));
 }
 
@@ -586,11 +598,12 @@ async fn a_data_type_is_accepted_where_an_artifact_type_belongs() {
     assert!(!is_error(&r), "{}", text_of(&r));
 }
 
+/// The escape hatch, in both of its shapes. A minted type names something nothing else names; an
+/// adopted one keeps the identifier the term already had, because two registries inventing two
+/// IRIs for one concept is the duplication this whole rule exists to prevent, one level up.
 #[tokio::test]
-async fn a_foreign_type_iri_is_allowed_but_warned_about() {
+async fn a_type_is_usable_once_it_is_minted_or_adopted_and_not_before() {
     let h = harness().await;
-    // Federation depends on foreign type IRIs being writable; refusing them to prevent a
-    // mistake they cannot make would break the design.
     let r = h
         .call(
             ROOT,
@@ -601,21 +614,49 @@ async fn a_foreign_type_iri_is_allowed_but_warned_about() {
     assert!(!is_error(&r), "{}", text_of(&r));
     let minted = r["structuredContent"]["iri"].as_str().unwrap().to_string();
     assert!(minted.ends_with("/type/patch-log"), "{minted}");
+    assert_eq!(r["structuredContent"]["adopted"], false, "this registry named it, so it is not adopted");
 
-    // The minted type now resolves, so using it produces no warning.
-    let r = h.call(ROOT, "vocab_resolve", json!({ "iris": [minted] })).await;
+    let r = h.call(ROOT, "vocab_resolve", json!({ "iris": [minted.clone()] })).await;
     assert!(text_of(&r).contains("All resolved."), "{}", text_of(&r));
 
-    // An unknown non-EDAM IRI warns rather than refusing.
+    // An IRI nobody here has heard of is refused — the whole point. Nothing is written.
+    let foreign = "http://purl.obolibrary.org/obo/SWO_0000001";
     let r = h
         .call(
             ROOT,
             "register_software",
-            json!({ "name": "foreign-type-user", "capability": { "produces": ["https://other.example/type/x"] } }),
+            json!({ "name": "foreign-type-user", "capability": { "produces": [foreign] } }),
+        )
+        .await;
+    assert!(is_error(&r), "an unknown type IRI must not be written: {}", text_of(&r));
+    assert!(text_of(&r).contains(foreign), "{}", text_of(&r));
+    let (_, list, _) = h.get("/api/v1/software?q=foreign-type-user").await;
+    assert_eq!(list["items"].as_array().unwrap().len(), 0);
+
+    // Adopt it, under its own identifier rather than an alias minted here…
+    let r = h
+        .call(
+            ROOT,
+            "register_artifact_type",
+            json!({ "label": "Software suite", "iri": foreign, "scheme": "http://www.ebi.ac.uk/swo" }),
         )
         .await;
     assert!(!is_error(&r), "{}", text_of(&r));
-    assert!(text_of(&r).contains("Warnings:"), "{}", text_of(&r));
+    assert_eq!(
+        r["structuredContent"]["iri"], foreign,
+        "adoption must keep the term's own IRI, or two registries adopting it would disagree"
+    );
+    assert_eq!(r["structuredContent"]["adopted"], true);
+
+    // …and the same write now goes through.
+    let r = h
+        .call(
+            ROOT,
+            "register_software",
+            json!({ "name": "foreign-type-user", "capability": { "produces": [foreign] } }),
+        )
+        .await;
+    assert!(!is_error(&r), "{}", text_of(&r));
 }
 
 #[tokio::test]

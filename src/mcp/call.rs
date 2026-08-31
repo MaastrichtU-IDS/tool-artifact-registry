@@ -113,13 +113,13 @@ fn problem_to_message(status: StatusCode, body: &Value) -> String {
         .unwrap_or("no detail given");
     match status {
         StatusCode::UNPROCESSABLE_ENTITY => format!(
-            "The registry refused this write: it does not satisfy the registry's SHACL shapes.\n\n\
+            "The registry refused this write: one or more fields are not values it accepts.\n\n\
              Offending fields: {detail}\n\n\
              Fix exactly the named field(s) and retry. If you cannot establish the true value of a \
              field, remove it from the request rather than substituting a plausible one — the \
              registry renders an absent field honestly. If the field is a vocabulary IRI, get a real \
-             one from `vocab_search`. If the field is a closed value set, get the allowed values from \
-             `list_enumerations`."
+             one from `vocab_search`, or register the term with `register_artifact_type`. If the field \
+             is a closed value set, get the allowed values from `list_enumerations`."
         ),
         StatusCode::FORBIDDEN => format!(
             "Refused: {detail}\n\nThis is an authorisation limit on your credential, not a mistake in \
@@ -141,18 +141,7 @@ fn problem_to_message(status: StatusCode, body: &Value) -> String {
 
 // -------------------------------------------------------- the vocabulary guard
 
-/// Which kind of vocabulary term an argument position expects.
-///
-/// The distinction matters because the registry's two branches are drawn from two different
-/// vocabularies — `topic` from EuroSciVoc, `data` from EDAM — and an IRI that is a perfectly
-/// real term in the wrong branch is the failure mode a plain existence check misses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Slot {
-    /// What a piece of software is *about*: `vocab_search` with `branch=topic`.
-    Topic,
-    /// What an artifact *is*: `vocab_search` with `branch=data`, or a locally minted type.
-    Type,
-}
+use crate::domain::vocabulary::{self, Slot};
 
 /// Argument keys whose values are ontology IRIs, at any depth in the argument object.
 const VOCAB_KEYS: [(&str, Slot); 5] = [
@@ -184,57 +173,23 @@ fn collect_vocab_iris(v: &Value, out: &mut Vec<(String, Slot)>) {
     }
 }
 
-/// What the registry knows about each IRI: whether it exists at all, and which branch it is in.
-///
-/// A direct read of the graph rather than a call to `/api/v1/vocab/resolve`, because that
-/// endpoint deliberately falls back to the IRI's last path segment as a display label, so
-/// "resolved" and "invented" are indistinguishable in its output. This is the one place the MCP
-/// layer touches the store directly; it is a read of the public vocabulary graph, not an
-/// operation, and no authorisation decision is taken from it.
-fn vocabulary_facts(
-    state: &Arc<AppState>,
-    iris: &[String],
-) -> Option<std::collections::HashMap<String, Option<String>>> {
-    let values = iris.iter().map(|i| format!("<{i}>")).collect::<Vec<_>>().join(" ");
-    let q = format!(
-        "{p}\nSELECT DISTINCT ?t ?branch WHERE {{\n  VALUES ?t {{ {values} }}\n\
-         \x20 GRAPH ?g {{ ?t ?p ?o . OPTIONAL {{ ?t tar:conceptBranch ?branch }} }}\n}}",
-        p = crate::ns::PREFIXES
-    );
-    let rows = state.store.select(&q).ok()?;
-    let mut out: std::collections::HashMap<String, Option<String>> = Default::default();
-    for row in rows.rows {
-        if let Some(t) = row.iri("t") {
-            let e = out.entry(t).or_insert(None);
-            if e.is_none() {
-                *e = row.str("branch");
-            }
-        }
-    }
-    Some(out)
-}
-
 /// The measure that holds when the model has not read the tool description.
 ///
-/// Every ontology IRI in the arguments is checked against the registry's vocabulary graph before
-/// the write is attempted, on two counts.
+/// This used to carry its own rule about which IRIs are acceptable, alongside the REST handlers'
+/// — two rules for one question, kept in step by hand. They no longer are: the verdict comes from
+/// [`crate::domain::vocabulary`], the same code the write itself is refused by, so this can only
+/// ever say what the REST layer would have said a moment later.
 ///
-/// **Does it exist?** An IRI in a vocabulary the registry bundles (EDAM, EuroSciVoc) or minted
-/// itself (`{base}/type/…`) that resolves to nothing is **fatal**: the registry is authoritative
-/// about the contents of those, so a term it does not contain is not a term, and the likeliest
-/// way to arrive at one is a model assembling `topic_` or `data_` plus a remembered number.
-/// Anything else is only a **warning** — a foreign type IRI belonging to another registry is
-/// legitimate by design (spec D11: an ArtifactType is any IRI), and refusing it would break
-/// federation to prevent a mistake it cannot make.
+/// What it still buys is the wording. A model that reads "refused" with the recovery step named
+/// in its own vocabulary — `vocab_search`, `register_artifact_type` — fixes the one field and
+/// retries; the same refusal phrased as a `422` about routes sends it round the loop again. So
+/// the diagnosis is shared and only the advice is translated.
 ///
-/// **Is it the right kind of thing?** This is the subtler half, and it was found by pointing a
-/// real coding agent at this server: told to guess, it produced `edamontology.org/topic_3170`,
-/// which *does* exist — it is EDAM's "RNA-Seq" — and an existence check waved it through onto a
-/// record that has nothing to do with RNA-Seq. But software topics come from EuroSciVoc now, and
-/// `build.rs` marks EDAM's topic branch `topic-edam` precisely so the picker never offers it. So
-/// the rule is not "does this term exist" but **"could `vocab_search` have returned this term for
-/// this field"** — which is exactly the promise the tool descriptions make, and which rejects a
-/// real term in the wrong branch as firmly as an invented one.
+/// The failure that shaped the rule is worth keeping in view: pointed at this server and told to
+/// guess, a real coding agent produced `edamontology.org/topic_3170`, which *does* exist — it is
+/// EDAM's "RNA-Seq" — and a plain existence check waved it onto a record that had nothing to do
+/// with RNA-Seq. So the question is never "does this term exist" but "could `vocab_search` have
+/// returned it for the field it was put in".
 fn guard_vocabulary(state: &Arc<AppState>, args: &Value) -> Result<Vec<String>, String> {
     let mut found: Vec<(String, Slot)> = Vec::new();
     collect_vocab_iris(args, &mut found);
@@ -246,73 +201,47 @@ fn guard_vocabulary(state: &Arc<AppState>, args: &Value) -> Result<Vec<String>, 
         return Ok(Vec::new());
     }
 
-    let iris: Vec<String> = found.iter().map(|(i, _)| i.clone()).collect();
-    // A failure to check is not evidence of a bad IRI; say so rather than blocking a write for
-    // a reason the model cannot act on.
-    let Some(facts) = vocabulary_facts(state, &iris) else {
-        return Ok(vec!["the vocabulary index could not be read, so these IRIs were written unchecked".into()]);
-    };
-
-    let mut fatal: Vec<String> = Vec::new();
-    let mut warnings = Vec::new();
-    for (iri, slot) in &found {
-        let source = crate::domain::type_source(state.base(), iri);
-        // Only vocabularies this registry is authoritative for are judged strictly.
-        let ours = matches!(source.as_str(), "edam" | "euroscivoc" | "local");
-
-        let Some(branch) = facts.get(iri) else {
-            if ours {
-                fatal.push(format!(
-                    "{iri} does not exist — it claims to be from {source}, which this registry bundles, so \
-                     it would know. Search for the real term with `vocab_search`."
-                ));
-            } else {
-                warnings.push(format!(
-                    "{iri} is not a term this registry can resolve, so it will render as a bare IRI with no \
-                     label. That is legitimate for a type another registry owns; if you meant a term from \
-                     this registry's own vocabulary, find the real one with `vocab_search`."
-                ));
-            }
-            continue;
-        };
-
-        if !ours {
-            continue;
-        }
-        match (slot, branch.as_deref()) {
-            (Slot::Topic, Some("topic")) => {}
-            (Slot::Type, Some("data") | None) => {}
-            (Slot::Topic, Some("topic-edam")) => fatal.push(format!(
-                "{iri} is an EDAM topic. EDAM's topic branch is bundled only so that older records citing \
-                 one still render a label; software is classified with EuroSciVoc here, and \
-                 `vocab_search` with branch=topic never returns an EDAM topic. Search again with \
-                 branch=topic and use what it gives you."
-            )),
-            (Slot::Topic, other) => fatal.push(format!(
-                "{iri} is not a topic (it is in the {} branch). A topic is what a piece of software is \
-                 *about*: search with `vocab_search` branch=topic.",
-                other.unwrap_or("untyped")
-            )),
-            (Slot::Type, other) => fatal.push(format!(
-                "{iri} is a topic ({}), not an artifact type. An artifact type is what a piece of data \
-                 *is*: search with `vocab_search` branch=data, or mint one with `register_artifact_type`.",
-                other.unwrap_or("untyped")
-            )),
-        }
+    let terms: Vec<vocabulary::Term> = found
+        .iter()
+        .map(|(iri, slot)| vocabulary::Term {
+            iri: iri.clone(),
+            slot: *slot,
+            field: "",
+            path: String::new(),
+            focus: String::new(),
+        })
+        .collect();
+    let refused = vocabulary::verdicts(state, &terms);
+    if refused.is_empty() {
+        return Ok(Vec::new());
     }
 
-    if !fatal.is_empty() {
-        return Err(format!(
-            "Refused before writing anything — {} vocabulary problem(s) in these arguments:\n- {}\n\n\
-             Every one of these is a term `vocab_search` could not have given you for the field you put it \
-             in, which means it was recalled rather than looked up. Search, take an `iri` from a result \
-             verbatim, and retry. If nothing matches, omit the field, or mint a local type with \
-             `register_artifact_type`. Do not adjust the identifier and try again.",
-            fatal.len(),
-            fatal.join("\n- ")
-        ));
-    }
-    Ok(warnings)
+    let fatal: Vec<String> = refused
+        .iter()
+        .map(|(i, verdict)| {
+            let term = &terms[*i];
+            let recovery = match (term.slot, verdict) {
+                (Slot::Type, _) => {
+                    "Search with `vocab_search` branch=data. If the term exists elsewhere and you have \
+                     its IRI, adopt it with `register_artifact_type`, passing that `iri`. Mint a new one \
+                     with `register_artifact_type` and no `iri` only when nothing anywhere names it."
+                }
+                (Slot::Topic, _) => {
+                    "Search with `vocab_search` branch=topic and use what it gives you, or omit the field."
+                }
+            };
+            format!("{}. {recovery}", verdict.describe(&term.iri, term.slot))
+        })
+        .collect();
+
+    Err(format!(
+        "Refused before writing anything — {} vocabulary problem(s) in these arguments:\n- {}\n\n\
+         Every one of these is a term `vocab_search` could not have given you for the field you put it \
+         in, which means it was recalled rather than looked up. Take an `iri` from a search result \
+         verbatim and retry. Do not adjust the identifier and try again.",
+        fatal.len(),
+        fatal.join("\n- ")
+    ))
 }
 
 // -------------------------------------------------------------- argument access
@@ -403,7 +332,7 @@ pub async fn call(
             auth,
             "POST",
             "/api/v1/types".into(),
-            body_from(args, &["label", "definition", "default_media_type", "slug"]),
+            body_from(args, &["label", "definition", "default_media_type", "slug", "iri", "scheme", "aliases"]),
             "Artifact type registered. Use its `iri` for conforms_to, produces and consumes.",
         )
         .await,
@@ -570,15 +499,17 @@ async fn vocab_resolve(state: &Arc<AppState>, auth: Option<&str>, args: &Value) 
     }
     // `/vocab/resolve` falls back to the IRI's last path segment as a display label, so its
     // output cannot distinguish "resolved" from "invented" — ask the graph directly.
-    let known = vocabulary_facts(state, &iris).unwrap_or_default();
-    let unresolved: Vec<&String> = iris.iter().filter(|i| !known.contains_key(*i)).collect();
+    let refs: Vec<&str> = iris.iter().map(String::as_str).collect();
+    let known = vocabulary::held(state, &refs).unwrap_or_default();
+    let unresolved: Vec<&str> = refs.iter().copied().filter(|i| !known.contains_key(*i)).collect();
     let note = if unresolved.is_empty() {
         "All resolved.".to_string()
     } else {
         format!(
-            "Unresolved by this registry: {}. Any of those in a vocabulary the registry bundles (EDAM, \
-             EuroSciVoc) or minted itself is not a real term and will be refused on write.",
-            unresolved.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            "Unresolved by this registry: {}. A term it cannot resolve is not one it will accept on a \
+             write — search for the real one with `vocab_search`, or, if it is genuinely defined \
+             elsewhere, adopt it with `register_artifact_type` before citing it.",
+            unresolved.join(", ")
         )
     };
     Outcome::ok(note, body)

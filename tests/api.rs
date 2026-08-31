@@ -1670,6 +1670,218 @@ async fn the_type_list_is_types_in_use_not_the_whole_bundled_vocabulary() {
     assert!(!hits["items"].as_array().unwrap().is_empty(), "vocabulary search should still reach EDAM");
 }
 
+// ------------------------------------------------- the artifact type vocabulary
+//
+// A type IRI used to be any IRI at all, which is what lets three callers describe one SHACL
+// report as three different types and a `?conforms_to=` filter answer a third of what is there.
+// A write is now held to terms the registry actually holds, on every path that can name one.
+
+const UNKNOWN_TYPE: &str = "http://edamontology.org/data_9999999";
+
+/// The refusal is only useful if it says how to succeed, so this asserts the recovery steps and
+/// not merely the status code.
+#[tokio::test]
+async fn an_unknown_artifact_type_is_refused_with_a_way_out() {
+    let h = harness().await;
+    let (status, problem) = h
+        .post("/api/v1/artifacts", ROOT, json!({ "title": "a report", "conforms_to": UNKNOWN_TYPE }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+    let detail = problem["detail"].as_str().unwrap_or_default().to_string();
+    assert!(detail.contains(UNKNOWN_TYPE), "the refusal must name the offending value: {detail}");
+    assert!(detail.contains("/api/v1/vocab/search"), "it must say how to find a real term: {detail}");
+    assert!(detail.contains("/api/v1/types"), "it must say how to register one: {detail}");
+    assert!(detail.starts_with("conforms_to:"), "it must name the field the form has to highlight: {detail}");
+
+    // The report is the same shape the edit form already parses, so the input can be marked up
+    // without the UI learning a second error format.
+    let report = problem["report"].as_str().unwrap();
+    assert!(report.contains("tar:jsonField \"conforms_to\""), "{report}");
+    assert!(report.contains("sh:conforms false"), "{report}");
+    assert!(report.contains("sh:resultPath <http://purl.org/dc/terms/conformsTo>"), "{report}");
+
+    // Nothing was written.
+    let (_, artifacts) = h.get("/api/v1/artifacts").await;
+    assert_eq!(artifacts["total"], 0, "a refused write must leave no record: {artifacts}");
+}
+
+#[tokio::test]
+async fn every_write_path_that_can_name_a_type_is_held_to_the_same_rule() {
+    let h = harness().await;
+    let f = h.fixture().await;
+
+    let (status, out) = h
+        .post(
+            "/api/v1/advertise/produced",
+            &f.token,
+            json!({"run": {"external_key": "bad-type-1"},
+                   "artifacts": [{"title": "report", "conforms_to": UNKNOWN_TYPE}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "advertise/produced: {out}");
+
+    let (status, out) = h
+        .post(
+            "/api/v1/advertise/consumed",
+            &f.token,
+            json!({"run": {"external_key": "bad-type-2"},
+                   "artifacts": [{"title": "input", "conforms_to": UNKNOWN_TYPE}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "advertise/consumed: {out}");
+
+    let (status, out) = h
+        .post("/api/v1/software", ROOT, json!({"name": "bad-capability", "capability": {"produces": [UNKNOWN_TYPE]}}))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "software create: {out}");
+    assert!(
+        out["detail"].as_str().unwrap_or_default().starts_with("capability.produces:"),
+        "the field must name the input that carried it: {out}"
+    );
+
+    let (status, out, _) = h
+        .req("PUT", &format!("/api/v1/software/{}/capability", f.software_id), Some(ROOT),
+             Some(json!({"consumes": [UNKNOWN_TYPE]})))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "software capability: {out}");
+
+    let (status, out, _) = h
+        .req("PUT", &format!("/api/v1/instances/{}/capability", f.instance_id), Some(ROOT),
+             Some(json!({"produces": [UNKNOWN_TYPE]})))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "instance capability: {out}");
+
+    // A run advertised with a bad type must not leave a half-written run behind either.
+    let (_, runs) = h.get("/api/v1/runs").await;
+    assert_eq!(runs["total"], 0, "a refused advertisement must not mint its run: {runs}");
+}
+
+/// The adapter is the one write path whose type nobody passes in — it comes from the mapping
+/// table — and it had been writing an IRI nothing declared, which rendered as its own tail and
+/// no picker could offer. Holding the adapter to the same rule is what caught that.
+#[tokio::test]
+async fn the_openlineage_adapters_own_artifact_type_is_a_term_like_any_other() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    let (status, out) = h
+        .post(
+            "/api/v1/openlineage",
+            &f.token,
+            json!({
+                "eventType": "COMPLETE",
+                "eventTime": "2026-08-30T14:02:49Z",
+                "run": {"runId": "3f2b1c4d-0000-4000-8000-00000000000f"},
+                "job": {"namespace": "airflow://ids3", "name": "export_cohort"},
+                "outputs": [{"namespace": "s3://ids-bucket", "name": "cohort.csv",
+                             "facets": {"schema": {"fields": [{"name": "id"}]}}}],
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{out}");
+    let id = out["produced"][0].as_str().unwrap().rsplit('/').next().unwrap().to_string();
+    let (_, artifact) = h.get(&format!("/api/v1/artifacts/{id}")).await;
+    assert_eq!(
+        artifact["conforms_to"]["label"], "Tabular dataset",
+        "the type the adapter chose must resolve to a real term: {artifact}"
+    );
+}
+
+/// The seed's own type IRIs are the ones a curator will reach for first, and until now the
+/// picker could not offer them: `branch=data` filters on a marker they did not carry.
+#[tokio::test]
+async fn the_registrys_own_types_are_offered_by_the_type_picker() {
+    let h = harness().await;
+    tar::seed::seed_ids_examples(&h.state, false).await.unwrap();
+    let (status, hits) = h.get("/api/v1/vocab/search?q=shapes&branch=data&limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{hits}");
+    assert!(
+        hits["items"].as_array().unwrap().iter().any(|i| i["iri"] == format!("{BASE}/type/shacl-shapes-graph")),
+        "a type this registry defined must be findable in the branch a write is checked against: {hits}"
+    );
+}
+
+/// Adoption keeps the identifier a term already has. Minting a local alias instead would move
+/// the duplication problem up a level: two registries with two IRIs for one concept.
+#[tokio::test]
+async fn a_term_from_elsewhere_is_adopted_under_its_own_iri() {
+    let h = harness().await;
+    let foreign = "http://purl.obolibrary.org/obo/SWO_0000001";
+    let (status, t) = h
+        .post("/api/v1/types", ROOT, json!({"label": "Software suite", "iri": foreign, "aliases": ["suite"]}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{t}");
+    assert_eq!(t["iri"], foreign, "the adopted term keeps its own identifier");
+    assert_eq!(t["adopted"], true);
+    assert_eq!(t["source"], "external");
+
+    let (status, out) = h.post("/api/v1/artifacts", ROOT, json!({"title": "x", "conforms_to": foreign})).await;
+    assert_eq!(status, StatusCode::CREATED, "an adopted term must be usable: {out}");
+
+    // Adopting it made it findable, by its name and by the synonym it arrived with.
+    for q in ["Software%20suite", "suite"] {
+        let (_, hits) = h.get(&format!("/api/v1/vocab/search?q={q}&branch=data")).await;
+        assert!(
+            hits["items"].as_array().unwrap().iter().any(|i| i["iri"] == foreign),
+            "searching {q:?} should find the adopted term: {hits}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_type_iri_that_already_means_something_else_here_cannot_be_adopted() {
+    let h = harness().await;
+    // A real term, in a branch that says it is a subject area. Adopting it as a type would leave
+    // one IRI meaning two things, and would be a back door into the rule this route serves.
+    let (_, hits) = h.get("/api/v1/vocab/search?q=semantic%20web&branch=topic&limit=1").await;
+    let topic = hits["items"][0]["iri"].as_str().expect("a topic to test with").to_string();
+    let (status, out) = h.post("/api/v1/types", ROOT, json!({"label": "not a type", "iri": topic})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+
+    let (status, out) = h.post("/api/v1/types", ROOT, json!({"label": "relative", "iri": "type/nope"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "an IRI must be absolute to be adopted: {out}");
+}
+
+/// Registering a type is the escape hatch, so it is also the thing an unprivileged caller would
+/// use to get round the rule. It is curator-only, and the refusal message points at it by name.
+#[tokio::test]
+async fn registering_a_type_needs_a_curator() {
+    let h = harness().await;
+    let f = h.fixture().await;
+    let (status, out) = h.post("/api/v1/types", &f.token, json!({"label": "smuggled"})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
+}
+
+/// Federation is the reason the old rule was "any IRI at all". A peer's record is loaded into
+/// that peer's own graph and never passes a write handler, so it keeps its own types — and once
+/// resolved, those types become nameable here too.
+#[tokio::test]
+async fn a_peers_own_type_survives_the_restriction_and_becomes_usable_once_resolved() {
+    let h = harness().await;
+    let peer_type = "https://reg.mumc.nl/type/cohort-extract";
+
+    // Naming it before we have ever seen it is refused, like any other unknown IRI.
+    let (status, _) = h.post("/api/v1/artifacts", ROOT, json!({"title": "x", "conforms_to": peer_type})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // A peer record arrives the way `peers::fetch_stub` writes one: straight into the peer
+    // graph, no handler, no validation — because this registry is not authoritative for it.
+    h.state
+        .store
+        .load_turtle(
+            &format!(
+                "<{peer_type}> a <http://www.w3.org/2004/02/skos/core#Concept> ; \
+                 <http://www.w3.org/2004/02/skos/core#prefLabel> \"Cohort extract\" ."
+            ),
+            &tar::ns::peer_graph("mumc"),
+            None,
+        )
+        .unwrap();
+
+    let (status, out) = h.post("/api/v1/artifacts", ROOT, json!({"title": "x", "conforms_to": peer_type})).await;
+    assert_eq!(status, StatusCode::CREATED, "a resolved peer type must be nameable here: {out}");
+    assert_eq!(out["conforms_to"]["label"], "Cohort extract", "and it renders with the peer's label");
+}
+
 
 // ------------------------------------------------------- self-advertisement
 
@@ -2376,3 +2588,218 @@ async fn a_keyword_filter_finds_records_written_with_any_spelling() {
     assert_eq!(none["total"], 0, "{none}");
 }
 
+
+#[tokio::test]
+async fn an_application_key_cannot_sidestep_its_binding_through_the_create_route() {
+    // `PUT /instances/self` is careful that the credential decides which software a deployment
+    // belongs to. `POST /instances` took the software from the *body* and checked only that the
+    // caller held `register:instance` — which a software-scoped key does. So the same key that
+    // is refused at the announce route could create the same record here.
+    let h = harness().await;
+    let (_, mine) = h.post("/api/v1/software", ROOT, json!({"name": "mine"})).await;
+    let (_, theirs) = h.post("/api/v1/software", ROOT, json!({"name": "theirs"})).await;
+    let mine_id = mine["id"].as_str().unwrap().to_string();
+    let theirs_id = theirs["id"].as_str().unwrap().to_string();
+
+    let (_, minted) = h.post(&format!("/api/v1/software/{mine_id}/tokens"), ROOT, json!({})).await;
+    let key = minted["token"].as_str().unwrap().to_string();
+
+    let (status, body) = h
+        .post("/api/v1/instances", &key, json!({"label": "impostor", "software": theirs_id}))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (_, list) = h.get(&format!("/api/v1/instances?software={theirs_id}")).await;
+    assert_eq!(list["total"], 0, "nothing was created: {list}");
+
+    // Its own software is still fine, and it need not repeat it.
+    let (status, ok) = h
+        .post("/api/v1/instances", &key, json!({"label": "legitimate", "software": mine_id}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{ok}");
+    assert_eq!(ok["software"], format!("{BASE}/software/{mine_id}"));
+
+    let (status, implied) = h.post("/api/v1/instances", &key, json!({"label": "no software named"})).await;
+    assert_eq!(status, StatusCode::CREATED, "{implied}");
+    assert_eq!(implied["software"], format!("{BASE}/software/{mine_id}"), "the credential supplies it");
+}
+
+#[tokio::test]
+async fn types_minted_before_the_concept_classes_still_reach_the_picker() {
+    // The failure this migration exists for, reproduced exactly. `api::types::create` writes a
+    // type into <urn:tar:local>; the kind used to be a separate tar:conceptBranch triple, and a
+    // backfill put those into <urn:tar:vocab>. Every query that reads a concept and its kind
+    // asks for both inside one GRAPH block, so it found neither: the types were held, accepted
+    // on write, and offered by no picker — which reads as "this registry has no types of its
+    // own" rather than "these records predate a field".
+    let h = harness().await;
+    let iri = format!("{BASE}/type/legacy-minted-type");
+    let mut tx = tar::store::GraphTx::new();
+    let mut n = tar::rdf::Node::iri(&iri, tar::ns::G_LOCAL);
+    n.a(&format!("{}Concept", tar::ns::SKOS));
+    n.text(tar::ns::SKOS, "prefLabel", "Legacy minted type");
+    tx.extend(n.finish());
+    h.state.store.apply(tx).unwrap();
+
+    let (status, page) = h.get("/api/v1/vocab/search?branch=data&q=Legacy%20minted").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["items"].as_array().unwrap().len(), 0, "{page}");
+
+    // `load_vocab` runs on every start; this is what a restart does.
+    tar::seed::load_vocab(&h.state).unwrap();
+
+    // The search, not the triple: a class written into a graph the search does not look in is
+    // the bug, and only asking the endpoint can tell the two apart.
+    let (_, page) = h.get("/api/v1/vocab/search?branch=data&q=Legacy%20minted").await;
+    let items = page["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{page}");
+    assert_eq!(items[0]["iri"], iri);
+    assert_eq!(items[0]["branch"], "data");
+
+    // In the concept's own graph, which is the whole point.
+    assert_eq!(
+        h.state.store.graph_of(&iri).unwrap().as_deref(),
+        Some(tar::ns::G_LOCAL),
+        "the class must land where the concept is, not where the vocabulary is loaded"
+    );
+
+    // Idempotent: a second start writes nothing and changes nothing.
+    tar::seed::load_vocab(&h.state).unwrap();
+    let (_, again) = h.get("/api/v1/vocab/search?branch=data&q=Legacy%20minted").await;
+    assert_eq!(again["items"].as_array().unwrap().len(), 1, "{again}");
+    let (_, page) = h.get("/api/v1/types").await;
+    assert_eq!(
+        page["items"].as_array().unwrap().iter().filter(|t| t["iri"] == iri).count(),
+        1,
+        "a second start must not duplicate the term: {page}"
+    );
+}
+
+/// The other half of the migration: an external term adopted before the classes existed lives in
+/// <urn:tar:local> under its own foreign identifier, and losing it would break records already
+/// citing it.
+#[tokio::test]
+async fn a_term_adopted_before_the_concept_classes_stays_usable() {
+    let h = harness().await;
+    let foreign = "http://purl.obolibrary.org/obo/SWO_0000001";
+    let mut tx = tar::store::GraphTx::new();
+    let mut n = tar::rdf::Node::iri(foreign, tar::ns::G_LOCAL);
+    n.a(&format!("{}Concept", tar::ns::SKOS));
+    n.text(tar::ns::SKOS, "prefLabel", "Software suite");
+    tx.extend(n.finish());
+    h.state.store.apply(tx).unwrap();
+
+    tar::seed::load_vocab(&h.state).unwrap();
+
+    let (status, out) = h.post("/api/v1/artifacts", ROOT, json!({"title": "x", "conforms_to": foreign})).await;
+    assert_eq!(status, StatusCode::CREATED, "{out}");
+    let (_, hits) = h.get("/api/v1/vocab/search?branch=data&q=Software%20suite").await;
+    assert!(hits["items"].as_array().unwrap().iter().any(|i| i["iri"] == foreign), "{hits}");
+}
+
+/// A version-series node was typed `skos:Concept` once. The migration must leave those alone, or
+/// every artifact's title comes back as an artifact type.
+///
+/// The second IRI is under a *different* base on purpose: a store is routinely brought up under
+/// a base other than the one that wrote it — a restored dump, a copy served on another port — and
+/// a guard that asked "is this one of ours" would take every record in it for an adopted term.
+#[tokio::test]
+async fn the_migration_does_not_turn_an_old_version_series_into_a_type() {
+    let h = harness().await;
+    let ours = format!("{BASE}/artifact-series/01a05400-0000-7000-8000-000000000001");
+    let restored = "http://127.0.0.1:9999/artifact-series/01a05400-0000-7000-8000-000000000002";
+    let mut tx = tar::store::GraphTx::new();
+    for (iri, label) in [(ours.as_str(), "SULO-aligned pizza ontology"), (restored, "Pizza ontology, restored")] {
+        let mut n = tar::rdf::Node::iri(iri, tar::ns::G_LOCAL);
+        n.a(&format!("{}Concept", tar::ns::SKOS));
+        n.text(tar::ns::SKOS, "prefLabel", label);
+        tx.extend(n.finish());
+    }
+    h.state.store.apply(tx).unwrap();
+
+    tar::seed::load_vocab(&h.state).unwrap();
+
+    let (_, hits) = h.get("/api/v1/vocab/search?branch=data&q=pizza").await;
+    assert_eq!(hits["items"].as_array().unwrap().len(), 0, "an artifact's title is not a type: {hits}");
+    for iri in [ours.as_str(), restored] {
+        let (status, out) = h.post("/api/v1/artifacts", ROOT, json!({"title": "x", "conforms_to": iri})).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{iri}: {out}");
+    }
+}
+
+/// The two kinds are not interchangeable, and each must be refused in the other's field. This is
+/// the check a plain existence test cannot make: both IRIs below are real terms this registry
+/// holds and offers.
+#[tokio::test]
+async fn a_topic_is_not_a_type_and_a_type_is_not_a_topic() {
+    let h = harness().await;
+    tar::seed::seed_ids_examples(&h.state, false).await.unwrap();
+
+    let (_, hits) = h.get("/api/v1/vocab/search?q=semantic%20web&branch=topic&limit=1").await;
+    let topic = hits["items"][0]["iri"].as_str().expect("a topic to test with").to_string();
+    let a_type = format!("{BASE}/type/shacl-shapes-graph");
+
+    let (status, out) = h.post("/api/v1/artifacts", ROOT, json!({"title": "x", "conforms_to": topic})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "a subject area is not what an artifact is: {out}");
+    assert!(out.to_string().contains("conforms_to"), "the form must know which input to highlight: {out}");
+
+    let (status, out) = h.post("/api/v1/software", ROOT, json!({"name": "s", "topics": [a_type]})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "a kind of data is not what software is about: {out}");
+
+    // And each in its own field is accepted, so the refusals above are about the kind and not
+    // about the terms being unusable.
+    let (status, out) = h.post("/api/v1/artifacts", ROOT, json!({"title": "x", "conforms_to": a_type})).await;
+    assert_eq!(status, StatusCode::CREATED, "{out}");
+    let (status, out) = h.post("/api/v1/software", ROOT, json!({"name": "s2", "topics": [topic]})).await;
+    assert_eq!(status, StatusCode::CREATED, "{out}");
+}
+
+/// Adoption is the path that takes an IRI from outside, so it is the one that has to give it the
+/// class — a term adopted and then not offered is the original failure with a new cause.
+#[tokio::test]
+async fn an_adopted_external_iri_is_classed_as_a_type() {
+    let h = harness().await;
+    let foreign = "http://purl.obolibrary.org/obo/SWO_0000002";
+    let (status, t) = h.post("/api/v1/types", ROOT, json!({"label": "Adopted thing", "iri": foreign})).await;
+    assert_eq!(status, StatusCode::CREATED, "{t}");
+
+    let held = tar::domain::vocabulary::holding(&h.state, foreign).expect("the registry holds it");
+    assert!(held.is(tar::domain::vocabulary::CLASS_ARTIFACT_TYPE), "{held:?}");
+    assert!(!held.from_peer, "adopting is a decision this registry made: {held:?}");
+
+    let (_, hits) = h.get("/api/v1/vocab/search?branch=data&q=Adopted").await;
+    assert!(hits["items"].as_array().unwrap().iter().any(|i| i["iri"] == foreign), "{hits}");
+}
+
+#[tokio::test]
+async fn reloading_the_shapes_does_not_add_another_copy_of_them() {
+    // Every `sh:property [ … ]` is a blank node, and parsing mints fresh ones — so loading the
+    // same unchanged shapes file again appended a second complete shape set rather than doing
+    // nothing. It is invisible (the duplicates all say the same thing) and unbounded: a store
+    // that had been restarted a couple of dozen times was carrying that many copies.
+    let h = harness().await;
+    let count = |h: &Harness| {
+        h.state
+            .store
+            .select(&format!(
+                "SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{}> {{ ?s ?p ?o }} }}",
+                tar::ns::G_SHAPES
+            ))
+            .unwrap()
+            .rows
+            .first()
+            .and_then(|r| r.i64("n"))
+            .unwrap()
+    };
+    let first = count(&h);
+    assert!(first > 0, "the shapes must actually be loaded");
+
+    for _ in 0..3 {
+        tar::seed::load_vocab(&h.state).unwrap();
+    }
+    assert_eq!(count(&h), first, "three more boots must leave the shapes graph the same size");
+
+    // And they still validate: a reload that dropped the shapes without replacing them would
+    // make every write pass, which this count alone would not catch.
+    let (status, body) = h.post("/api/v1/software", ROOT, json!({"tagline": "no name"})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+}

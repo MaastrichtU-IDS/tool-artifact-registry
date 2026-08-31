@@ -90,18 +90,57 @@ a:hover { text-decoration: underline; }
 }
 .app-header-inner {
   max-width: var(--max); margin: 0 auto; padding: 0 var(--gutter);
-  display: flex; align-items: center; gap: 20px; min-height: 56px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 14px; min-height: 56px;
 }
-.brand { font-weight: 620; letter-spacing: -0.01em; color: var(--text); white-space: nowrap; }
+.brand {
+  font-weight: 620; letter-spacing: -0.01em; color: var(--text); white-space: nowrap;
+  flex: none; overflow: hidden; text-overflow: ellipsis;
+}
 .brand small { display: block; font-weight: 400; font-size: 11px; color: var(--text-faint); }
-nav.tabs { display: flex; gap: 2px; flex: 1; flex-wrap: wrap; }
+/* The sections are the one part of the header allowed to shrink, and they scroll rather than
+   wrap: a second row moves every page's content down under a header that is sticky. */
+nav.tabs {
+  display: flex; gap: 2px; flex: 1 1 auto; min-width: 0;
+  overflow-x: auto; scrollbar-width: none;
+}
+nav.tabs::-webkit-scrollbar { display: none; }
 nav.tabs a {
-  padding: 7px 11px; border-radius: var(--radius); color: var(--text-dim); font-weight: 500;
+  padding: 7px 9px; border-radius: var(--radius); color: var(--text-dim); font-weight: 500;
+  white-space: nowrap;
 }
 nav.tabs a:hover { background: var(--surface-2); text-decoration: none; }
 nav.tabs a.active { background: var(--accent-bg); color: var(--accent); }
 
-.header-search input { width: 190px; }
+.header-search { flex: none; }
+.header-search input { width: 170px; }
+.header-identity { display: flex; gap: 8px; align-items: center; flex: none; }
+/* A long display name would otherwise take the whole row apart; the full value is in the
+   chip's title either way. */
+.header-identity .chip { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; }
+
+/* Narrower than this the row genuinely cannot hold everything, so the sections take a row of
+   their own rather than scrolling half of themselves out of reach. Grid areas rather than
+   `order`, so the markup keeps reading brand → sections → search. */
+@media (max-width: 1200px) {
+  .app-header-inner {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: "brand search identity" "nav nav nav";
+    row-gap: 4px; padding-top: 8px; padding-bottom: 8px;
+  }
+  .brand { grid-area: brand; }
+  nav.tabs { grid-area: nav; }
+  .header-search { grid-area: search; }
+  .header-identity { grid-area: identity; }
+  /* The header is two rows tall here, and a sticky rail parked at the one-row height would
+     slide its first heading underneath it. */
+  .rail { top: 108px; }
+}
+@media (max-width: 560px) {
+  .brand small { display: none; }
+  .header-search input { width: 116px; }
+  .header-identity .chip { max-width: 12ch; }
+}
 
 main { max-width: var(--max); margin: 0 auto; padding: var(--gutter); }
 
@@ -234,6 +273,36 @@ textarea { min-height: 92px; resize: vertical; }
 .field-error { color: var(--danger); font-size: 12.5px; margin-top: 4px; }
 fieldset { border: none; border-top: 1px solid var(--border); margin: 22px 0 0; padding: 16px 0 0; }
 legend { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-faint); font-weight: 660; }
+
+/* A label that names a group of controls rather than one, and the rows inside it: the label is
+   the value here, so it is not the heading weight a field label carries. */
+.field > .label { display: block; font-size: 13px; font-weight: 550; margin-bottom: 4px; }
+label.check { display: flex; gap: 8px; align-items: center; font-weight: 400; margin: 0 0 5px; }
+label.check input { width: auto; }
+
+/* A row of buttons switching what is shown under them. `nav.tabs` in the header is the site's
+   own sections and is deliberately quieter than this. */
+.tabs[role="tablist"] { display: flex; flex-wrap: wrap; gap: 6px; }
+.tabs[role="tablist"] button { color: var(--text-dim); }
+.tabs[role="tablist"] button.active {
+  background: var(--accent-bg); border-color: transparent; color: var(--accent); font-weight: 550;
+}
+
+/* Two axes of one choice, side by side, so the option not being taken stays on screen. */
+.axes { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 720px) { .axes { grid-template-columns: 1fr; } }
+fieldset.axis { border: none; margin: 0; padding: 0; }
+fieldset.axis legend { padding: 0 0 6px; }
+label.option {
+  display: flex; gap: 9px; align-items: flex-start; cursor: pointer; font-weight: 400;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 9px 11px; margin-bottom: 8px; background: var(--surface);
+}
+label.option:hover { border-color: var(--border-strong); }
+label.option.selected { border-color: var(--accent); background: var(--accent-bg); }
+label.option input { width: auto; flex: none; margin: 3px 0 0; }
+label.option strong { display: block; font-size: 14px; color: var(--text); }
+label.option .hint { display: block; }
 
 button {
   font: inherit; font-size: 14px; padding: 7px 13px; border-radius: var(--radius);

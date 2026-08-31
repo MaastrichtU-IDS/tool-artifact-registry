@@ -174,7 +174,9 @@ The result, on the same four records:
 The facet went from two values covering everything to five that separate: filtering on
 `semantic web` returns RDFCraft and OntoExplorer; on `software`, RDFCraft and shacl-rust.
 
-EDAM's topic branch is still bundled, branched `topic-edam` so it is not offered in the picker
+EDAM's topic branch is still bundled, typed `tar:LegacyTopic` so it is not offered in the picker
 but any record still citing an EDAM topic — ours or a federated peer's — keeps rendering a label.
+(It was a `tar:conceptBranch "topic-edam"` literal when this was written; `?branch=topic-edam`
+still selects it, and now names the class rather than a literal on the concept.)
 The JSON field is still named `edam_topics`; renaming it would break every existing caller for a
 cosmetic gain, and it has always accepted any IRI (D11).

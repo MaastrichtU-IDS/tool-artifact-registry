@@ -118,7 +118,11 @@ nothing it does not model is lost.
 
 ## Registering a deployment
 
-Two modes, because deployments arrive in two very different ways.
+Two modes, because deployments arrive in two very different ways, and either may be driven by
+either credential — a registry API key, or a client in an identity provider. **Create
+deployment** on a software's page (`/software/{id}/deploy`) is where all four combinations
+live: pick the mode and the credential and it prints that one, built from this registry's own
+base IRI.
 
 **Curated.** Someone who knows the estate creates the record: `POST /api/v1/instances`, or the
 form in the UI. Right when deployments are few and long-lived. The record may declare a
@@ -178,6 +182,124 @@ breaks. `?keyword=` on `/api/v1/artifacts` accepts the IRI, the slug, the label 
 curl … -d '{"artifacts":[{"keywords":["shacl","SHACL Shapes","rml","pizza-ontology","RDF"]}]}'
 # → ["SHACL", "Mappings", "pizza-ontology", "RDF Graphs"]
 ```
+
+---
+
+## Artifact types
+
+A keyword is a label. An artifact's **type** — `conforms_to`, and `produces` / `consumes` on a
+capability — is the thing every capability query and every subscription filter matches on
+exactly, so the same slippage costs far more there. Asked to describe one SHACL report, one
+caller writes `…/type/shacl-report`, another `…/type/shacl-validation-report`, and a third
+assembles a plausible ontology number from memory. All three records look right. None of them
+match each other, `?conforms_to=` answers a third of what is in the catalogue, and a subscription
+written against one spelling never fires — which is indistinguishable from a subscription with
+nothing to deliver.
+
+So a type must be a term, and a write may only name a term the registry actually holds.
+
+### Where the terms come from
+
+Two sources, and the second carries most of this estate.
+
+**EDAM's data branch**, 949 terms, generated into `shapes/edam.ttl` by `build.rs` on the same
+daily-check, offline-safe cadence as EuroSciVoc, and committed so a checkout builds with no
+network. It is a real, maintained, dereferenceable data-type vocabulary with synonyms and
+definitions, it is what bio.tools types tool inputs and outputs with, and it costs nothing to
+carry.
+
+**Terms this registry holds itself**, at `POST /api/v1/types`. This is not a fallback; for an
+RDF-heavy estate it is the main path. Searched for what this registry's tools actually emit,
+EDAM's 949 data terms yield seventeen containing the word "ontology" — almost all of them
+*identifiers* of ontology concepts — and not one term for a SHACL shapes graph, a SHACL
+validation report, a ShEx schema, an RML or R2RML mapping, a SPARQL update, an RDF dataset, a
+hash-chained patch log or a masked replica. Those are exactly the things `tar seed` registers, so
+sixteen of the seed's types are the registry's own and the rest of EDAM's data branch is there
+for the artifacts that genuinely are life-science data.
+
+Registering a term does two different jobs, and choosing the wrong one recreates the problem:
+
+| | when | what it records |
+|---|---|---|
+| **Adopt** — send `iri` | the term already has an identifier somewhere else | that identifier, and the scheme it came from |
+| **Mint** — omit `iri` | nothing anywhere names this thing | an identifier of this registry's own |
+
+Adoption matters more than it looks. If every registry invents a local alias for
+`http://purl.obolibrary.org/obo/SWO_0000001`, federation is comparing near-synonyms again, one
+level up. Two registries that adopt a term end up agreeing on one IRI.
+
+```bash
+# adopt a term that already has a name
+curl -X POST -H "Authorization: Bearer $CURATOR" -H 'content-type: application/json' \
+     -d '{"label":"Software suite","iri":"http://purl.obolibrary.org/obo/SWO_0000001",
+          "scheme":"http://www.ebi.ac.uk/swo"}' \
+     localhost:8080/api/v1/types
+
+# mint one for a thing nothing else names
+curl -X POST -H "Authorization: Bearer $CURATOR" -H 'content-type: application/json' \
+     -d '{"label":"Hash-chained patch log","slug":"patch-log",
+          "definition":"An append-only log of RDF patches, each linked to its predecessor by hash."}' \
+     localhost:8080/api/v1/types
+```
+
+### What was considered and not used
+
+| Candidate | Why not |
+|---|---|
+| EDAM's **format** branch | A format is a serialisation, not a kind of thing. It would type a shapes graph, a validation report and an ontology identically as Turtle, and change an artifact's type when the same bytes are re-serialised. The distribution already carries `media_type`, which is where serialisation belongs. |
+| **DCMI Type Vocabulary** | Twelve terms. Every artifact in this estate is `Dataset`, so it discriminates nothing — and DCAT already types these records as `dcat:Dataset` anyway. |
+| **IANA media types** | Already in use, at the distribution level, and again not a type: `text/turtle` covers a shapes graph, a report and an ontology alike. A type concept may carry a `default_media_type`, which is the honest relationship between the two. |
+| A new bundled vocabulary for RDF artifacts | There is no maintained public one that names a SHACL shapes graph, an RML mapping or a ShEx schema as data types. Inventing one and bundling it would be minting registry-local terms with extra steps and no upstream. |
+
+### A term, and the right kind of term
+
+Existing is not enough. Pointed at this registry and told to classify a tool, a real coding agent
+produced `http://edamontology.org/topic_3170` — which exists; it is "RNA-Seq" — and an existence
+check waved it onto a record that had nothing to do with RNA-Seq. So every concept the registry
+holds carries a class saying which kind it is, declared in `shapes/vocab.ttl` as a subclass of
+`skos:Concept`: **an artifact type**, **a research topic**, **an artifact keyword**, and **a
+legacy topic**, the last being a subject area kept only so a record already citing one still
+renders a label. `conforms_to` takes the first; `topics` takes the second; nothing takes the last.
+
+The class is asserted in the same statement that makes the concept, and that is the point. It
+was a `tar:conceptBranch` literal beside the concept until the two were written by different code
+paths and landed in different named graphs — the concept in `<urn:tar:local>`, a backfilled marker
+in `<urn:tar:vocab>` — after which every query that asks for both inside one `GRAPH` block found
+neither, and the registry's own types were held, accepted on write, and offered by no picker. A
+marker that has to be kept next to something drifts away from it; a marker that *is* the statement
+cannot.
+
+### The refusal
+
+A type IRI the registry cannot resolve to a term is a `422` before anything is written, on every
+path that can name one — `POST /api/v1/artifacts`, both `/api/v1/advertise/*`,
+`/api/v1/openlineage`, both capability routes, and software, instance and release writes. The
+same rule runs behind the MCP tools, so an agent and a `curl` get the same verdict.
+
+```
+422 conforms_to: http://edamontology.org/data_9999999 is not an artifact type this registry
+    knows. First search for one with GET /api/v1/vocab/search?branch=data&q=… and use the `iri`
+    it returns. If the term is defined somewhere this registry does not carry and you have its
+    IRI, adopt it with POST /api/v1/types, sending that `iri`. Mint a new one with
+    POST /api/v1/types, without an `iri`, only when nothing anywhere names this thing.
+```
+
+It travels as a `sh:ValidationReport` with `tar:jsonField "conforms_to"`, the same shape a shape
+violation uses, so the edit form highlights the offending input without learning a second error
+format. In the UI the term picker closes the loop itself: type a name nothing matches and it
+offers to register it, paste an IRI and it offers to adopt it, and either way what leaves the
+picker is an IRI the registry will accept.
+
+`POST /api/v1/types` needs the curator role. That is the point — it is the one place new types
+enter, so it is where the judgement belongs.
+
+### Federation is untouched
+
+A peer's record legitimately cites a type minted at that peer, and it keeps doing so. Peer data
+is loaded straight into `<urn:tar:peer:…>` by the resolver and never passes through a write
+handler, so nothing this registry is not authoritative for is ever held to this rule. Once a
+foreign type *has* been resolved into the peer graph it becomes a term this registry holds, and a
+local record may then cite it too.
 
 ---
 
@@ -323,15 +445,17 @@ tests/api.rs    end-to-end tests against the real router
 ## Tests
 
 ```bash
-cargo test                      # 50 tests: unit + end-to-end against the real router
-cd frontend && npm test         # 22 component, parsing and screen tests
+cargo test                      # unit, end-to-end, MCP and subscription suites
+cd frontend && npm test         # component, parsing and screen tests
 ```
 
 The end-to-end suite covers advertisement idempotency, the `§8.3` authorisation rule under all
 three credential types, OIDC verification failures (untrusted issuer, wrong audience, expired,
 unbound client), `422` with a SHACL report, metadata-only handling including the absent
 `rel="item"` link, content negotiation, keyset pagination, tombstones, the OpenLineage
-adapter, peer announcement, and the read-only SPARQL endpoint.
+adapter, peer announcement, the read-only SPARQL endpoint, and the artifact-type rule on every
+write path — including that a peer's own type keeps working and becomes nameable here once it
+has been resolved.
 
 ---
 
@@ -365,7 +489,21 @@ Honest list of where the prototype departs from the spec, or stops short of it.
    [`shacl-rust`](https://github.com/ensaremirerol/shacl-rust) engine, and editing that file
    changes what the API accepts with no Rust change. This also answers spec Q6: severity
    decides — `sh:Violation` blocks, `sh:Warning` never does, and
-   `TAR_SHACL_VALIDATE_WRITES=false` downgrades violations to warnings.
+   `TAR_SHACL_VALIDATE_WRITES=false` downgrades violations to warnings. The two rules that do
+   need the rest of the graph live in Rust for that reason and report through the same
+   `sh:ValidationReport`: whether an artifact type is a term the registry holds
+   (`src/domain/vocabulary.rs`), and whether an instance of non-deployable software may carry an
+   endpoint. Neither honours `TAR_SHACL_VALIDATE_WRITES` — a half-described record is a trade
+   an operator can make, an unlookuppable type is not.
+
+   The first of those is exactly `sh:class`, and it was measured rather than assumed. Injecting
+   the 2273 class assertions into the candidate data graph so `sh:class tar:ArtifactType` can see
+   them takes validation from **1.9 ms to 9.8 ms** per write, plus **2.8 ms** to read them back
+   against the **52 µs** the targeted lookup costs — roughly 2 ms a write against 12.6 ms. The
+   time is the smaller objection: `sh:message` is fixed text and could not name the offending IRI
+   or the way out, `TAR_SHACL_VALIDATE_WRITES=false` would switch the rule off, and the allowance
+   for a type cached from a peer is about which named graph a concept sits in, which the engine's
+   single data graph cannot express.
 2. **Distributions and capabilities are minted as IRIs, not blank nodes** (spec §4.5 shows blank
    nodes). They are addressable and citable that way. `GraphStore::describe` returns them with
    their parent, so a record still reads as one document.

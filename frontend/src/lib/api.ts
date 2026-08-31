@@ -2,7 +2,7 @@ import type {
   Artifact, Lineage, Page, Peer, Run, RunSummary, SearchResults, Software, Instance,
   Release, TokenRecord, WellKnown, WhoAmI, ProblemJson, KeywordTerm,
   Subscription, SubscriptionCreated, SubscriptionDelivery, SubscriptionDetail,
-  SparqlAnswer, SparqlTerm,
+  SparqlAnswer, SparqlTerm, ArtifactType,
 } from './types'
 
 /// An error carrying the RFC 9457 problem document, so a form can map a SHACL report back to
@@ -143,6 +143,17 @@ export const api = {
 
   keywords: () =>
     request<{ scheme: string; items: KeywordTerm[]; total: number }>('/api/v1/keywords'),
+  /// Make a term nameable. Send `iri` to adopt one that already has an identifier elsewhere;
+  /// omit it and the registry mints one. Curator only.
+  createArtifactType: (body: {
+    label: string
+    definition?: string
+    default_media_type?: string
+    slug?: string
+    iri?: string
+    scheme?: string
+    aliases?: string[]
+  }) => request<ArtifactType>('/api/v1/types', { method: 'POST', body: JSON.stringify(body) }),
   listArtifacts: (p: Record<string, string | undefined>) =>
     request<Page<Artifact>>(`/api/v1/artifacts${qs(p)}`),
   getArtifact: (id: string) => request<Artifact>(`/api/v1/artifacts/${id}`),

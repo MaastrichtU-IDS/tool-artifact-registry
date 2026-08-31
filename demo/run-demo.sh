@@ -171,7 +171,7 @@ register_software() {
   "license": "https://spdx.org/licenses/MIT",
   "kind": "library",
   "maturity": "active",
-  "edam_topics": ["http://edamontology.org/topic_3071"],
+  "topics": ["http://data.europa.eu/8mn/euroscivoc/1f6c74df-a512-462e-99aa-8dcbaa98972a", "http://data.europa.eu/8mn/euroscivoc/981a4eb6-f63a-4360-953d-efe0ec861672"],
   "keywords": ["shacl", "validation", "rdf", "rust"],
   "publisher": {"name": "Maastricht University — Institute of Data Science", "kind": "organization", "identifier": "https://ror.org/02jz4aj89"},
   "capability": {
@@ -196,7 +196,7 @@ JSON
   "screenshots": ["$(asset sulo-schema-builder-owl.png "$raw/MaastrichtU-IDS/sulo-schema-builder/main/docs/images/owl-export.png")"],
   "kind": "service",
   "maturity": "active",
-  "edam_topics": ["http://edamontology.org/topic_0089", "http://edamontology.org/topic_3071"],
+  "topics": ["http://data.europa.eu/8mn/euroscivoc/123e5118-1586-4a45-b4da-34583bd74940", "http://data.europa.eu/8mn/euroscivoc/981a4eb6-f63a-4360-953d-efe0ec861672"],
   "keywords": ["sulo", "owl", "shacl", "ontology", "schema"],
   "publisher": {"name": "Maastricht University — Institute of Data Science", "kind": "organization", "identifier": "https://ror.org/02jz4aj89"},
   "capability": {
@@ -216,7 +216,7 @@ JSON
   "description": "Ingest, browse, query and reason over ontologies with full provenance tracking. Ingests by IRI, URL or file upload across nine serialisations; reasons with ELK over OWL-EL; serves semantic search over pgvector embeddings; exposes SPARQL 1.1 and an OLS4-compatible read API. Raw ontology files are kept in its own object store — those appear here as Artifacts, not as assets of this record.",
   "kind": "service",
   "maturity": "active",
-  "edam_topics": ["http://edamontology.org/topic_0089", "http://edamontology.org/topic_3071"],
+  "topics": ["http://data.europa.eu/8mn/euroscivoc/123e5118-1586-4a45-b4da-34583bd74940", "http://data.europa.eu/8mn/euroscivoc/981a4eb6-f63a-4360-953d-efe0ec861672"],
   "keywords": ["ontology", "owl", "fair", "sparql", "reasoning", "semantic-search"],
   "publisher": {"name": "Maastricht University — Institute of Data Science", "kind": "organization", "identifier": "https://ror.org/02jz4aj89"},
   "capability": {
@@ -240,7 +240,7 @@ JSON
   "license": "https://spdx.org/licenses/MIT",
   "kind": "service",
   "maturity": "active",
-  "edam_topics": ["http://edamontology.org/topic_3071"],
+  "topics": ["http://data.europa.eu/8mn/euroscivoc/1f6c74df-a512-462e-99aa-8dcbaa98972a", "http://data.europa.eu/8mn/euroscivoc/981a4eb6-f63a-4360-953d-efe0ec861672"],
   "keywords": ["rml", "mapping", "csv", "json", "rdf"],
   "publisher": {"name": "Maastricht University — Institute of Data Science", "kind": "organization", "identifier": "https://ror.org/02jz4aj89"},
   "capability": {

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { vocabularyOf } from './chips'
+import { api } from '../lib/api'
 
 export interface Term {
   iri: string
@@ -12,15 +14,19 @@ export interface Term {
  * Pick vocabulary terms by name instead of by IRI.
  *
  * Nobody should have to know that "data management" is `http://edamontology.org/topic_3071`.
- * This searches the registry's bundled vocabularies plus any locally-minted types, and
- * shows what was chosen as removable chips.
+ * This searches the registry's bundled vocabularies plus every type the registry has minted or
+ * adopted, and shows what was chosen as removable chips.
  *
- * It keeps a free-IRI escape hatch, deliberately: `ArtifactType` is any IRI (spec D11), so a
- * picker that only offered known terms would make the model narrower than it is. Anything that
- * looks like an absolute IRI can be added directly.
+ * A write may only name a term the registry holds, so pasting an unknown IRI is no longer an
+ * escape hatch — it is a `422` a few clicks later. The escape hatch is here instead, and it is
+ * the same one the API offers: type a name nothing matches and the picker offers to record it as
+ * a type; paste an IRI the term already has elsewhere and it offers to adopt it under *that*
+ * identifier rather than minting a second name for the same thing. Either way what leaves this
+ * component is an IRI the registry will accept, which is the whole point — a restriction that
+ * leaves a curator stuck is a restriction they route around.
  */
 export function TermPicker({
-  value, onChange, branch, label, hint, placeholder, id,
+  value, onChange, branch, label, hint, placeholder, id, allowRegister,
 }: {
   value: string[]
   onChange: (next: string[]) => void
@@ -30,6 +36,9 @@ export function TermPicker({
   hint?: string
   placeholder?: string
   id: string
+  /** Offer to register an unmatched term. Defaults on for artifact types, which are the ones
+   *  `POST /api/v1/types` can create; topics come from a vocabulary this registry does not own. */
+  allowRegister?: boolean
 }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Term[]>([])
@@ -37,6 +46,8 @@ export function TermPicker({
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)
   const [busy, setBusy] = useState(false)
+  const [registering, setRegistering] = useState(false)
+  const [registerError, setRegisterError] = useState<string | null>(null)
   const box = useRef<HTMLDivElement>(null)
 
   // Resolve labels for values we were handed, so editing an existing record shows names
@@ -101,7 +112,28 @@ export function TermPicker({
     setOpen(false)
   }
 
-  const isIri = /^https?:\/\/\S+$/i.test(query.trim())
+  const typed = query.trim()
+  const isIri = /^https?:\/\/\S+$/i.test(typed)
+  const canRegister = (allowRegister ?? branch === 'data') && typed.length >= 2
+  // Offered only once the search has actually come back empty. Offering it beside real matches
+  // would make "register a new one" as easy as reusing the right one, which is the duplication
+  // the restriction exists to stop.
+  const offerRegister = canRegister && !busy && results.length === 0
+
+  const register = async () => {
+    setRegisterError(null)
+    setRegistering(true)
+    try {
+      const term = await api.createArtifactType(
+        isIri ? { iri: typed, label: tailName(typed) } : { label: typed },
+      )
+      add(term.iri, term.label)
+    } catch (e) {
+      setRegisterError(e instanceof Error ? e.message : 'could not register that type')
+    } finally {
+      setRegistering(false)
+    }
+  }
 
   return (
     <div className="field" ref={box}>
@@ -135,6 +167,7 @@ export function TermPicker({
           placeholder={placeholder ?? 'Type to search…'}
           onChange={(e) => {
             setQuery(e.target.value)
+            setRegisterError(null)
             setOpen(true)
           }}
           onFocus={() => setOpen(true)}
@@ -148,16 +181,17 @@ export function TermPicker({
             } else if (e.key === 'Enter') {
               e.preventDefault()
               if (results[active]) add(results[active].iri, results[active].label)
-              else if (isIri) add(query.trim())
+              else if (offerRegister) void register()
+              else if (isIri && !canRegister) add(typed)
             } else if (e.key === 'Escape') {
               setOpen(false)
             }
           }}
           role="combobox"
-          aria-expanded={open && (results.length > 0 || isIri)}
+          aria-expanded={open && (results.length > 0 || offerRegister || (isIri && !canRegister))}
           aria-controls={`${id}-listbox`}
         />
-        {open && (results.length > 0 || isIri) && (
+        {open && (results.length > 0 || offerRegister || (isIri && !canRegister)) && (
           <ul className="picker" id={`${id}-listbox`} role="listbox">
             {results.map((t, i) => (
               <li
@@ -173,22 +207,50 @@ export function TermPicker({
               >
                 <div className="picker-label">
                   {t.label}
-                  {t.source && <span className="chip plain">{t.source}</span>}
+                  {/* Which vocabulary, derived from the term's own IRI — the API field says
+                      only where a term stands relative to this registry, deliberately, so that
+                      no vocabulary is named in a field that other vocabularies will share. */}
+                  {(vocabularyOf(t.iri) ?? t.source) && (
+                    <span className="chip plain">{vocabularyOf(t.iri) ?? t.source}</span>
+                  )}
                 </div>
                 {t.definition && <div className="picker-def">{t.definition}</div>}
               </li>
             ))}
-            {isIri && (
+            {offerRegister && (
               <li
                 role="option"
                 aria-selected={false}
                 onMouseDown={(e) => {
                   e.preventDefault()
-                  add(query.trim())
+                  void register()
+                }}
+              >
+                <div className="picker-label">
+                  {registering
+                    ? 'Registering…'
+                    : isIri
+                      ? 'Adopt this IRI as a type'
+                      : `Add “${typed}” as a type`}
+                </div>
+                <div className="picker-def">
+                  {isIri
+                    ? 'Recorded under the identifier it already has, so this registry and any other that adopts it agree on one IRI. You can give it a better name afterwards.'
+                    : 'Nothing here matches. This records it as a type of this registry’s own, which is the right answer when nothing anywhere names it.'}
+                </div>
+              </li>
+            )}
+            {isIri && !canRegister && (
+              <li
+                role="option"
+                aria-selected={false}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  add(typed)
                 }}
               >
                 <div className="picker-label">Use this IRI directly</div>
-                <div className="picker-def mono">{query.trim()}</div>
+                <div className="picker-def mono">{typed}</div>
               </li>
             )}
           </ul>
@@ -197,6 +259,19 @@ export function TermPicker({
       <p className="hint">
         {hint ?? 'Search by name.'} {busy && <span className="muted">searching…</span>}
       </p>
+      {registerError && (
+        <p className="field-error" role="alert">
+          {registerError}
+        </p>
+      )}
     </div>
   )
+}
+
+/** A provisional name for an IRI being adopted: its last segment, punctuation opened out. It is
+ *  the same fallback the chips already render, and better than blocking the adoption on a name
+ *  the curator does not have to hand — the type page can rename it. */
+function tailName(iri: string): string {
+  const tail = iri.split(/[#/]/).filter(Boolean).pop() ?? iri
+  return tail.replace(/[_-]+/g, ' ').trim() || iri
 }

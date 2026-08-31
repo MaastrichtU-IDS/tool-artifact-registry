@@ -74,7 +74,9 @@ pub struct TypeRef {
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub definition: Option<String>,
-    /// `edam` | `local` | `external`
+    /// Where the term comes from relative to this registry: `bundled` (shipped with it),
+    /// `local` (minted here) or `external` (adopted from elsewhere). Deliberately not the name
+    /// of a vocabulary — see `crate::domain::type_source`.
     pub source: String,
 }
 

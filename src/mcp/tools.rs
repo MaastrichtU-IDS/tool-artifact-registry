@@ -16,12 +16,13 @@
 //!    again in its own `description`, because a model reads the parameter it is filling.
 //! 2. **Vocabulary is a first-class tool, not a footnote.** [`vocab_search`] and
 //!    [`list_enumerations`] exist so that looking a term up is cheaper than recalling one, and
-//!    `register_artifact_type` is the honest escape hatch for "the vocabulary has no term for
-//!    this" — the alternative to which is a plausible invented IRI.
-//! 3. **The server checks.** Prose is a suggestion; `crate::mcp::call::guard_vocabulary`
-//!    checks every vocabulary IRI before the write and *refuses* one from a vocabulary this
-//!    registry bundles (EDAM, EuroSciVoc) or minted itself that it cannot resolve. That is the
-//!    one measure that holds when the model has not read the description.
+//!    `register_artifact_type` is the honest escape hatch for "no vocabulary here has a term for
+//!    this" — adopting the IRI the term already has elsewhere, or minting one when it has none.
+//!    The alternative to it is a plausible invented IRI.
+//! 3. **The server checks.** Prose is a suggestion; `crate::domain::vocabulary` resolves every
+//!    ontology IRI against the terms the registry actually holds and *refuses* the write
+//!    otherwise — the same rule, in the same code, whether the write arrived here or over REST.
+//!    That is the one measure that holds when the model has not read the description.
 //!
 //! # Why this set and not a mirror of the REST API
 //!
@@ -38,7 +39,7 @@ use serde_json::{json, Value};
 /// server-level `instructions` to the model, but they always show the tool description.
 pub const NO_INVENTION: &str = "DO NOT INVENT VALUES. \
 Ontology IRIs (topics, artifact types) MUST come from `vocab_search` or `register_artifact_type`; \
-this server refuses an IRI from a vocabulary it bundles that it cannot resolve, so guessing fails loudly rather than quietly. \
+this server refuses any term it cannot resolve, so guessing fails loudly rather than quietly. \
 Closed value sets MUST come from `list_enumerations`. \
 Omit any field you cannot confirm from the repository, the package metadata or the user — \
 the registry renders an absent field honestly (\"licence not stated\"), while a plausible wrong value is undetectable.";
@@ -52,9 +53,10 @@ pub fn instructions() -> String {
          exactly what you are allowed to write. Then use `vocab_search` and `list_enumerations` before \
          any write: they are cheap, and they are the difference between a record that is right and one \
          that merely looks right.\n\n{NO_INVENTION}\n\n\
-         Writes are validated against the registry's SHACL shapes. A rejected write comes back with the \
-         offending field named — treat that as a correction loop: fix the named field and retry, or drop \
-         the field if you cannot establish its true value."
+         Writes are validated against the registry's SHACL shapes, and every ontology IRI in them \
+         against the terms this registry holds. A rejected write comes back with the offending field \
+         named — treat that as a correction loop: fix the named field and retry, or drop the field if \
+         you cannot establish its true value."
     )
 }
 
@@ -190,10 +192,10 @@ fn boolean(description: &str) -> Value {
 /// The IRI-valued parameter description, written once so it reads identically everywhere.
 fn vocab_param(what: &str) -> Value {
     s(&format!(
-        "{what} Each entry MUST be an IRI returned by `vocab_search` (or minted by \
-         `register_artifact_type`). Do not assemble an ontology IRI from an identifier you \
-         remember: the server checks every one against the vocabularies it bundles and refuses \
-         the write if it is not a real term. Omit this field entirely if you have not looked one up."
+        "{what} Each entry MUST be an IRI returned by `vocab_search`, or one registered through \
+         `register_artifact_type`. Do not assemble an ontology IRI from an identifier you \
+         remember: the server resolves every one against the terms it holds and refuses the whole \
+         write if any is not one of them. Omit this field entirely if you have not looked one up."
     ))
 }
 
@@ -202,9 +204,9 @@ fn vocab_array(what: &str) -> Value {
         "type": "array",
         "items": { "type": "string" },
         "description": format!(
-            "{what} Every entry MUST be an IRI returned by `vocab_search` (or minted by \
-             `register_artifact_type`). Never construct an ontology IRI from memory — the server \
-             checks each one and refuses terms its bundled vocabularies do not contain. Omit rather than guess."
+            "{what} Every entry MUST be an IRI returned by `vocab_search`, or one registered \
+             through `register_artifact_type`. Never construct an ontology IRI from memory — the \
+             server resolves each one and refuses a term it does not hold. Omit rather than guess."
         )
     })
 }
@@ -383,23 +385,30 @@ pub fn catalogue() -> Vec<Tool> {
         },
         Tool {
             name: "register_artifact_type",
-            title: "Mint a local artifact type when the vocabulary has no term",
+            title: "Make an artifact type known to this registry",
             description: format!(
-                "Create a registry-local `skos:Concept` to serve as an artifact type, for the case where \
-                 `vocab_search` genuinely finds nothing: a SHACL shapes graph, an RML mapping, a \
-                 hash-chained patch log — real artifact kinds no bundled vocabulary names. The IRI it returns is \
-                 then a legitimate value for `conforms_to`, `produces` and `consumes`.\n\n\
-                 This exists so that \"the vocabulary has no word for this\" has an honest answer that is not a \
-                 fabricated ontology IRI. Search first; mint only when the search really came back empty, and \
-                 re-registering the same `slug` updates the label rather than creating a duplicate, so a \
-                 type IRI stays a stable name.\n\n{NO_INVENTION}"
+                "The way an artifact type that `vocab_search` does not return becomes usable. The IRI this \
+                 returns is then a legitimate value for `conforms_to`, `produces` and `consumes`; without \
+                 it, the write is refused.\n\n\
+                 Two different jobs, and choosing the wrong one is the mistake worth avoiding:\n\
+                 • **Adopt** — pass `iri`. The type already has an identifier in some vocabulary this \
+                 registry does not carry, and you have it. The term is recorded under *that* identifier, so \
+                 two registries that adopt it end up agreeing on one IRI instead of inventing two.\n\
+                 • **Mint** — omit `iri`. The thing has no identifier anywhere: a SHACL shapes graph, an \
+                 RML mapping, a hash-chained patch log. Then this registry names it.\n\n\
+                 Search first; register only when the search really came back empty. Re-registering the \
+                 same `slug` or `iri` updates the label rather than creating a duplicate, so a type IRI \
+                 stays a stable name.\n\n{NO_INVENTION}"
             ),
             schema: obj(
                 json!({
                     "label": s("Short name for the type, as a person would say it."),
                     "definition": s("What an artifact of this type is. Optional but strongly worth writing."),
                     "default_media_type": s("The IANA media type these artifacts usually have, if there is one."),
-                    "slug": s("Readable last path segment, e.g. `shacl-shapes-graph`. Recommended: type IRIs get quoted by hand in documentation and mapping files."),
+                    "slug": s("Minting only. Readable last path segment, e.g. `shacl-shapes-graph`. Recommended: type IRIs get quoted by hand in documentation and mapping files."),
+                    "iri": s("Adoption only. The identifier the term already has elsewhere. Pass it ONLY when you actually have it from a real vocabulary — an IRI invented here is the exact failure this route exists to prevent, and it will be accepted, because adoption is how a term this registry has never seen becomes legitimate."),
+                    "scheme": s("Adoption only. The IRI of the vocabulary the adopted term belongs to, so a curator can see later where it came from."),
+                    "aliases": json!({ "type": "array", "items": { "type": "string" }, "description": "Other names people call it. Search matches these, so they are worth giving." }),
                 }),
                 &["label"],
             ),
@@ -569,7 +578,9 @@ pub fn catalogue() -> Vec<Tool> {
                     "kinds": json!({ "type": "array", "items": { "type": "string", "enum": ["service", "library", "cli", "desktop", "workflow"] }, "description": "What the software is. A set, because one program is routinely several of these at once." }),
                     "maturity": s_enum("repostatus.org development status, only if the project declares one.", &["concept", "wip", "active", "inactive", "unsupported", "suspended", "abandoned", "moved"]),
                     "deployable": boolean("False when the software cannot be hosted at an endpoint at all (a desktop app, a CLI). Defaults to true; set it false and the registry refuses an endpoint on any instance of it."),
-                    "topics": vocab_array("Topics this software is about, from `vocab_search` with branch=topic. Named `topics` for API compatibility; the topic branch is EuroSciVoc, not EDAM."),
+                    // Naming the vocabulary here would be wrong the moment another is added, and
+                    // an agent that took the name as the rule would go looking for terms in it.
+                    "topics": vocab_array("Topics this software is about, from `vocab_search` with branch=topic. Only terms that search returns are accepted — a term recalled from a vocabulary this registry does not carry is refused, whichever vocabulary it is."),
                     "keywords": arr_s("The project's own keywords. Free text, no lookup needed."),
                     "publisher": agent_schema("The organisation or person that publishes it."),
                     "contact": agent_schema("Who to ask about it."),

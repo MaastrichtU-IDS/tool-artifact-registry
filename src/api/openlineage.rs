@@ -179,7 +179,15 @@ async fn map_dataset(
     };
 
     let iri = ids::mint(state.base(), Kind::Artifact);
-    tx.extend(crate::domain::artifact::artifact_quads(state.base(), &iri, &input, &principal.subject, None));
+    let quads = crate::domain::artifact::artifact_quads(state.base(), &iri, &input, &principal.subject, None);
+    // The vocabulary rule, but not the shapes: this adapter is deliberately lenient about
+    // everything OpenLineage does not model, and holding a foreign event to the full shape set
+    // would refuse ingest over fields its producer has never heard of. The type is the
+    // exception, and the only thing here a caller cannot set — it comes from the mapping table
+    // above, so this catches the *adapter* naming a type nobody can look up, which is precisely
+    // how an undeclared IRI reached this path in the first place.
+    crate::domain::vocabulary::enforce(state, &quads)?;
+    tx.extend(quads);
     state.ops.remember_artifact(&external_key, &iri).await.map_err(AppError::from)?;
     Ok(iri)
 }

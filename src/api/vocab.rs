@@ -6,10 +6,21 @@
 //! this searches locally: the picker keeps working on a laptop with no network, which is the
 //! same promise the rest of the deployment makes.
 //!
-//! It searches whatever is in the vocabulary and local graphs, so registry-minted ArtifactTypes
-//! (D11) appear alongside EDAM without any special casing.
+//! It searches whatever is in the vocabulary and local graphs, so registry-minted and adopted
+//! ArtifactTypes appear alongside EDAM without any special casing.
+//!
+//! This is also the route out of a refused write: `crate::domain::vocabulary` only accepts terms
+//! the registry holds, and those are exactly the terms this returns. The two must not diverge —
+//! a restriction resting on a search that cannot find what it restricts you to is a trap — which
+//! is why the classes the check reads are the same ones the filter here applies.
+//!
+//! `branch` keeps its name and its values. It used to be the literal a concept carried; it is
+//! now a short public alias for a concept class, translated in `class_for_branch` below. The
+//! frontend pickers, the MCP tools and `llms.txt` all pass it, and renaming a query parameter
+//! that four surfaces agree on to describe an internal change would be a cost with no payer.
 
 use super::Paging;
+use crate::domain::vocabulary;
 use crate::domain::Ctx;
 use crate::error::{AppError, AppResult};
 use crate::ns;
@@ -23,9 +34,10 @@ use std::sync::Arc;
 #[derive(Debug, Deserialize)]
 pub struct VocabQuery {
     pub q: Option<String>,
-    /// `topic` restricts to EuroSciVoc — the fields of science a Software is about. `data`
-    /// restricts to EDAM data types, which is what an artifact conforms to. Omit for
-    /// everything, including locally-minted types and EDAM topics kept for label resolution.
+    /// Which kind of concept to offer: `topic` for the fields of science a Software is about,
+    /// `data` for what an artifact can conform to, `keyword`, or `topic-edam` for the subject
+    /// areas kept only so older records still render a label. Omit for all of them at once.
+    /// Each value names a class in `BRANCHES`; an unrecognised one returns nothing.
     pub branch: Option<String>,
     pub limit: Option<usize>,
 }
@@ -56,52 +68,46 @@ pub async fn search(
         return Ok(Json(VocabResults { items: Vec::new(), total: 0 }));
     }
 
-    let branch_filter = match q.branch.as_deref() {
-        Some(b) if !b.is_empty() => format!("?c tar:conceptBranch \"{}\" .", super::escape_literal(b)),
-        _ => String::new(),
+    let branch_filter = match q.branch.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
+        Some(b) => match class_for_branch(b) {
+            Some(class) => format!("GRAPH ?cg {{ ?c a <{class}> }}"),
+            // An unrecognised value asks for a kind of term that does not exist, and answering it
+            // with everything would be worse than answering it with nothing.
+            None => return Ok(Json(VocabResults { items: Vec::new(), total: 0 })),
+        },
+        None => String::new(),
     };
     // Match the label or any synonym; EDAM's altLabels are how people actually name things.
     let filter = super::text_filter(&needle, &["?label", "?alt"]);
     let sparql = format!(
         r#"{p}
-SELECT DISTINCT ?c ?label ?def ?branch ?broader WHERE {{
+SELECT DISTINCT ?c ?label ?def ?class ?broader WHERE {{
   GRAPH ?g {{
     ?c a skos:Concept .
     {{ ?c skos:prefLabel ?label }} UNION {{ ?c rdfs:label ?label }}
     OPTIONAL {{ ?c skos:altLabel ?alt }}
     OPTIONAL {{ ?c skos:definition ?def }}
-    OPTIONAL {{ ?c tar:conceptBranch ?branch }}
     OPTIONAL {{ ?c tar:inBroader ?broader }}
     {branch_filter}
   }}
+  OPTIONAL {{ GRAPH ?kg {{ ?c a ?class }} FILTER(STRSTARTS(STR(?class), "{tar}")) }}
   {filter}
 }} LIMIT 400"#,
-        p = ns::PREFIXES
+        p = ns::PREFIXES,
+        tar = ns::TAR
     );
 
     let rows = state.store.select(&sparql).map_err(AppError::from)?;
-    let lower = needle.to_lowercase();
     let mut items: Vec<VocabHit> = Vec::new();
     for row in rows.rows {
         let (Some(iri), Some(label)) = (row.iri("c"), row.str("label")) else { continue };
         if items.iter().any(|h| h.iri == iri) {
             continue;
         }
-        let l = label.to_lowercase();
-        // An exact name beats a name that starts with the query, which beats one that merely
-        // contains it; a synonym-only match ranks below all three.
-        let score = if l == lower {
-            1.0
-        } else if l.starts_with(&lower) {
-            0.8
-        } else if l.contains(&lower) {
-            0.6
-        } else {
-            0.3
-        };
+        let score = rank(&needle, &label);
         items.push(VocabHit {
             source: crate::domain::type_source(ctx.base(), &iri),
-            branch: row.str("branch"),
+            branch: row.iri("class").as_deref().and_then(branch_for_class).map(str::to_string),
             // EuroSciVoc carries almost no definitions but nearly always a parent, and the
             // parent is what disambiguates: this vocabulary has ontology, odontology and
             // palaeontology, and only the broader term tells them apart at a glance.
@@ -123,6 +129,52 @@ SELECT DISTINCT ?c ?label ?def ?branch ?broader WHERE {{
 pub struct VocabResults {
     pub items: Vec<VocabHit>,
     pub total: i64,
+}
+
+/// The public `branch` tokens, and the concept class each one names.
+///
+/// One table, read in both directions, so the value a caller filters by and the value they get
+/// back in `branch` cannot drift apart. `topic-edam` is the kind kept only so a record that
+/// already cites one of those terms still renders a label: it is searchable on request and is
+/// never what `branch=topic` returns.
+const BRANCHES: [(&str, &str); 4] = [
+    ("data", vocabulary::CLASS_ARTIFACT_TYPE),
+    ("topic", vocabulary::CLASS_RESEARCH_TOPIC),
+    ("keyword", vocabulary::CLASS_ARTIFACT_KEYWORD),
+    ("topic-edam", vocabulary::CLASS_LEGACY_TOPIC),
+];
+
+fn class_for_branch(branch: &str) -> Option<&'static str> {
+    BRANCHES.iter().find(|(b, _)| *b == branch).map(|(_, c)| *c)
+}
+
+fn branch_for_class(class: &str) -> Option<&'static str> {
+    BRANCHES.iter().find(|(_, c)| *c == class).map(|(b, _)| *b)
+}
+
+/// How well a candidate matches, in one place.
+///
+/// The matching above is lexical: a case-insensitive contains over the preferred label and every
+/// synonym, which is what makes a search for "shapes" find a term labelled "SHACL shapes graph"
+/// and a search for "table" find one whose only tabular word is an `altLabel`. The ordering is
+/// what a caller actually sees, and it is deliberately the only thing that decides it — a second
+/// strategy (a semantic ranker over the same candidates, say) is a second arm here and needs no
+/// change to the query, the response shape or the `score` field the caller already reads.
+///
+/// A synonym-only hit ranks below every label hit rather than being scored on its own: SPARQL
+/// hands back one row per synonym and the projection collapses them, so *which* synonym matched
+/// is not knowable here. That is a real limit of doing it this way, not a preference.
+fn rank(needle: &str, label: &str) -> f32 {
+    let (needle, label) = (needle.to_lowercase(), label.to_lowercase());
+    if label == needle {
+        1.0
+    } else if label.starts_with(&needle) {
+        0.8
+    } else if label.contains(&needle) {
+        0.6
+    } else {
+        0.3
+    }
 }
 
 /// Resolve a set of IRIs to labels in one call, so a form can render chips for values it was

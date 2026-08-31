@@ -50,7 +50,7 @@ export function KindChip({ kind, interactive = true }: { kind?: string; interact
  *  Derived from the IRI rather than hard-coded to one vocabulary: the registry already mixes
  *  several, and it will mix more. An unrecognised IRI gets no badge — better a missing label
  *  than a wrong one. */
-function vocabularyOf(iri: string): string | null {
+export function vocabularyOf(iri: string): string | null {
   const known: [string, string][] = [
     ['edamontology.org', 'EDAM'],
     ['data.europa.eu/8mn/euroscivoc', 'EuroSciVoc'],

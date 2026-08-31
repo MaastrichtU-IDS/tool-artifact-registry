@@ -13,9 +13,9 @@ use crate::store::GraphTx;
 use anyhow::Result;
 use std::sync::Arc;
 
-/// EDAM and local terms preloaded so that chips render labels without a network call.
-/// The full EDAM ontology is not vendored: this is the working subset for IDS artifacts,
-/// and any other IRI still works because `ArtifactType` is any IRI (D11).
+/// The registry's own terms, plus a working subset of EDAM, preloaded so that chips render
+/// labels without a network call. Since a write may only name a term the registry holds
+/// (`crate::domain::vocabulary`), what is loaded here is also part of what is accepted.
 pub const VOCAB_TTL: &str = include_str!("../shapes/vocab.ttl");
 /// The shape set enforced on every write (spec §5.3). Also loaded into `<urn:tar:shapes>` so
 /// it is queryable and downloadable by any SHACL processor.
@@ -28,6 +28,13 @@ pub const EUROSCIVOC_TTL: &str = include_str!("../shapes/euroscivoc.ttl");
 
 pub fn load_vocab(state: &AppState) -> Result<usize> {
     let a = state.store.load_turtle(VOCAB_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
+    // Replaced, not merged. Every `sh:property [ … ]` in the shapes is a blank node, and a
+    // blank node is a fresh identifier on each parse — so re-loading the same unchanged file
+    // added another whole copy of the shapes on every boot rather than being a no-op. A
+    // long-lived registry had accumulated dozens of duplicate shape sets, all validating the
+    // same rule. The shapes ship with the binary and no one else writes to this graph, so the
+    // file is the whole truth about it and dropping first is safe.
+    state.store.drop_graph(ns::G_SHAPES)?;
     let b = state.store.load_turtle(SHAPES_TTL, ns::G_SHAPES, Some(&state.config.base_iri))?;
     let c = state.store.load_turtle(EDAM_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
     let d = state.store.load_turtle(EUROSCIVOC_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
@@ -39,13 +46,130 @@ pub fn load_vocab(state: &AppState) -> Result<usize> {
     let mut tx = GraphTx::new();
     tx.extend(keywords);
     state.store.apply(tx)?;
-    Ok(a + b + c + d + n)
+    let migrated = class_existing_types(state)? + drop_branch_markers(state)?;
+    Ok(a + b + c + d + n + migrated)
 }
 
-const EDAM: &str = "http://edamontology.org/";
+/// Give the types of a registry that predates the concept classes the class they should carry.
+///
+/// The bundled vocabularies and the keyword scheme are reloaded above on every start, so those
+/// pick their classes up for free. A type this registry minted or adopted does not: it was
+/// written once, by `api::types::create`, and nothing rewrites it.
+///
+/// Only `<urn:tar:local>` and `<urn:tar:vocab>` are considered. A peer's cached graph is left
+/// exactly as the peer served it, for the same reason a peer's record never passes a write
+/// handler: this registry is not authoritative for what a peer's terms are.
+///
+/// **Which graph.** The concept's own, found per concept — not a graph this file picks. The
+/// marker this replaces was backfilled into `<urn:tar:vocab>` while the concepts it was about
+/// sat in `<urn:tar:local>`, and since every query that reads a concept and its kind asks for
+/// both inside one `GRAPH` block, the result was types that were held and accepted on write and
+/// that no picker would offer. Writing into `?g` is the fix, and it is the whole reason the kind
+/// is a class: from here on the two triples are made in the same statement and cannot be split.
+///
+/// **Which concepts.** A `…/type/…` IRI is an artifact type by construction, and `<urn:tar:local>`
+/// is where `api::types::create` puts a term adopted under its own foreign identifier — the one
+/// path that writes a concept into that graph. Everything else there that is nevertheless shaped
+/// like a record of some registry is skipped, because a version-series node used to be typed
+/// `skos:Concept` too and classing those would put every artifact's title into the type picker.
+///
+/// Idempotent: a concept that already carries any of the concept classes is not selected.
+fn class_existing_types(state: &AppState) -> Result<usize> {
+    let classes = crate::domain::vocabulary::CONCEPT_CLASSES
+        .map(|c| format!("<{c}>"))
+        .join(", ");
+    let q = format!(
+        r#"{p}
+SELECT DISTINCT ?c ?g WHERE {{
+  GRAPH ?g {{ ?c a skos:Concept }}
+  FILTER(?g = <{local}> || (?g = <{vocab}> && CONTAINS(STR(?c), "/type/")))
+  FILTER NOT EXISTS {{ GRAPH ?cg {{ ?c a ?any . FILTER(?any IN ({classes})) }} }}
+}}"#,
+        p = ns::PREFIXES,
+        local = ns::G_LOCAL,
+        vocab = ns::G_VOCAB
+    );
+    let rows = state.store.select(&q)?;
+    let mut tx = GraphTx::new();
+    let mut n = 0;
+    for row in &rows.rows {
+        let (Some(iri), Some(graph)) = (row.iri("c"), row.iri("g")) else { continue };
+        if is_a_record_that_is_not_a_type(&iri) {
+            continue;
+        }
+        let mut node = crate::rdf::Node::iri(&iri, &graph);
+        node.a(crate::domain::vocabulary::CLASS_ARTIFACT_TYPE);
+        tx.extend(node.finish());
+        n += 1;
+    }
+    if n > 0 {
+        state.store.apply(tx)?;
+    }
+    Ok(n)
+}
 
-fn edam(id: &str) -> String {
-    format!("{EDAM}{id}")
+/// Whether an IRI is shaped like a registry record of some kind other than a type.
+///
+/// Read off the path, not off this registry's own base. A store served under a different
+/// `TAR_BASE_IRI` than the one that wrote it — a restored dump, a copy brought up on another
+/// port — still holds records whose IRIs say what they are, and a guard that asked "is this one
+/// of ours" would wave every one of them through as an adopted term. That is not hypothetical:
+/// it is what the first version of this did, and a `…/artifact-series/…` node from a store on
+/// another port came back as an artifact type.
+fn is_a_record_that_is_not_a_type(iri: &str) -> bool {
+    let mut segments = iri.rsplit('/');
+    let (Some(id), Some(kind)) = (segments.next(), segments.next()) else { return false };
+    !id.is_empty() && matches!(ids::Kind::from_segment(kind), Some(k) if k != ids::Kind::Type)
+}
+
+/// Retire the literal the classes replace.
+///
+/// Left in place it is a second answer to "what kind of concept is this", written by nothing and
+/// read by nothing, waiting for somebody to trust it. Removing it is the migration's other half
+/// and costs one pass; a second start finds none.
+///
+/// Peer graphs are left alone. A peer still running an older build may serve the marker in its
+/// stub, and a cached copy of what a peer said is not ours to edit — the same reason a peer's
+/// record never passes a write handler.
+fn drop_branch_markers(state: &AppState) -> Result<usize> {
+    let predicate = format!("{}conceptBranch", ns::TAR);
+    let q = format!(
+        r#"{p}
+SELECT DISTINCT ?c ?g WHERE {{
+  GRAPH ?g {{ ?c <{predicate}> ?b }}
+  FILTER(!STRSTARTS(STR(?g), "{peer}"))
+}}"#,
+        p = ns::PREFIXES,
+        peer = ns::G_PEER_PREFIX
+    );
+    let rows = state.store.select(&q)?;
+    let mut tx = GraphTx::new();
+    let mut n = 0;
+    for row in &rows.rows {
+        let (Some(iri), Some(graph)) = (row.iri("c"), row.iri("g")) else { continue };
+        tx.replace_property(&iri, &predicate, &graph);
+        n += 1;
+    }
+    if n > 0 {
+        state.store.apply(tx)?;
+    }
+    Ok(n)
+}
+
+/// The seeded software topics, by the identifiers the topic vocabulary uses.
+///
+/// These were EDAM topic IRIs, left behind when software classification moved to EuroSciVoc.
+/// They rendered labels, so nothing looked broken — but they are terms the topic picker does not
+/// offer and a write now refuses, which would have made the shipped records the one set of
+/// records nobody could reproduce.
+const ESV: &str = "http://data.europa.eu/8mn/euroscivoc/";
+const T_SEMANTIC_WEB: &str = "981a4eb6-f63a-4360-953d-efe0ec861672";
+const T_ONTOLOGY: &str = "123e5118-1586-4a45-b4da-34583bd74940";
+const T_DATABASES: &str = "1f6c74df-a512-462e-99aa-8dcbaa98972a";
+const T_SOFTWARE: &str = "aafff649-e02a-496e-b436-284ce76044c4";
+
+fn topic(id: &str) -> String {
+    format!("{ESV}{id}")
 }
 
 fn local_type(base: &str, slug: &str) -> String {
@@ -103,9 +227,10 @@ fn keyword_quads(base: &str) -> Vec<oxigraph::model::Quad> {
             n.text(ns::SKOS, "altLabel", a);
         }
         n.link(ns::SKOS, "inScheme", &scheme);
-        // The same branch marker the topic and data vocabularies use, so `vocab_search` can
-        // scope to keywords without knowing anything about this scheme in particular.
-        n.text(ns::TAR, "conceptBranch", "keyword");
+        // The same kind of class the type and topic vocabularies carry, so `vocab_search` scopes
+        // to keywords knowing nothing about this scheme in particular — and so that a keyword,
+        // which is a label rather than a type, is refused where a type is expected.
+        n.a(crate::domain::vocabulary::CLASS_ARTIFACT_KEYWORD);
         out.extend(n.finish());
     }
     out
@@ -119,6 +244,10 @@ fn type_quads(base: &str) -> Vec<oxigraph::model::Quad> {
         n.text(ns::SKOS, "prefLabel", label);
         n.text(ns::SKOS, "definition", definition);
         n.text(ns::TAR, "defaultMediaType", media);
+        // Same class the bundled vocabularies carry, or the type picker — which filters on it —
+        // would offer everything except the registry's own types, which are most of what this
+        // estate actually produces.
+        n.a(crate::domain::vocabulary::CLASS_ARTIFACT_TYPE);
         out.extend(n.finish());
     }
     out
@@ -147,7 +276,7 @@ fn ids_examples(base: &str) -> Vec<SeedSoftware> {
             description: "Multi-tenant platform for managing SHACL shape graphs and validating RDF against them. Emits validation reports and conformance summaries.",
             repo: "https://github.com/MaastrichtU-IDS/shacl-manager",
             kind: "service",
-            topics: vec![edam("topic_3071"), edam("topic_0089")],
+            topics: vec![topic(T_SEMANTIC_WEB), topic(T_DATABASES)],
             keywords: vec!["shacl", "validation", "rdf", "data quality"],
             consumes: vec![local_type(base, "rdf-graph"), local_type(base, "shacl-shapes-graph")],
             produces: vec![local_type(base, "shacl-validation-report"), local_type(base, "conformance-summary")],
@@ -164,7 +293,7 @@ fn ids_examples(base: &str) -> Vec<SeedSoftware> {
             description: "Turns a schema model into SULO-aligned RDF, OWL ontologies, SHACL shapes and Mermaid class diagrams.",
             repo: "https://github.com/MaastrichtU-IDS/sulo-schema-builder",
             kind: "service",
-            topics: vec![edam("topic_3071")],
+            topics: vec![topic(T_ONTOLOGY), topic(T_SEMANTIC_WEB)],
             keywords: vec!["ontology", "sulo", "owl", "schema"],
             consumes: vec![local_type(base, "schema-model"), local_type(base, "sulo-ontology")],
             produces: vec![
@@ -183,7 +312,7 @@ fn ids_examples(base: &str) -> Vec<SeedSoftware> {
             description: "Applies SPARQL updates transactionally, keeps a hash-chained patch log, and produces privacy-masked replicas.",
             repo: "https://github.com/MaastrichtU-IDS/rdf_tx",
             kind: "library",
-            topics: vec![edam("topic_3071"), edam("topic_0089")],
+            topics: vec![topic(T_SEMANTIC_WEB), topic(T_SOFTWARE)],
             keywords: vec!["rdf", "provenance", "masking", "rust"],
             consumes: vec![local_type(base, "sparql-update"), local_type(base, "rdf-quads")],
             produces: vec![local_type(base, "patch-log"), local_type(base, "masked-replica")],
@@ -197,7 +326,7 @@ fn ids_examples(base: &str) -> Vec<SeedSoftware> {
             description: "Demonstrates ontology-based data access with a lazy materialisation cache over relational sources and R2RML mappings.",
             repo: "https://github.com/MaastrichtU-IDS/obda-lazy-cache-demo",
             kind: "cli",
-            topics: vec![edam("topic_0089")],
+            topics: vec![topic(T_DATABASES), topic(T_SEMANTIC_WEB)],
             keywords: vec!["obda", "r2rml", "virtualisation"],
             consumes: vec![local_type(base, "relational-source"), local_type(base, "r2rml-mapping")],
             produces: vec![local_type(base, "materialised-view"), local_type(base, "mapping-coverage-report")],
@@ -425,4 +554,32 @@ fn seed_runs(state: &Arc<AppState>, instances: &[String], base: &str, actor: &st
         }
     }
     Ok((runs, artifacts))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The guard the migration uses to tell an adopted term from a record that happens to have
+    /// been typed as a concept. It reads the path, so it holds for a store brought up under a
+    /// different base than the one that wrote it — which is exactly the case that caught it out.
+    #[test]
+    fn a_record_of_another_kind_is_never_taken_for_a_type() {
+        for record in [
+            "http://127.0.0.1:8099/artifact-series/01a054c0-b751-7032-81a1-535cb3bc8653",
+            "https://reg.example/software/01a05400-0000-7000-8000-000000000001",
+            "https://reg.example/artifact/01a05400-0000-7000-8000-000000000001",
+        ] {
+            assert!(is_a_record_that_is_not_a_type(record), "{record}");
+        }
+        for term in [
+            "http://127.0.0.1:8099/type/shacl-validation-report",
+            "https://reg.example/type/01a05400-0000-7000-8000-000000000001",
+            // Adopted under an identifier that was never this registry's to shape.
+            "http://purl.obolibrary.org/obo/SWO_0000001",
+            "http://edamontology.org/data_2048",
+        ] {
+            assert!(!is_a_record_that_is_not_a_type(term), "{term}");
+        }
+    }
 }

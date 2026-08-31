@@ -173,6 +173,22 @@ pub async fn create(
     if let Some(sw) = input.software.clone() {
         input.software = Some(ids::iri_for(state.base(), Kind::Software, &sw));
     }
+    // A credential bound to one application decides which software its deployments belong to,
+    // here exactly as at `PUT /instances/self`. Without this the binding was enforced at one
+    // route and not the other: an auto-registration key carries `register:instance` and no
+    // roles, so it passed the scope check above and then took the software from the *body* —
+    // letting a key issued for one application register deployments of any other.
+    if let Some(bound) = principal.software_iri.as_deref() {
+        match input.software.as_deref() {
+            Some(named) if named != bound => {
+                return Err(AppError::forbidden(format!(
+                    "this credential registers deployments of {bound}, not of {named}"
+                )))
+            }
+            // Not naming one is fine: the credential already says which.
+            _ => input.software = Some(bound.to_string()),
+        }
+    }
     if let Some(r) = input.release.clone() {
         input.release = Some(ids::iri_for(state.base(), Kind::Release, &r));
     }
@@ -180,7 +196,7 @@ pub async fn create(
     let software = resolve_software_for(&state, &input)?;
     check_deployable(&state, software.as_deref(), &input)?;
     let quads = dom::instance_quads(state.base(), &iri, &input, &principal.subject, software.as_deref());
-    shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes)?;
+    shacl::enforce_write(&state, &quads)?;
     let mut tx = GraphTx::new();
     tx.extend(quads);
     state.store.apply(tx).map_err(AppError::from)?;
@@ -293,7 +309,7 @@ pub async fn patch(
     let software = resolve_software_for(&state, &input)?;
     check_deployable(&state, software.as_deref(), &input)?;
     let tx = dom::replace_instance(state.base(), &iri, &input, &principal.subject, software.as_deref());
-    shacl::enforce(state.shapes.validate_quads(&tx.insert), state.config.shacl_validate_writes)?;
+    shacl::enforce_write(&state, &tx.insert)?;
     state.store.apply(tx).map_err(AppError::from)?;
     let _ = state
         .ops
@@ -374,9 +390,9 @@ pub async fn announce_self(
         let current = dom::load_instance(&ctx, &iri)?;
         let mut merged = instance_in_from(&current);
         apply_announcement(&mut merged, &input, state.base());
-        shacl::enforce(
-            state.shapes.validate_quads(&dom::instance_quads(state.base(), &iri, &merged, &principal.subject, merged.software.as_deref())),
-            state.config.shacl_validate_writes,
+        shacl::enforce_write(
+            &state,
+            &dom::instance_quads(state.base(), &iri, &merged, &principal.subject, merged.software.as_deref()),
         )?;
         let software = resolve_software_for(&state, &merged)?;
         check_deployable(&state, software.as_deref(), &merged)?;
@@ -457,7 +473,7 @@ pub async fn announce_self(
     let resolved = resolve_software_for(&state, &fresh)?;
     check_deployable(&state, resolved.as_deref(), &fresh)?;
     let quads = dom::instance_quads(state.base(), &iri, &fresh, &principal.subject, resolved.as_deref());
-    shacl::enforce(state.shapes.validate_quads(&quads), state.config.shacl_validate_writes)?;
+    shacl::enforce_write(&state, &quads)?;
     let mut tx = GraphTx::new();
     tx.extend(quads);
     stamp_seen(&mut tx, &iri, &now);

@@ -94,7 +94,7 @@ async fn advertise(
                 None,
             ));
         }
-        shacl::enforce(state.shapes.validate_quads(&candidate), state.config.shacl_validate_writes)?;
+        shacl::enforce_write(&state, &candidate)?;
     }
 
     // Resolve or mint the Run. A second advertisement for the same CI attempt attaches to the

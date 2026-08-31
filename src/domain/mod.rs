@@ -6,6 +6,7 @@ pub mod instance;
 pub mod keywords;
 pub mod run;
 pub mod software;
+pub mod vocabulary;
 
 use crate::error::AppResult;
 use crate::model::{AgentIn, AgentRef, Origin, TypeRef};
@@ -187,11 +188,20 @@ SELECT ?s ?l WHERE {{
     }
 }
 
+/// Where a term comes from, *relative to this registry* — not which vocabulary it belongs to.
+///
+/// It used to answer `"edam"` / `"euroscivoc"`, which the picker rendered straight onto the
+/// screen: a vocabulary's name in an API field and a UI label, which is precisely what this
+/// project does not do, because several are in play and more will follow. The distinction
+/// callers actually need is whether the registry ships the term, minted it, or is taking
+/// somebody else's word for it. A UI that wants to *show* which vocabulary derives it from the
+/// IRI — see `vocabularyOf` in `frontend/src/components/chips.tsx` — where it stays truthful as
+/// vocabularies are added and needs no change here.
 pub fn type_source(base: &str, iri: &str) -> String {
-    if iri.starts_with("http://edamontology.org/") {
-        "edam".into()
-    } else if iri.starts_with("http://data.europa.eu/8mn/euroscivoc/") {
-        "euroscivoc".into()
+    if iri.starts_with("http://edamontology.org/")
+        || iri.starts_with("http://data.europa.eu/8mn/euroscivoc/")
+    {
+        "bundled".into()
     } else if crate::ids::is_local(base, iri) {
         "local".into()
     } else {

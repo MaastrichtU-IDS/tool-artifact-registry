@@ -387,3 +387,57 @@ pre.report {
   font-size: 12.5px; color: var(--text-dim); margin-top: 2px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+
+/* --------------------------------------------------------------- sparql */
+
+/* A plain textarea, deliberately: the project hand-rolls its UI, and a syntax-highlighting
+   editor is a large dependency for a query box. Monospace and generous height do most of the
+   work; the browser keeps find, undo, spellcheck-off and screen-reader behaviour for free. */
+.sparql-editor {
+  min-height: 292px;
+  line-height: 1.55;
+  font-size: 13px;
+  tab-size: 2;
+  resize: vertical;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+  background: var(--surface-2);
+}
+
+kbd.kbd {
+  font-family: var(--mono); font-size: 11px; border: 1px solid var(--border-strong);
+  border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--surface-2);
+  color: var(--text-dim);
+}
+
+.example-list { list-style: none; margin: 0; padding: 0; }
+.example-list li { padding: 7px 0; border-top: 1px solid var(--border); }
+.example-list li:first-child { border-top: none; padding-top: 0; }
+.example-list button.link { font-size: 13.5px; font-weight: 550; line-height: 1.4; }
+.example-list button.link:hover { text-decoration: underline; }
+.example-list p.hint { margin-top: 2px; }
+
+.prefix-list { list-style: none; margin: 0; padding: 0; font-size: 11.5px; }
+.prefix-list li { display: flex; gap: 6px; padding: 1.5px 0; overflow-wrap: anywhere; }
+.prefix-list .prefix-name { color: var(--accent); flex: none; }
+
+/* Yes/no is a word first; the tint only reinforces it (handoff §6.1, §8). */
+.ask-answer { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; margin: 0; }
+.ask-answer.yes { color: var(--ok); }
+.ask-answer.no { color: var(--text-dim); }
+
+.sparql-turtle { max-height: 60vh; overflow: auto; white-space: pre; }
+
+.term-literal { display: inline-flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.term-literal .literal-value { overflow-wrap: anywhere; }
+.term-tag { font-size: 10.5px; line-height: 15px; padding: 0 5px; color: var(--text-faint); }
+
+/* IRIs are long; a result table must still scroll rather than push the page sideways. */
+table td .mono { overflow-wrap: anywhere; }
+
+/* The SPARQL parser answers with every token it would have accepted, which is long. Wrap it
+   and bound it, rather than clipping the sentence that says where the error is. */
+pre.report.sparql-parse-error {
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto;
+}

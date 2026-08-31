@@ -2,6 +2,7 @@ import type {
   Artifact, Lineage, Page, Peer, Run, RunSummary, SearchResults, Software, Instance,
   Release, TokenRecord, WellKnown, WhoAmI, ProblemJson,
   Subscription, SubscriptionCreated, SubscriptionDelivery, SubscriptionDetail,
+  SparqlAnswer, SparqlTerm,
 } from './types'
 
 /// An error carrying the RFC 9457 problem document, so a form can map a SHACL report back to
@@ -162,6 +163,54 @@ export const api = {
       remaining: number
       acknowledged?: number
     }>(`/api/v1/subscriptions/${sid}/deliveries${qs(p)}`),
+
+  /// Read-only SPARQL 1.1 (spec §7.7). Not routed through `request()`: CONSTRUCT and DESCRIBE
+  /// answer in Turtle, so the response is dispatched on its content type, not assumed to be
+  /// JSON.
+  sparql: (query: string, signal?: AbortSignal) => sparql(query, signal),
+}
+
+async function sparql(query: string, signal?: AbortSignal): Promise<SparqlAnswer> {
+  const headers = new Headers({
+    'content-type': 'application/sparql-query',
+    // Both answers are acceptable; the server picks according to the query form.
+    accept: 'application/sparql-results+json, text/turtle;q=0.9',
+  })
+  if (authToken) headers.set('authorization', `Bearer ${authToken}`)
+  const resp = await fetch('/sparql', { method: 'POST', headers, body: query, signal })
+  const text = await resp.text()
+  const contentType = resp.headers.get('content-type') ?? ''
+
+  if (!resp.ok) {
+    // Every error path is RFC 9457 (spec §7.9) — a refused write, a syntax error, a 401.
+    let problem: ProblemJson
+    try {
+      problem = JSON.parse(text) as ProblemJson
+    } catch {
+      problem = {
+        type: 'about:blank',
+        title: resp.statusText || `HTTP ${resp.status}`,
+        status: resp.status,
+        detail: text.slice(0, 2000) || undefined,
+      }
+    }
+    throw new ApiError(problem, resp.status)
+  }
+
+  if (contentType.includes('turtle') || contentType.includes('n-triples')) {
+    return { form: 'graph', turtle: text }
+  }
+  const doc = JSON.parse(text) as {
+    head?: { vars?: string[] }
+    boolean?: boolean
+    results?: { bindings?: Record<string, SparqlTerm>[] }
+  }
+  if (typeof doc.boolean === 'boolean') return { form: 'ask', boolean: doc.boolean }
+  return {
+    form: 'select',
+    vars: doc.head?.vars ?? [],
+    rows: doc.results?.bindings ?? [],
+  }
 }
 
 /// The registry's IRI for a record is also its UI route (handoff §3), so links are just paths.

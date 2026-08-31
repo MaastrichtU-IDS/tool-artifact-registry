@@ -10,6 +10,7 @@ pub mod config;
 pub mod domain;
 pub mod error;
 pub mod ids;
+pub mod mcp;
 pub mod model;
 pub mod negotiate;
 pub mod ns;

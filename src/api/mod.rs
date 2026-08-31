@@ -94,6 +94,10 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     Router::new()
         .nest("/api/v1", api)
+        // The hosted MCP server: one route on this same process, behind these same
+        // credentials, plus the RFC 9728 metadata a client discovers the authorization
+        // server from. See `crate::mcp`.
+        .merge(crate::mcp::routes())
         .route("/.well-known/tar-registry", get(registry::well_known))
         .route("/healthz", get(registry::healthz))
         .route("/readyz", get(registry::readyz))

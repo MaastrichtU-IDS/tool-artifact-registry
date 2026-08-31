@@ -22,12 +22,16 @@ pub const VOCAB_TTL: &str = include_str!("../shapes/vocab.ttl");
 pub const SHAPES_TTL: &str = include_str!("../shapes/tar-shapes.ttl");
 /// EDAM's topic and data branches, bundled so the pickers work offline. See `shapes/edam.ttl`.
 pub const EDAM_TTL: &str = include_str!("../shapes/edam.ttl");
+/// EuroSciVoc, the EU Science Vocabulary — the topics a Software record is classified by.
+/// See `shapes/euroscivoc.ttl` for why it is this and not EDAM's topic branch.
+pub const EUROSCIVOC_TTL: &str = include_str!("../shapes/euroscivoc.ttl");
 
 pub fn load_vocab(state: &AppState) -> Result<usize> {
     let a = state.store.load_turtle(VOCAB_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
     let b = state.store.load_turtle(SHAPES_TTL, ns::G_SHAPES, Some(&state.config.base_iri))?;
     let c = state.store.load_turtle(EDAM_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
-    Ok(a + b + c)
+    let d = state.store.load_turtle(EUROSCIVOC_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
+    Ok(a + b + c + d)
 }
 
 const EDAM: &str = "http://edamontology.org/";

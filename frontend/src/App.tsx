@@ -16,6 +16,7 @@ import RunList from './routes/RunList'
 import RunDetail from './routes/RunDetail'
 import Peers from './routes/Peers'
 import Search from './routes/Search'
+import Sparql from './routes/Sparql'
 import AuthCallback from './routes/AuthCallback'
 import NotFound from './routes/NotFound'
 
@@ -46,6 +47,7 @@ export default function App() {
           <Route path="/run/:id" element={<RunDetail />} />
           <Route path="/peers" element={<Peers />} />
           <Route path="/search" element={<Search />} />
+          <Route path="/sparql" element={<Sparql />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
@@ -71,6 +73,7 @@ function Header() {
           <NavLink to="/instances">Instances</NavLink>
           <NavLink to="/artifacts">Artifacts</NavLink>
           <NavLink to="/runs">Runs</NavLink>
+          <NavLink to="/sparql">SPARQL</NavLink>
           {/* Peers is admin-only, and absent rather than disabled for everyone else. */}
           {isAdmin && <NavLink to="/peers">Peers</NavLink>}
         </nav>

@@ -432,3 +432,18 @@ export interface SubscriptionCreated {
   secret?: string
   shown_once: boolean
 }
+
+// ------------------------------------------------------------------ sparql
+
+/** One term in a SPARQL-results JSON binding (W3C `sparql-results+json`). */
+export type SparqlTerm =
+  | { type: 'uri'; value: string }
+  | { type: 'bnode'; value: string }
+  | { type: 'literal'; value: string; datatype?: string; 'xml:lang'?: string }
+
+/** What `POST /sparql` answered. The shape follows the query form, so the UI renders a table,
+ *  a yes/no or Turtle rather than guessing (spec §7.7). */
+export type SparqlAnswer =
+  | { form: 'select'; vars: string[]; rows: Record<string, SparqlTerm>[] }
+  | { form: 'ask'; boolean: boolean }
+  | { form: 'graph'; turtle: string }

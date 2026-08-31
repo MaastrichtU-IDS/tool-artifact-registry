@@ -12,7 +12,10 @@ use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
 pub struct SparqlParams {
-    pub query: String,
+    /// Optional so that `GET /sparql` with no query is a page rather than a deserialisation
+    /// error: the SPA's query screen lives at this URL, and the registry's IRIs and its UI
+    /// routes are deliberately the same URLs (handoff §3).
+    pub query: Option<String>,
     pub format: Option<String>,
 }
 
@@ -21,8 +24,24 @@ pub async fn query_get(
     principal: Principal,
     headers: HeaderMap,
     Query(p): Query<SparqlParams>,
-) -> AppResult<impl IntoResponse> {
-    run(state, principal, headers, p.query, p.format).await
+) -> axum::response::Response {
+    let Some(q) = p.query else {
+        // A browser asked for the endpoint itself: serve the SPA, which routes to /sparql and
+        // renders the query editor. Anything else forgot a required parameter and is told so.
+        let wants_html = headers
+            .get(axum::http::header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|a| a.contains("text/html"));
+        return if wants_html {
+            crate::api::web::spa_response(&state).await
+        } else {
+            AppError::bad_request("the `query` parameter is required").into_response()
+        };
+    };
+    match run(state, principal, headers, q, p.format).await {
+        Ok(r) => r.into_response(),
+        Err(e) => e.into_response(),
+    }
 }
 
 pub async fn query(

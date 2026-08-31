@@ -23,8 +23,9 @@ use std::sync::Arc;
 #[derive(Debug, Deserialize)]
 pub struct VocabQuery {
     pub q: Option<String>,
-    /// `topic` restricts to EDAM topics (what a Software is about); `data` to things an
-    /// artifact can be. Omit for everything, including local types.
+    /// `topic` restricts to EuroSciVoc — the fields of science a Software is about. `data`
+    /// restricts to EDAM data types, which is what an artifact conforms to. Omit for
+    /// everything, including locally-minted types and EDAM topics kept for label resolution.
     pub branch: Option<String>,
     pub limit: Option<usize>,
 }
@@ -56,20 +57,21 @@ pub async fn search(
     }
 
     let branch_filter = match q.branch.as_deref() {
-        Some(b) if !b.is_empty() => format!("?c tar:edamBranch \"{}\" .", super::escape_literal(b)),
+        Some(b) if !b.is_empty() => format!("?c tar:conceptBranch \"{}\" .", super::escape_literal(b)),
         _ => String::new(),
     };
     // Match the label or any synonym; EDAM's altLabels are how people actually name things.
     let filter = super::text_filter(&needle, &["?label", "?alt"]);
     let sparql = format!(
         r#"{p}
-SELECT DISTINCT ?c ?label ?def ?branch WHERE {{
+SELECT DISTINCT ?c ?label ?def ?branch ?broader WHERE {{
   GRAPH ?g {{
     ?c a skos:Concept .
     {{ ?c skos:prefLabel ?label }} UNION {{ ?c rdfs:label ?label }}
     OPTIONAL {{ ?c skos:altLabel ?alt }}
     OPTIONAL {{ ?c skos:definition ?def }}
-    OPTIONAL {{ ?c tar:edamBranch ?branch }}
+    OPTIONAL {{ ?c tar:conceptBranch ?branch }}
+    OPTIONAL {{ ?c tar:inBroader ?broader }}
     {branch_filter}
   }}
   {filter}
@@ -100,7 +102,10 @@ SELECT DISTINCT ?c ?label ?def ?branch WHERE {{
         items.push(VocabHit {
             source: crate::domain::type_source(ctx.base(), &iri),
             branch: row.str("branch"),
-            definition: row.str("def"),
+            // EuroSciVoc carries almost no definitions but nearly always a parent, and the
+            // parent is what disambiguates: this vocabulary has ontology, odontology and
+            // palaeontology, and only the broader term tells them apart at a glance.
+            definition: row.str("def").or_else(|| row.str("broader").map(|b| format!("in {b}"))),
             label,
             iri,
             score,

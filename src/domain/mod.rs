@@ -189,6 +189,8 @@ SELECT ?s ?l WHERE {{
 pub fn type_source(base: &str, iri: &str) -> String {
     if iri.starts_with("http://edamontology.org/") {
         "edam".into()
+    } else if iri.starts_with("http://data.europa.eu/8mn/euroscivoc/") {
+        "euroscivoc".into()
     } else if crate::ids::is_local(base, iri) {
         "local".into()
     } else {

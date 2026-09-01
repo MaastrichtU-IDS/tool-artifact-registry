@@ -12,10 +12,16 @@
 //!   * the upstream check runs at most once a day, with a short timeout;
 //!   * any failure — no curl, no network, a bad response — leaves the committed file alone and
 //!     emits a warning rather than breaking the build;
-//!   * `TAR_UPDATE_EDAM=1` forces a check, `TAR_EDAM_OFFLINE=1` skips it entirely.
+//!   * `TAR_UPDATE_VOCAB=1` forces a check, `TAR_VOCAB_OFFLINE=1` skips it entirely.
 //!
 //! The only hard failure is having no bundle and no way to fetch one, which is a real problem
 //! worth stopping for rather than papering over with an empty vocabulary.
+//!
+//! **A release build should always set `TAR_VOCAB_OFFLINE=1`.** The image and CI builds do. A
+//! build that may fetch is a build whose output depends on what a third-party host served that
+//! day, and one that cannot be reproduced from the tag alone; offline pins it to the committed
+//! bundles and turns a missing bundle into a loud failure instead of a network call.
+//! (`TAR_UPDATE_EDAM` and `TAR_EDAM_OFFLINE` are still honoured, under their old names.)
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,17 +40,23 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={EDAM_TTL}");
     println!("cargo:rerun-if-changed={ESV_TTL}");
-    println!("cargo:rerun-if-env-changed=TAR_UPDATE_EDAM");
-    println!("cargo:rerun-if-env-changed=TAR_EDAM_OFFLINE");
+    for v in ["TAR_UPDATE_VOCAB", "TAR_VOCAB_OFFLINE", "TAR_UPDATE_EDAM", "TAR_EDAM_OFFLINE"] {
+        println!("cargo:rerun-if-env-changed={v}");
+    }
 
     let ttl = PathBuf::from(EDAM_TTL);
     let have = ttl.exists();
-    let forced = std::env::var("TAR_UPDATE_EDAM").is_ok_and(|v| v == "1");
-    let offline = std::env::var("TAR_EDAM_OFFLINE").is_ok_and(|v| v == "1");
+    let forced = flag("TAR_UPDATE_VOCAB") || flag("TAR_UPDATE_EDAM");
+    let offline = flag("TAR_VOCAB_OFFLINE") || flag("TAR_EDAM_OFFLINE");
 
     if offline {
-        if !have {
-            panic!("TAR_EDAM_OFFLINE=1 but {EDAM_TTL} does not exist — nothing to build the term pickers from");
+        // Both bundles are `include_str!`d, so a missing one fails later with a message about a
+        // path rather than about the build being offline. Say it here instead.
+        if let Some(missing) = [EDAM_TTL, ESV_TTL].iter().find(|p| !Path::new(p).exists()) {
+            panic!(
+                "this is an offline build (TAR_VOCAB_OFFLINE=1) and {missing} does not exist.\n\
+                 Restore it from version control, or build once with network access."
+            );
         }
         return;
     }
@@ -92,6 +104,11 @@ fn main() {
         },
         None => fail_or_warn(have, "could not download the EDAM release"),
     }
+}
+
+/// A build-time switch. `1` only, as the documentation says.
+fn flag(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|v| v == "1")
 }
 
 fn fail_or_warn(have_existing: bool, message: &str) {

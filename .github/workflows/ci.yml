@@ -1,0 +1,140 @@
+# The test suite, on every push and every pull request.
+#
+# Two independent jobs — Rust and the UI — because they share nothing and a broken component
+# test should not sit behind the Rust build waiting for a turn.
+#
+# **Neither job needs the network or a service.** The end-to-end suite runs against an
+# in-memory Oxigraph and an in-memory SQLite; `TAR_TEST_SPARQL_ENDPOINT` is the opt-in that
+# points it at a real triple store, and leaving it unset is what CI wants. The UI tests stub
+# `fetch` in every test that renders a fetching component. Two Rust tests do resolve a hostname
+# (`onto.example.org`, `receiver.tar-test.invalid`) and assert that the request *fails*; both
+# are reserved names that resolve nowhere, so they pass on a runner exactly as they pass
+# offline. Nothing here is retried to paper over flakiness.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a branch makes the previous run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Build scripts do not fetch. `build.rs` refreshes the bundled vocabularies from upstream when
+  # they are missing or a day stale, and *writes into `shapes/`* when it does — which would make
+  # a CI build depend on a third-party host being up and on what it served today. The bundles
+  # committed at this revision are what gets tested.
+  TAR_VOCAB_OFFLINE: "1"
+
+jobs:
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # oxigraph's RocksDB backend runs bindgen over its C++ headers, which needs libclang.
+      # The hosted image usually has one; installing it explicitly is a few seconds against a
+      # build failure that reads as a mysterious linker error.
+      - name: Install libclang
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev
+
+      # Keyed on Cargo.lock and the toolchain; restores ~/.cargo and target/. The dependency
+      # graph is ~250 crates including RocksDB's C++, so a cold run is minutes of compilation
+      # and a warm one is not.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Test and clippy artifacts differ; one key for the job keeps them together.
+          shared-key: ci
+
+      # ---------------------------------------------------------------- advisory checks
+      #
+      # `cargo fmt --check` and `cargo clippy` report, and do not fail the build. That is a
+      # statement about this repository today, not a preference:
+      #
+      #   * `cargo fmt --check` currently rewrites 64 of the 66 Rust files in the tree. There is no
+      #     `rustfmt.toml`, the code is written to a wider style than the default, and no
+      #     rustfmt setting brings it close (the nearest, `max_width = 100` with
+      #     `use_small_heuristics = "Max"`, still rewrites 579 hunks). Making this blocking
+      #     means committing a whole-tree reformat first.
+      #   * `cargo clippy --all-targets` emits 13 warnings on an unmodified checkout.
+      #
+      # Both are pre-existing and neither is this workflow's to fix. Failing on them would make
+      # CI red on the first run and stay red, which teaches everyone to ignore it.
+      #
+      # To make them blocking, once the tree is clean: drop `continue-on-error` and append
+      # `-- -D warnings` to the clippy step. Nothing else here changes.
+      - name: cargo fmt --check (advisory)
+        id: fmt
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+
+      # A clippy *error* — a deny-by-default lint — is advisory here too, which is the cost of
+      # this arrangement. `cargo test` below still compiles every target, so nothing that stops
+      # the code building gets through; only lints do.
+      - name: cargo clippy (advisory)
+        id: clippy
+        continue-on-error: true
+        run: cargo clippy --all-targets 2>&1 | tee clippy.log
+
+      - name: Report what the advisory checks found
+        if: always()
+        run: |
+          # Colour is on for the logs, so strip it before counting.
+          nocolor() { sed -e 's/\x1b\[[0-9;]*[a-zA-Z]//g'; }
+          {
+            echo "### Advisory checks"
+            echo
+            if [ "${{ steps.fmt.outcome }}" = "success" ]; then
+              echo "- \`cargo fmt --check\`: clean."
+            else
+              hunks=$(cargo fmt --all -- --check 2>/dev/null | nocolor | grep -c '^Diff in' || true)
+              echo "- \`cargo fmt --check\`: **not clean**, ${hunks:-?} hunks. Pre-existing; see the comment in ci.yml."
+            fi
+            if [ -f clippy.log ]; then
+              n=$(nocolor < clippy.log | grep -cE '^warning: ' || true)
+              echo "- \`cargo clippy --all-targets\`: ${n:-0} warnings. 13 are pre-existing."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ---------------------------------------------------------------- the actual gate
+      - name: cargo test
+        run: cargo test --locked
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          # Caches ~/.npm keyed on the lockfile, which is what `npm ci` reads.
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: tsc --noEmit
+        run: npx tsc --noEmit
+
+      - name: vitest
+        run: npx vitest run

@@ -1,0 +1,106 @@
+# Plain manifests, assembled with kustomize — no Helm, no extra tool. `kubectl` has kustomize
+# built in, so `kubectl apply -k deploy/kubernetes` is the whole deployment, and
+# `kubectl kustomize deploy/kubernetes` shows you exactly what will be applied before it is.
+#
+# A chart was the alternative. It buys templating this deployment does not need — one workload,
+# one service, one volume — at the cost of a values file standing between the reader and the
+# object that actually gets created. The one thing a chart would genuinely unify, keeping the
+# ingress hostname and TAR_BASE_IRI in step, is done below with a `replacement` instead.
+#
+# ## What you must change
+#
+# One line: `TAR_BASE_IRI` in the configMapGenerator. The ingress hostname is *derived* from it
+# — see the replacement at the bottom — because those two disagreeing is the failure this
+# deployment is most likely to have, and it is a quiet one: links resolve to a host nobody
+# serves.
+#
+# ## What you must create separately, because it must never be in a manifest
+#
+#   kubectl -n tar create secret generic tar-secrets \
+#     --from-literal=TAR_ROOT_TOKEN="$(openssl rand -hex 24)"
+#
+# Add SPARQL credentials to that same secret if you use an external graph store:
+# `--from-literal=TAR_SPARQL_USERNAME=…  --from-literal=TAR_SPARQL_PASSWORD=…`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tar
+
+resources:
+  - namespace.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+
+# Decorative only. `includeSelectors: false` keeps these out of the Deployment's and Service's
+# selectors, which are declared in the manifests themselves — a selector is immutable once
+# applied, and one assembled by a tool is one you cannot change later without deleting the
+# object.
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/component: registry
+      app.kubernetes.io/part-of: tool-artifact-registry
+
+images:
+  - name: ghcr.io/maastrichtu-ids/tool-artifact-registry
+    newTag: "0.1.0"
+
+configMapGenerator:
+  - name: tar-config
+    literals:
+      # ---------------------------------------------------------------------------------
+      # THE ONE SETTING THAT MATTERS. Every identifier this registry mints is built from it,
+      # permanently. Change it after records exist and every identifier already handed out
+      # points at a host that no longer answers for it — the registry will not rewrite them,
+      # and a dump only shows you how many you invalidated. Decide it once, before first boot.
+      #
+      # It must be the URL people and machines actually reach the registry at: the scheme the
+      # ingress terminates, the hostname in the certificate, no trailing slash, no port unless
+      # the port is really in the URL.
+      # ---------------------------------------------------------------------------------
+      - TAR_BASE_IRI=https://registry.example.org
+
+      # TAR_DATA_DIR and TAR_LISTEN are already set in the image; they are repeated here so
+      # that what the container runs with is visible in one place.
+      - TAR_DATA_DIR=/data
+      - TAR_LISTEN=0.0.0.0:8080
+
+      # Reads are anonymous by default. Both must be false for a genuinely private registry:
+      # they are independent on purpose, so closing REST reads does not close SPARQL.
+      - TAR_PUBLIC_READ=true
+      - TAR_SPARQL_PUBLIC=true
+
+      - TAR_TITLE=Tool Artifact Registry
+      # - TAR_OPERATOR=Institute of Data Science, Maastricht University
+
+      # Sign-in and workload tokens. The audience a token must carry defaults to TAR_BASE_IRI,
+      # so the client in your identity provider needs an audience mapper adding that exact
+      # string — the most common misconfiguration there is.
+      # - TAR_OIDC_ISSUER=https://sso.example.org/realms/main
+      # - TAR_OIDC_CLIENT_ID=tar-ui
+      # - TAR_WORKLOAD_ISSUERS=https://kubernetes.default.svc
+
+      # An external graph store instead of the embedded one. The volume below is still
+      # required either way: only the graph moves, and the operational database does not.
+      # - TAR_SPARQL_ENDPOINT=http://fuseki.tar.svc:3030/tar/sparql
+      # - TAR_SPARQL_UPDATE_ENDPOINT=http://fuseki.tar.svc:3030/tar/update
+
+# The ingress hostname is TAR_BASE_IRI with its scheme removed. One source of truth, so the
+# certificate, the route and the identifiers cannot drift apart.
+replacements:
+  - source:
+      kind: ConfigMap
+      name: tar-config
+      fieldPath: data.TAR_BASE_IRI
+      options:
+        delimiter: "//"
+        index: 1
+    targets:
+      - select:
+          kind: Ingress
+          name: tar
+        fieldPaths:
+          - spec.rules.0.host
+          - spec.tls.0.hosts.0

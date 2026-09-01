@@ -1,0 +1,25 @@
+# TAR_DATA_DIR. Two stores live here and both must survive a restart:
+#
+#   * the graph store — every record, and the whole catalogue, unless TAR_SPARQL_ENDPOINT moves
+#     it to an external triple store;
+#   * a SQLite database — hashed API tokens, peers, the audit log, federation cursors,
+#     idempotency keys, subscriptions and their delivery queues.
+#
+# The SQLite half stays here even with an external graph store. Losing this volume means losing
+# every issued token and the audit log, whatever the graph is kept in.
+#
+# ReadWriteOnce, and one replica, because both stores are single-writer: the embedded graph
+# store takes an exclusive lock on its directory, and a second pod would not start. See the
+# `Recreate` strategy in deployment.yaml, which is the other half of the same constraint.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tar-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      # A catalogue of descriptions and pointers, never bytes. 10Gi is generous for tens of
+      # thousands of records; size it against your storage class's ability to expand.
+      storage: 10Gi
+  # storageClassName: your-cluster-default

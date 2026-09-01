@@ -34,6 +34,7 @@
 
 # Operating a registry
 
+- [Deployment](operations/deployment.md)
 - [Configuration](operations/configuration.md)
 - [Graph store](operations/graph-store.md)
 - [Identity provider setup](operations/identity-provider.md)

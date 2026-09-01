@@ -1,0 +1,48 @@
+# What the daemon is sent as build context. Without this file the context is the working tree,
+# which means `target/` (12 GB after a test run) and `frontend/node_modules/` — hundreds of
+# megabytes uploaded on every build, and a context hash that changes whenever anything in them
+# is touched, so no layer ever hits cache.
+#
+# Everything the image needs is listed in the Dockerfile: Cargo.toml, Cargo.lock, build.rs,
+# src/, migrations/, shapes/ and frontend/. Nothing below is one of those.
+
+# Build outputs — regenerated inside the image.
+target/
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# Version control and CI metadata.
+.git/
+.gitignore
+.github/
+
+# Runtime state, never baked into an image.
+data/
+data-*/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+demo/.run/
+
+# Not compiled into the binary: the shapes and vocabularies are `include_str!`d from shapes/
+# and the migrations are `sqlx::migrate!`d from migrations/, but the rest is documentation,
+# demos, deployment manifests and the test suite.
+docs/
+demo/
+deploy/
+tests/
+compose*.yaml
+Dockerfile
+.dockerignore
+Makefile
+README.md
+
+# Editor and OS noise.
+.vscode/
+.idea/
+**/.DS_Store
+**/__pycache__/
+**/*.pyc

@@ -1,0 +1,34 @@
+# The hostname below is a placeholder that kustomize overwrites: it is derived from
+# TAR_BASE_IRI in kustomization.yaml, with the scheme stripped. Editing it here has no effect —
+# edit TAR_BASE_IRI, which is the thing identifiers are actually minted from.
+#
+# The scheme in TAR_BASE_IRI must match what this ingress terminates. `https://` in the base IRI
+# with a plain-HTTP ingress mints identifiers nobody can dereference.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tar
+  annotations:
+    # Requests are capped at TAR_MAX_PAYLOAD_BYTES, 2 MiB by default. ingress-nginx caps them at
+    # 1 MiB by default, which would reject a large software record before the registry ever saw
+    # it — with a 413 from the proxy rather than the registry's own error. Keep the two in step.
+    nginx.ingress.kubernetes.io/proxy-body-size: "2m"
+    # cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  # Whatever your cluster runs: nginx, traefik, haproxy…
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - registry.example.org
+      secretName: tar-tls
+  rules:
+    - host: registry.example.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tar
+                port:
+                  name: http

@@ -1,0 +1,171 @@
+# Build the container image and publish it to GHCR.
+#
+# On a push to the default branch and on a `v*` tag. Not on pull requests: a pull request must
+# not be able to publish, and the image build is exercised by the `ci` workflow's own build of
+# the same Dockerfile if you want a pre-merge signal.
+#
+# Multi-arch, built the way Docker documents it: one job per platform on a runner of that
+# architecture, each pushing an untagged image *by digest*, then one job that assembles the two
+# digests into a single tagged manifest list. That is faster than one job emulating arm64 under
+# QEMU — this image compiles RocksDB's C++, which emulation makes glacial — and it keeps a
+# failure attributable to one architecture.
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+# The image name is derived, never hardcoded, so a fork publishes into its own namespace rather
+# than failing against this one. `github.repository` is `Owner/name`; GHCR wants it lowercase.
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # A fork has neither this package namespace nor a reason to publish. Skipped cleanly —
+    # a fork that enables Actions sees this job greyed out, not a red X.
+    if: github.event.repository.fork == false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          # GitHub's hosted arm64 runners, free for public repositories. If they are ever
+          # unavailable, change this to `ubuntu-24.04` and add a `docker/setup-qemu-action`
+          # step before buildx — same result, considerably slower.
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Platform as a filename fragment
+        run: echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+        env:
+          platform: ${{ matrix.platform }}
+
+      - uses: actions/checkout@v4
+
+      - name: Lowercase the image name
+        run: echo "IMAGE=${IMAGE_NAME,,}" >> "$GITHUB_ENV"
+
+      # Only the labels are used here; the tags are applied once, on the manifest list.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # Layer cache in the Actions cache. Scoped per platform: the two builds share no
+          # layers, and one scope would have them evicting each other. `mode=max` keeps the
+          # intermediate stages, which is where the expensive one — the cooked dependency
+          # graph — lives.
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+          provenance: false
+
+      - name: Write the digest out
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${digest#sha256:}"
+        env:
+          digest: ${{ steps.build.outputs.digest }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      # Both are what `attest-build-provenance` needs: an OIDC token to sign with, and write
+      # access to the attestations store.
+      id-token: write
+      attestations: write
+    steps:
+      - name: Lowercase the image name
+        run: echo "IMAGE=${IMAGE_NAME,,}" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          # `latest` follows released tags, not the default branch: it is the tag a deployment
+          # that has not pinned a version will pull, and it should mean "the last release", not
+          # "whatever merged an hour ago". A default-branch push publishes `main` and
+          # `main-<sha>`, which is what you deploy when you deliberately want the tip.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-,enable=${{ github.ref_type == 'branch' }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assemble the manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "${REGISTRY}/${IMAGE}@sha256:%s " *)
+
+      - name: Read back what was published
+        id: published
+        run: |
+          version='${{ steps.meta.outputs.version }}'
+          docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:${version}"
+          digest=$(docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:${version}" \
+                     --format '{{json .Manifest}}' | jq -r .digest)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # Signed provenance for the manifest list: what built this image, from which commit, with
+      # which workflow. `gh attestation verify oci://…` checks it.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          subject-digest: ${{ steps.published.outputs.digest }}
+          push-to-registry: true

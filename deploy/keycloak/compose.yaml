@@ -2,6 +2,9 @@
 #
 #   docker compose -f deploy/keycloak/compose.yaml up -d
 #
+# To bring this up *together with* a registry already configured against it, one command and no
+# hand-set audience, use `compose.identity.yaml` at the root of the repository instead.
+#
 # The realm in ./realm-tar.json is imported on first start, so this is reproducible rather
 # than click-configured: realm roles, a public PKCE client for the UI, a service-account
 # client for a workload, and four users. See README.md next to this file.
@@ -10,27 +13,32 @@
 
 name: tar-keycloak
 
+# The three `${...}` below default to exactly what this file used to hardcode, so
+# `docker compose -f deploy/keycloak/compose.yaml up -d` behaves as it always did. They exist so
+# that `compose.identity.yaml`, which includes this file, can run a second copy beside a
+# Keycloak you already have up.
+
 services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
-    container_name: tar-keycloak
+    container_name: ${TAR_KEYCLOAK_CONTAINER:-tar-keycloak}
     command:
       - start-dev
       - --import-realm
-      - --http-port=8090
+      - --http-port=${TAR_KEYCLOAK_PORT:-8090}
     environment:
       # Bootstrap admin for the Keycloak console at http://127.0.0.1:8090/admin
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       # The issuer the registry and the browser must BOTH be able to reach, byte for byte:
       # a token's `iss` is compared against TAR_OIDC_ISSUER as a string.
-      KC_HOSTNAME: http://127.0.0.1:8090
+      KC_HOSTNAME: http://127.0.0.1:${TAR_KEYCLOAK_PORT:-8090}
       KC_HOSTNAME_STRICT: "false"
       KC_HTTP_ENABLED: "true"
       KC_HEALTH_ENABLED: "true"
     ports:
-      - "127.0.0.1:8090:8090"
-      - "127.0.0.1:9090:9000"
+      - "127.0.0.1:${TAR_KEYCLOAK_PORT:-8090}:${TAR_KEYCLOAK_PORT:-8090}"
+      - "127.0.0.1:${TAR_KEYCLOAK_MGMT_PORT:-9090}:9000"
     volumes:
       - ./realm-tar.json:/opt/keycloak/data/import/realm-tar.json:ro
     healthcheck:

@@ -1,0 +1,78 @@
+# The registry *and* an identity provider, in one command.
+#
+#   docker compose -f compose.identity.yaml up
+#
+# Then open http://127.0.0.1:8099 and sign in as `curator` / `curator-password`.
+#
+# This exists because bringing the two up by hand took two commands and then a hand-set
+# audience, which is the single most common way to misconfigure this: Keycloak issues a token
+# whose `aud` names its own account service, the registry requires `aud` to name *it*, and the
+# symptom is a sign-in that appears to succeed and then fails. Here the registry is served on
+# http://127.0.0.1:8099, which is one of the two origins the bundled realm's audience mappers
+# already name, so there is nothing to set.
+#
+# ## Read this before changing a port
+#
+# `TAR_PORT` may be **8099 or 8098** and nothing else. Those are the origins
+# `deploy/keycloak/realm-tar.json` carries audience mappers and redirect URIs for. Any other
+# value needs a mapper adding to that file, or sign-in fails with `InvalidAudience`.
+#
+# ## Why the registry uses the host network
+#
+# The issuer string has to be identical for the browser and for the registry — the registry
+# compares a token's `iss` to `TAR_OIDC_ISSUER` byte for byte, and fetches the signing keys from
+# that same URL. A container on a bridge network would need `http://keycloak:8090` while the
+# browser needs `http://127.0.0.1:8090`, and those are two different issuers. Sharing the host's
+# network namespace makes one string true for both. It is a development convenience and one of
+# the reasons this file is not a production deployment; a real one puts both behind DNS names
+# that resolve the same everywhere. Linux, and Docker Desktop 4.34+ with host networking enabled.
+#
+# ## Not for production
+#
+# Keycloak runs in development mode here: plain HTTP, no proxy headers, an in-memory database
+# wiped on `down`, and passwords committed to the repository on purpose. See
+# `deploy/keycloak/README.md`. For a real deployment see the Deployment chapter of the
+# documentation.
+
+name: tar-identity
+
+# The Keycloak service, its realm import and its healthcheck are defined once, in the file the
+# identity-provider documentation already points at.
+include:
+  - deploy/keycloak/compose.yaml
+
+services:
+  registry:
+    build: .
+    image: ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0
+    # See the header. `ports:` would be ignored under this mode, so TAR_LISTEN is the port.
+    network_mode: host
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      # Identical strings on purpose: the base IRI is what every minted identifier is built
+      # from, and it is also the audience a token must name.
+      TAR_BASE_IRI: http://127.0.0.1:${TAR_PORT:-8099}
+      TAR_LISTEN: 127.0.0.1:${TAR_PORT:-8099}
+      TAR_OIDC_ISSUER: http://127.0.0.1:${TAR_KEYCLOAK_PORT:-8090}/realms/tar
+      TAR_OIDC_CLIENT_ID: tar-ui
+      # Left at their defaults deliberately, and named here because they are the settings that
+      # make the audience mapper necessary:
+      #   TAR_OIDC_AUDIENCE          defaults to TAR_BASE_IRI
+      #   TAR_OIDC_REQUIRE_AUDIENCE  defaults to true
+      #
+      # Optional: a bootstrap admin credential as well as sign-in. The registry refuses a
+      # placeholder or anything under 16 characters, and starts happily without one.
+      TAR_ROOT_TOKEN: ${TAR_ROOT_TOKEN:-}
+    volumes:
+      - tar-identity-data:/data
+    healthcheck:
+      test: ["CMD", "/tar", "healthcheck"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  tar-identity-data:

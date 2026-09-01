@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tar
+spec:
+  # One. Both stores under TAR_DATA_DIR are single-writer — the embedded graph store holds an
+  # exclusive lock on its directory — so a second replica does not start, it fails to start.
+  # Scaling this registry horizontally means moving the graph to an external SPARQL endpoint and
+  # the operational database to a shared one, and the second of those is not supported today.
+  replicas: 1
+  strategy:
+    # Not RollingUpdate. A rolling update would start the new pod while the old one still holds
+    # the volume and the lock, and the new pod would crash-loop until the rollout gave up. This
+    # trades a few seconds of downtime for an upgrade that works.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tool-artifact-registry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tool-artifact-registry
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        # `nonroot` in the distroless base. fsGroup is what makes the freshly provisioned
+        # volume writable by that user.
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tar
+          image: ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0
+          imagePullPolicy: IfNotPresent
+          args: ["serve"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # The binary writes only under TAR_DATA_DIR. Verified by running the image with a
+            # read-only root filesystem and no writable temp: it serves, seeds and survives a
+            # restart. There is nothing here that needs to write to the image.
+            readOnlyRootFilesystem: true
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            # Everything non-secret. Generated from kustomization.yaml, so a change to it rolls
+            # the pod rather than sitting in a ConfigMap nothing re-reads.
+            - configMapRef:
+                name: tar-config
+            # Created out of band — see kustomization.yaml. TAR_ROOT_TOKEN lives here, and so do
+            # TAR_SPARQL_USERNAME / TAR_SPARQL_PASSWORD or TAR_SPARQL_BEARER_TOKEN if the graph
+            # is in an external store. None of them belong in a manifest or in git.
+            - secretRef:
+                name: tar-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          # Three probes, because they answer three different questions.
+          #
+          # /healthz is a static 200: the process is up and serving HTTP. That is all liveness
+          # should ever mean — a liveness probe that also checks a dependency restarts a healthy
+          # process because something else broke.
+          #
+          # /readyz touches both stores (a graph count and `SELECT 1` against SQLite), so a pod
+          # whose external SPARQL endpoint is unreachable stops taking traffic without being
+          # killed and restarted.
+          startupProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            failureThreshold: 30 # up to 150s: first boot loads the shapes and the bundled
+            # vocabularies into an empty store, and a cold volume is slower than a warm one.
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            # Measured, not guessed: this image, seeded with the example content (12,145
+            # triples), serving the UI and answering reads, sits at 34 MiB. The request is
+            # deliberately well above that and the limit is headroom for a large SPARQL result
+            # or a bulk import, not a projection of steady state. Raise `cpu` if you rely on
+            # federated search fan-out, which is the only thing here that is ever busy.
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: tar-data

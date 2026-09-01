@@ -11,3 +11,7 @@ demo/.run/
 
 # Incremental build cache — churns on every build and belongs to no one.
 frontend/tsconfig.tsbuildinfo
+
+# Python bytecode — regenerated on every run of the demos.
+__pycache__/
+*.pyc

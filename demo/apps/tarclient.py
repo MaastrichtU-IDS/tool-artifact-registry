@@ -1,4 +1,4 @@
-"""Shared plumbing for the two simulated applications.
+"""Shared plumbing for the simulated applications in this directory.
 
 Standard library only, on purpose. These programs exist to show the *HTTP contract* a real
 deployment has to satisfy — advertise what you made, subscribe to what you care about, drain
@@ -10,6 +10,7 @@ Nothing here reaches into the registry's database or graph. Everything is `/api/
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import http.server
 import json
@@ -17,6 +18,7 @@ import os
 import socketserver
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,7 +26,7 @@ import urllib.request
 # ------------------------------------------------------------------ output
 
 
-_COLOURS = {"sulo": "\033[35m", "onto": "\033[36m"}
+_COLOURS = {"sulo": "\033[35m", "onto": "\033[36m", "publisher": "\033[35m", "manager": "\033[36m"}
 _RESET = "\033[0m"
 _DIM = "\033[2m"
 
@@ -75,19 +77,134 @@ class RegistryError(RuntimeError):
         super().__init__(f"{method} {path} -> {status}: {detail}")
 
 
+class ClientCredentials:
+    """A `client_credentials` grant against the deployment's own identity provider.
+
+    **Why this is in the client and not in the application.** A deployment holding an issuer
+    credential has no bearer token to hold — it has the *means to get one*, and every request
+    needs a live one. Making that the application's problem means every call site either
+    re-fetches (a token request per advertisement) or carries its own expiry arithmetic, and
+    gets it wrong once. The transport is the only layer that knows a request is about to be
+    made, so the transport is where "make sure there is a valid token" belongs. What stays in
+    the application is the *choice* — which issuer, which client — because that is
+    provisioning, and it is exactly what differs between the two deployments here.
+
+    The token is cached until `skew` seconds before it expires. The realm's tokens last thirty
+    minutes; a long-running deployment must not treat that as forever, and re-fetching per
+    request would hammer Keycloak for no reason.
+    """
+
+    def __init__(
+        self,
+        issuer: str,
+        client_id: str,
+        client_secret: str,
+        skew: float = 60.0,
+        timeout: float = 15.0,
+    ) -> None:
+        self.issuer = issuer.rstrip("/")
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.skew = skew
+        self.timeout = timeout
+        self._token: str | None = None
+        self._expires_at = 0.0
+        self._endpoint: str | None = None
+        self.fetches = 0
+
+    def _token_endpoint(self) -> str:
+        """Discovered, not constructed. `/protocol/openid-connect/token` is a Keycloak detail;
+        the discovery document is the contract every OIDC provider publishes."""
+        if self._endpoint is None:
+            url = f"{self.issuer}/.well-known/openid-configuration"
+            try:
+                with urllib.request.urlopen(url, timeout=self.timeout) as resp:
+                    self._endpoint = json.load(resp)["token_endpoint"]
+            except (urllib.error.URLError, KeyError) as e:
+                raise RuntimeError(f"cannot discover the token endpoint at {url}: {e}") from None
+        return self._endpoint
+
+    def token(self) -> str:
+        if self._token and time.monotonic() < self._expires_at:
+            return self._token
+        data = urllib.parse.urlencode({"grant_type": "client_credentials"}).encode()
+        req = urllib.request.Request(self._token_endpoint(), data=data, method="POST")
+        basic = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode()
+        req.add_header("authorization", "Basic " + basic)
+        req.add_header("content-type", "application/x-www-form-urlencoded")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                payload = json.load(resp)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:400]
+            raise RuntimeError(
+                f"{self.issuer} refused client_credentials for {self.client_id}: {e.code} {detail}"
+            ) from None
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"cannot reach {self.issuer}: {e.reason}") from None
+        self._token = payload["access_token"]
+        # `expires_in` is the issuer's own answer; trusting the local clock past it is how a
+        # deployment ends up presenting an expired token and blaming the registry.
+        self._expires_at = time.monotonic() + max(float(payload.get("expires_in", 300)) - self.skew, 5.0)
+        self.fetches += 1
+        return self._token
+
+    def invalidate(self) -> None:
+        """Drop the cached token. Called when the registry says 401, which is the only
+        authority on whether a token is still good."""
+        self._token = None
+        self._expires_at = 0.0
+
+
+def jwt_claims(token: str) -> dict:
+    """The payload of a JWT, unverified — for *showing* a reader what the deployment presented.
+
+    Never for deciding anything: the signature is the registry's business, and a client that
+    made decisions on an unverified payload would be trusting a string it was handed.
+    """
+    try:
+        part = token.split(".")[1]
+        part += "=" * ((4 - len(part) % 4) % 4)
+        return json.loads(base64.urlsafe_b64decode(part))
+    except Exception:
+        return {}
+
+
 class Registry:
     """One deployment's view of the registry: a base URL and its own credential.
 
     The credential is what decides *which Instance* the registry attributes a write to
     (spec §8.3) — the payload never names it, and could not be believed if it did.
+
+    Two kinds of credential, one interface. `token=` is a registry API token, issued by a
+    curator and held until someone rotates it. `credential=` is anything that can produce a
+    bearer on demand — `ClientCredentials` above. Every method below is identical either way,
+    which is the point: how a deployment authenticates is provisioning, not programming.
     """
 
-    def __init__(self, base: str, token: str | None = None, timeout: float = 15.0) -> None:
+    def __init__(
+        self,
+        base: str,
+        token: str | None = None,
+        credential: "ClientCredentials | None" = None,
+        timeout: float = 15.0,
+    ) -> None:
         self.base = base.rstrip("/")
         self.token = token
+        self.credential = credential
         self.timeout = timeout
 
-    def _request(self, method: str, path: str, body: dict | None = None, params: dict | None = None):
+    def _bearer(self) -> str | None:
+        return self.credential.token() if self.credential is not None else self.token
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict | None = None,
+        params: dict | None = None,
+        _retry: bool = True,
+    ):
         url = self.base + path
         if params:
             url += "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
@@ -95,13 +212,21 @@ class Registry:
         req = urllib.request.Request(url, data=data, method=method)
         if data is not None:
             req.add_header("content-type", "application/json")
-        if self.token:
-            req.add_header("authorization", f"Bearer {self.token}")
+        bearer = self._bearer()
+        if bearer:
+            req.add_header("authorization", f"Bearer {bearer}")
         req.add_header("accept", "application/json")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as e:
+            # A cached token can expire between being minted and being used, and a clock skew
+            # of a few seconds is enough to land on the wrong side of `exp`. The registry is
+            # the authority on that, so take its 401 as the signal, discard the token and try
+            # once more. Once, not in a loop: a second 401 is a real refusal.
+            if e.code == 401 and self.credential is not None and _retry:
+                self.credential.invalidate()
+                return self._request(method, path, body=body, params=params, _retry=False)
             raise RegistryError(method, path, e.code, e.read().decode("utf-8", "replace")) from None
         except urllib.error.URLError as e:
             raise RuntimeError(f"{method} {path}: cannot reach the registry at {self.base}: {e.reason}") from None
@@ -114,6 +239,9 @@ class Registry:
 
     def post(self, path: str, body: dict):
         return self._request("POST", path, body=body)
+
+    def put(self, path: str, body: dict):
+        return self._request("PUT", path, body=body)
 
     def patch(self, path: str, body: dict):
         return self._request("PATCH", path, body=body)

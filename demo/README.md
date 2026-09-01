@@ -1,16 +1,14 @@
 # Demo — four IDS tools, one pizza
 
-> **There are three demos in this directory.** This one loads a worked scenario as *data*.
+> **There are four demos in this directory.** This one loads a worked scenario as *data*.
 > [`README-two-apps.md`](README-two-apps.md) runs two actual programs that coordinate through
 > the registry — one advertises an OWL ontology, the other has a subscription that matches it,
 > is notified, ingests it, and advertises what it derived. Start there if what you want to see
 > is a tool reacting to another tool.
 >
-> [`run-workload-identity-demo.sh`](run-workload-identity-demo.sh) is the third, and the only
-> one where a deployment is not handed a registry API token: it exchanges a credential for its
-> *own* identity provider and the registry works out which deployment that is. The other two
-> use registry tokens, which is the simpler path and the wrong one to copy if you have an
-> identity provider already.
+> [`run-workload-identity-demo.sh`](run-workload-identity-demo.sh) is the third, and the first
+> where a deployment is not handed a registry API token: it exchanges a credential for its
+> *own* identity provider and the registry works out which deployment that is.
 >
 > ```bash
 > docker compose -f deploy/keycloak/compose.yaml up -d
@@ -20,6 +18,30 @@
 > It ends by showing a *curator's* token being refused the same call — because advertising is
 > something a deployment does about itself, and being trusted is not the same as being the
 > thing that ran.
+>
+> [`run-two-credentials-demo.sh`](run-two-credentials-demo.sh) is the fourth, and the one to
+> read if the question you actually have is *"how should my tool get in here, and what will
+> that cost me?"* Two applications, already in the catalogue, acquire a deployment record by
+> opposite routes and then trade artifacts through the registry:
+>
+> ```bash
+> docker compose -f deploy/keycloak/compose.yaml up -d
+> ./demo/run-two-credentials-demo.sh
+> ```
+>
+> | | how the record was made | what the application holds | what rotation costs |
+> |---|---|---|---|
+> | `graph-publisher` | a curator, by hand, at `POST /api/v1/instances` | a registry API token, minted for it | a registry job, per deployment |
+> | `shacl-manager` | the deployment itself, at `PUT /api/v1/instances/self` | a Keycloak client secret, and nothing from the registry | a Keycloak job; the registry holds nothing |
+>
+> Neither route is the better one. Tokens need no identity provider and are the only option
+> when there isn't one; client credentials need Keycloak, and in return the registry never
+> stores a secret for the deployment at all. What makes the second possible is one line on the
+> *software* record — `registration_clients`, naming an OIDC client that may register
+> deployments **of that software** — which is why the demo ends with that same credential being
+> refused a deployment of the other application. It starts its own registry with its own data
+> directory, deletes that directory on each run and says so, and it never reconfigures the
+> Keycloak it reads tokens from.
 >
 > **Two records below are known to be modelled wrong and are left unfixed.** RDFCraft is
 > registered as a deployable service producing RDF, and shacl-rust's own CI is bound as a

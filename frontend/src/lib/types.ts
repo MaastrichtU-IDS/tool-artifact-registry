@@ -110,6 +110,8 @@ export interface Software {
   api_docs: ApiDoc[]
   /** OIDC client ids allowed to register deployments of this software for themselves. */
   registration_clients: string[]
+  /** The issuer those client ids belong to — a client id is only unique within one. */
+  registration_issuer?: string
   license?: string
   /** What the software is, as a set — one program is routinely several of these. */
   kinds: string[]

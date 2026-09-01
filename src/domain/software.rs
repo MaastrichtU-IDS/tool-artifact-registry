@@ -91,6 +91,10 @@ pub fn software_quads(base: &str, iri: &str, input: &SoftwareIn, actor: &str, cr
         n.link(ns::CODEMETA, "developmentStatus", &iri);
     }
     n.texts(ns::TAR, "registrationClient", &input.registration_clients);
+    // Only meaningful alongside the client ids it scopes; a lone issuer names nobody.
+    if !input.registration_clients.is_empty() {
+        n.opt_text(ns::TAR, "registrationIssuer", &input.registration_issuer);
+    }
     n.links(ns::DCT, "subject", &input.topics);
     n.texts(ns::SCHEMA, "keywords", &input.keywords);
     n.links(ns::DCT, "references", &input.publications);
@@ -251,6 +255,7 @@ pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
         }),
         deployable: p.bool(ns::TAR, "deployable").unwrap_or(true),
         registration_clients: p.strs(ns::TAR, "registrationClient"),
+        registration_issuer: p.str(ns::TAR, "registrationIssuer"),
         topics: ctx.type_refs(&p.iris(ns::DCT, "subject")),
         keywords: p.strs(ns::SCHEMA, "keywords"),
         publisher: ctx.opt_agent_ref(p.iri(ns::DCT, "publisher")),

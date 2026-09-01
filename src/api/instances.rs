@@ -168,6 +168,7 @@ pub async fn create(
     // deployment. A caller that could set them could claim another deployment's record on its
     // next announcement, so they are dropped from anything that arrives over the wire.
     input.self_registered_by = None;
+    input.self_registered_issuer = None;
     input.instance_key = None;
     // Accept a bare id or a full IRI in `software` / `release`.
     if let Some(sw) = input.software.clone() {
@@ -215,6 +216,7 @@ pub fn instance_in_from(i: &Instance) -> InstanceIn {
         // Carried through, or a PATCH would drop the triples that let a self-registered
         // deployment find its own record on the next announcement.
         self_registered_by: i.self_registered_by.clone(),
+        self_registered_issuer: i.self_registered_issuer.clone(),
         instance_key: i.instance_key.clone(),
         software: i.software.clone(),
         release: i.release.clone(),
@@ -329,6 +331,7 @@ pub async fn patch(
     // Ownership of a self-registered record is the registry's to state, not the caller's to
     // edit: whatever the body said, the stored values stand.
     input.self_registered_by = current.self_registered_by.clone();
+    input.self_registered_issuer = current.self_registered_issuer.clone();
     input.instance_key = current.instance_key.clone();
     if let Some(sw) = input.software.clone() {
         input.software = Some(ids::iri_for(state.base(), Kind::Software, &sw));
@@ -518,6 +521,9 @@ pub async fn announce_self(
     // naming it twice.
     fresh.software = Some(software_iri);
     fresh.self_registered_by = Some(principal.subject.clone());
+    // Which issuer vouched for that subject. A client id means nothing without it, and this
+    // record is what the next announcement is matched against.
+    fresh.self_registered_issuer = principal.issuer.clone();
     fresh.instance_key = Some(self_key.clone());
     let iri = ids::mint(state.base(), Kind::Instance);
     let resolved = resolve_software_for(&state, &fresh)?;

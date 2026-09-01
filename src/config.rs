@@ -167,6 +167,39 @@ impl OidcConfig {
     pub fn human_signin_enabled(&self) -> bool {
         self.issuer.is_some() && self.client_id.is_some()
     }
+
+    /// The issuer a credential binding is read against when the record does not name one.
+    ///
+    /// A client id is only unique *within* an issuer: "ontoexplorer-prod" at Keycloak and
+    /// "ontoexplorer-prod" at a partner's identity provider are two different principals that
+    /// happen to spell their name the same way. A record that names a client id but no issuer
+    /// therefore does not identify anybody on its own, and the registry has to supply the
+    /// missing half from somewhere.
+    ///
+    /// It supplies the *primary* issuer, or the sole workload issuer when that is the only one
+    /// configured — the unambiguous cases. When several issuers are accepted and the record
+    /// pins none, there is no honest answer: any of them could have minted that client id, and
+    /// picking one would be a guess that silently grants a credential from the weakest accepted
+    /// issuer (a CI runner, a shared cluster) the authority intended for the strongest. That
+    /// case returns `None`, and the binding is refused until a curator pins the issuer.
+    pub fn default_binding_issuer(&self) -> Option<String> {
+        if let Some(i) = &self.issuer {
+            return Some(i.trim_end_matches('/').to_string());
+        }
+        match self.workload_issuers.as_slice() {
+            [only] => Some(only.trim_end_matches('/').to_string()),
+            _ => None,
+        }
+    }
+
+    /// Whether a record that names a credential must also pin its issuer to be usable.
+    ///
+    /// True exactly when [`default_binding_issuer`](Self::default_binding_issuer) cannot answer
+    /// — which is what the write path warns about, so the refusal arrives when the record is
+    /// created rather than as a 403 the first time the workload calls.
+    pub fn issuer_pin_required(&self) -> bool {
+        self.enabled() && self.default_binding_issuer().is_none()
+    }
 }
 
 fn env(key: &str) -> Option<String> {
@@ -298,4 +331,50 @@ fn parse_bytes(v: &str) -> Option<usize> {
         (v, 1)
     };
     n.trim().parse::<usize>().ok().map(|n| n * m)
+}
+
+#[cfg(test)]
+mod binding_issuer_tests {
+    use super::*;
+
+    fn cfg(primary: Option<&str>, workload: &[&str]) -> OidcConfig {
+        OidcConfig {
+            issuer: primary.map(str::to_string),
+            workload_issuers: workload.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The two readings with one obvious answer, and the one without.
+    #[test]
+    fn an_unpinned_binding_resolves_only_when_one_issuer_is_the_obvious_reading() {
+        let primary = "https://kc.example/realms/ids";
+        let ci = "https://token.actions.githubusercontent.com";
+
+        // A primary issuer is what an unpinned binding means, whatever else is accepted.
+        assert_eq!(cfg(Some(primary), &[]).default_binding_issuer().as_deref(), Some(primary));
+        assert_eq!(cfg(Some(primary), &[ci]).default_binding_issuer().as_deref(), Some(primary));
+
+        // No primary, one workload issuer: still unambiguous.
+        assert_eq!(cfg(None, &[ci]).default_binding_issuer().as_deref(), Some(ci));
+
+        // No primary and several: no honest answer, so none is given.
+        assert_eq!(cfg(None, &[ci, "https://partner.example/realms/theirs"]).default_binding_issuer(), None);
+
+        // A trailing slash is not a different issuer.
+        assert_eq!(
+            cfg(Some(&format!("{primary}/")), &[]).default_binding_issuer().as_deref(),
+            Some(primary)
+        );
+    }
+
+    #[test]
+    fn a_pin_is_demanded_exactly_where_the_default_cannot_answer() {
+        let ci = "https://token.actions.githubusercontent.com";
+        assert!(!cfg(Some("https://kc.example/realms/ids"), &[ci]).issuer_pin_required());
+        assert!(!cfg(None, &[ci]).issuer_pin_required());
+        assert!(cfg(None, &[ci, "https://partner.example/realms/theirs"]).issuer_pin_required());
+        // OIDC off entirely: there is no binding to pin.
+        assert!(!cfg(None, &[]).issuer_pin_required());
+    }
 }

@@ -182,12 +182,14 @@ authoritative and `schema:actionStatus` is the interoperable supplement.
 | `tar:readme` | `tar:Software` | `xsd:string` |
 | `tar:readmeBaseURL` | `tar:Software` | — |
 | `tar:registrationClient` | `tar:Software` | `xsd:string` |
+| `tar:registrationIssuer` | `tar:Software` | `xsd:string` |
 | `tar:containerImage` | `tar:Release` | `xsd:string` |
 | `tar:imageDigest` | `tar:Release` | `xsd:string` |
 | `tar:installCommand` | `tar:Release` | `xsd:string` |
 | `tar:healthEndpoint` | `tar:Instance` | — |
 | `tar:jurisdiction` | `tar:Instance` | `xsd:string` |
 | `tar:selfRegisteredBy` | `tar:Instance` | `xsd:string` |
+| `tar:selfRegisteredIssuer` | `tar:Instance` | `xsd:string` |
 | `tar:instanceKey` | `tar:Instance` | `xsd:string` |
 | `tar:oidcClientId` | `tar:Instance` | `xsd:string` |
 | `tar:oidcIssuer` | `tar:Instance` | `xsd:string` |
@@ -279,7 +281,11 @@ standard term that folds a state the registry treats separately.
 `tar:temporalEnd`, `tar:sync` and the `tar:sync*` family, `tar:openLineagePayload`,
 `tar:claimedNamespace`, `tar:inBroader`, `tar:jsonField`, and the workload-identity terms
 `tar:oidcClientId`, `tar:oidcIssuer`, `tar:allowedScope`, `tar:registrationClient`,
-`tar:selfRegisteredBy`, `tar:instanceKey`. Each comment names what was checked: `dct:spatial`
+`tar:registrationIssuer`, `tar:selfRegisteredBy`, `tar:selfRegisteredIssuer`,
+`tar:instanceKey`. The two `*Issuer` properties are separate from `tar:oidcIssuer` because that
+one's domain is `tar:Instance`: a Software that carried it would be asserting it is one of its
+own deployments, and a Software and an Instance are different things even when one credential
+touches both. Each comment names what was checked: `dct:spatial`
 asserts spatial coverage of data rather than the law an operator answers to; `codemeta:readme`
 is a URL pointing at a README rather than its text; `codemeta:buildInstructions` is a link to
 build documentation rather than an executable one-liner; `dcat:mediaType` is defined on a

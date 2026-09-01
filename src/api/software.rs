@@ -154,12 +154,34 @@ pub async fn get(
     Ok(resource_response(&state, &headers, &iri, &sw, sp, Repr::Json).await?)
 }
 
+/// Refuse a registration binding that could never authorise anybody.
+///
+/// `registration_clients` without an issuer is only self-explanatory when the registry has one
+/// issuer to read it against. Once several are accepted and none is primary, the record names a
+/// client id at no particular provider, and `find_software_for_client` will decline it — so say
+/// that here, where the curator is looking at the form, rather than as a 403 the first time the
+/// workload calls with a message about a field it never sent.
+fn check_registration_binding(state: &AppState, input: &SoftwareIn) -> AppResult<()> {
+    if input.registration_clients.is_empty() || input.registration_issuer.is_some() {
+        return Ok(());
+    }
+    if state.config.oidc.issuer_pin_required() {
+        return Err(AppError::bad_request(format!(
+            "registration_issuer is required: this registry accepts tokens from {}, and a client \
+             id is only unique within an issuer. Name the one these registration clients belong to.",
+            state.config.oidc.accepted_issuers().join(", ")
+        )));
+    }
+    Ok(())
+}
+
 pub async fn create(
     State(state): State<Arc<AppState>>,
     principal: Principal,
     Json(input): Json<SoftwareIn>,
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
+    check_registration_binding(&state, &input)?;
     if let Some(sync) = &input.sync {
         crate::domain::forge::check_fields(&sync.fields)?;
     }
@@ -205,6 +227,7 @@ pub async fn patch(
     );
     let input: SoftwareIn = serde_json::from_value(merged)
         .map_err(|e| AppError::bad_request(format!("could not apply the change: {e}")))?;
+    check_registration_binding(&state, &input)?;
     if let Some(sync) = &input.sync {
         crate::domain::forge::check_fields(&sync.fields)?;
     }
@@ -434,6 +457,7 @@ fn software_in_from(s: &crate::model::Software) -> SoftwareIn {
         readme_base_url: s.readme_base_url.clone(),
         api_docs: s.api_docs.clone(),
         registration_clients: s.registration_clients.clone(),
+        registration_issuer: s.registration_issuer.clone(),
         license: s.license.clone(),
         kinds: s.kinds.clone(),
         kind: None,

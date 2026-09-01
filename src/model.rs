@@ -206,6 +206,17 @@ pub struct SoftwareIn {
     /// is a different permission and deserves a different field.
     #[serde(default)]
     pub registration_clients: Vec<String>,
+    /// The issuer the ids in `registration_clients` belong to.
+    ///
+    /// A client id is only unique within an issuer, so this is the other half of the identity:
+    /// without it "ontoexplorer-prod" names whoever registers that client at *any* issuer this
+    /// registry accepts. Required whenever more than one issuer is accepted and there is no
+    /// primary; on a single-issuer registry it may be left unset and that issuer is meant.
+    ///
+    /// Not called `oidc_issuer` to match `Instance`: it pins a different property
+    /// (`tar:registrationIssuer`, whose domain is Software) and pairs with a different field.
+    #[serde(default)]
+    pub registration_issuer: Option<String>,
     #[serde(default)]
     pub license: Option<String>,
     /// What the software *is*, as a set: `service`, `library`, `cli`, `desktop`, `workflow`.
@@ -342,6 +353,9 @@ pub struct Software {
     pub api_docs: Vec<ApiDoc>,
     /// See `SoftwareIn::registration_clients`.
     pub registration_clients: Vec<String>,
+    /// See `SoftwareIn::registration_issuer`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registration_issuer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
     pub kinds: Vec<String>,
@@ -477,6 +491,14 @@ pub struct InstanceIn {
     /// same deployment finds this record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub self_registered_by: Option<String>,
+    /// The issuer that credential authenticated to, set by the registry alongside it.
+    ///
+    /// `self_registered_by` holds a client id, and a client id is only unique within an issuer.
+    /// Without this, any accepted issuer could mint a client of the same name and inherit the
+    /// deployment — the shared-credential path had no issuer check at all, so this was the way
+    /// in even when the software pinned its registration issuer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_registered_issuer: Option<String>,
     /// See `SelfAnnounceIn::instance_key`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instance_key: Option<String>,
@@ -610,6 +632,9 @@ pub struct Instance {
     /// Together these say which credential owns the record and which deployment it is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub self_registered_by: Option<String>,
+    /// See `InstanceIn::self_registered_issuer`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_registered_issuer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

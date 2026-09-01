@@ -70,6 +70,26 @@ CI provider can each mint a token containing a realm role called `admin`; if the
 honoured that, adding a CI issuer would hand the registry to anyone who can open a pull request
 against any repository on that platform.
 
+### Pin the issuer on every credential binding
+
+Roles are not the only thing a second issuer can spell. A **client id is only unique within an
+issuer**: `validator-prod` at your Keycloak and `validator-prod` at a CI provider are different
+principals with the same name, and registering a client under a chosen name is free everywhere.
+
+So once you add a workload issuer, say which issuer each binding means:
+
+| Where | Field | Names |
+|---|---|---|
+| Software | `registration_issuer` | the provider `registration_clients` belong to |
+| Deployment | `oidc_issuer` | the provider `oidc_client_id` belongs to |
+| Deployment | `self_registered_issuer` | written by the registry when a deployment self-registers |
+
+A binding that pins nothing is read against the **primary** issuer (`TAR_OIDC_ISSUER`), or the
+sole workload issuer when that is all there is — the two readings with one obvious answer. With
+several accepted and no primary, the registry refuses the binding rather than guessing, because
+guessing would grant the weakest accepted issuer the authority meant for the strongest. On a
+single-issuer registry none of this changes anything.
+
 See [How a tool authenticates](../api/authentication.md).
 
 ## A local provider to try it against

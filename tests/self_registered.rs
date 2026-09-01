@@ -411,3 +411,203 @@ async fn an_artifacts_contact_uses_the_standard_term_and_still_reads_the_retired
     assert_eq!(status, StatusCode::OK, "{old}");
     assert_eq!(old["contact"]["name"], "Written Before The Change", "{old}");
 }
+
+// ---------------------------------------------------------------- issuer pinning
+//
+// A client id is only unique *within* an issuer. "ontoexplorer-prod" at the estate's Keycloak
+// and "ontoexplorer-prod" at a partner's identity provider are two different principals that
+// spell their name the same way, and naming a client is free at every issuer.
+//
+// The registry used to match a credential to a record by client id alone whenever the record
+// did not pin an issuer, which made every unpinned record a wildcard across every issuer the
+// deployment trusts. On the Software side it could not do anything else: the lookup asked for
+// `tar:oidcIssuer`, but no field ever wrote it, so the check was dead code that always passed.
+
+const HS_SECRET: &[u8] = b"a-test-signing-secret-not-used-in-production";
+const ISSUER: &str = "https://keycloak.test.example/realms/ids";
+const PARTNER_ISSUER: &str = "https://partner.example/realms/theirs";
+const OTHER_ISSUER: &str = "https://ci.example/oidc";
+
+fn jwt(claims: Value) -> String {
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+    header.kid = Some("test-key".into());
+    jsonwebtoken::encode(&header, &claims, &jsonwebtoken::EncodingKey::from_secret(HS_SECRET)).unwrap()
+}
+
+fn exp() -> i64 {
+    (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp()
+}
+
+/// Trusts the estate's own issuer plus a partner's, for workloads only — the
+/// `TAR_OIDC_ISSUER` + `TAR_WORKLOAD_ISSUERS` split.
+async fn harness_two_issuers() -> Harness {
+    harness_with_issuers(Some(ISSUER), vec![PARTNER_ISSUER.into()]).await
+}
+
+async fn harness_with_issuers(primary: Option<&str>, workload: Vec<String>) -> Harness {
+    let mut config = Config::for_test(BASE);
+    config.root_token = Some(ROOT.into());
+    config.oidc.issuer = primary.map(str::to_string);
+    config.oidc.client_id = Some("tar-ui".into());
+    config.oidc.audience = Some(BASE.into());
+    config.oidc.workload_issuers = workload;
+    let store = common::test_store().await;
+    let ops = Ops::open(":memory:").await.unwrap();
+    let mut state = AppState::from_parts(config, store, ops);
+    state.jwt = state.jwt.with_static_key(
+        "test-key",
+        jsonwebtoken::Algorithm::HS256,
+        jsonwebtoken::DecodingKey::from_secret(HS_SECRET),
+    );
+    let state = Arc::new(state);
+    tar::seed::load_vocab(&state).unwrap();
+    Harness { app: tar::app(state.clone()), state }
+}
+
+/// A token for `client` from `issuer`, as a `client_credentials` grant looks: no `sid`, no
+/// realm roles, so it is classified as a workload rather than a person.
+fn workload_token(issuer: &str, client: &str) -> String {
+    jwt(json!({"iss": issuer, "aud": BASE, "exp": exp(), "sub": format!("svc-{client}"), "azp": client}))
+}
+
+/// The defect, stated as a test: the partner's issuer must not be able to spend a client id
+/// that the estate's own Keycloak was meant to own.
+#[tokio::test]
+async fn a_registration_client_is_not_spendable_from_another_issuer() {
+    let h = harness_two_issuers().await;
+    let (status, sw) = h
+        .req(
+            "POST",
+            "/api/v1/software",
+            Some(ROOT),
+            Some(json!({"name": "ontoexplorer", "kinds": ["service"],
+                        "registration_clients": ["ontoexplorer-prod"],
+                        "registration_issuer": ISSUER})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+
+    // The partner mints a client of the same name and announces a deployment.
+    let theirs = workload_token(PARTNER_ISSUER, "ontoexplorer-prod");
+    let (status, body) = h
+        .req("PUT", "/api/v1/instances/self", Some(&theirs), Some(json!({"instance_key": "theirs"})))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a client id from an issuer the software did not name must not register deployments of it: {body}"
+    );
+
+    // The same client id from the issuer the software *did* name works.
+    let ours = workload_token(ISSUER, "ontoexplorer-prod");
+    let (status, body) =
+        h.req("PUT", "/api/v1/instances/self", Some(&ours), Some(json!({"instance_key": "ours"}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["software_name"], "ontoexplorer", "{body}");
+}
+
+/// With several issuers accepted and none pinned, the binding is refused rather than guessed.
+/// Guessing would hand the weakest accepted issuer the authority meant for the strongest.
+#[tokio::test]
+async fn an_unpinned_registration_client_does_not_match_a_secondary_issuer() {
+    let h = harness_two_issuers().await;
+    // Written straight to the store, because the API now refuses to create this record at all
+    // — the point here is that an existing one is not honoured either.
+    let (status, sw) = h
+        .req(
+            "POST",
+            "/api/v1/software",
+            Some(ROOT),
+            Some(json!({"name": "legacy", "kinds": ["service"],
+                        "registration_clients": ["legacy-prod"], "registration_issuer": ISSUER})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    let iri = sw["iri"].as_str().unwrap().to_string();
+    let mut tx = tar::store::GraphTx::new();
+    tx.replace_property(&iri, &format!("{}registrationIssuer", tar::ns::TAR), tar::ns::G_LOCAL);
+    h.state.store.apply(tx).unwrap();
+
+    // The estate's own issuer is the default, so it still resolves.
+    let ours = workload_token(ISSUER, "legacy-prod");
+    let (status, body) =
+        h.req("PUT", "/api/v1/instances/self", Some(&ours), Some(json!({"instance_key": "a"}))).await;
+    assert_eq!(status, StatusCode::CREATED, "an unpinned record still means the primary issuer: {body}");
+
+    // The partner's does not.
+    let theirs = workload_token(PARTNER_ISSUER, "legacy-prod");
+    let (status, body) =
+        h.req("PUT", "/api/v1/instances/self", Some(&theirs), Some(json!({"instance_key": "b"}))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+/// One issuer and no primary: unambiguous, so no pin is needed and none is demanded.
+#[tokio::test]
+async fn a_single_workload_issuer_needs_no_pin() {
+    let h = harness_with_issuers(None, vec![PARTNER_ISSUER.into()]).await;
+    let (status, sw) = h
+        .req(
+            "POST",
+            "/api/v1/software",
+            Some(ROOT),
+            Some(json!({"name": "solo", "kinds": ["service"], "registration_clients": ["solo-prod"]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "a lone issuer is not ambiguous: {sw}");
+
+    let t = workload_token(PARTNER_ISSUER, "solo-prod");
+    let (status, body) =
+        h.req("PUT", "/api/v1/instances/self", Some(&t), Some(json!({"instance_key": "a"}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+/// The refusal arrives where the curator can act on it — at the form, not as a 403 the first
+/// time the workload calls with a message about a field it never sent.
+#[tokio::test]
+async fn a_registration_client_without_an_issuer_is_refused_where_it_is_ambiguous() {
+    // Two workload issuers and no primary: nothing makes one of them the obvious reading.
+    let h = harness_with_issuers(None, vec![PARTNER_ISSUER.into(), OTHER_ISSUER.into()]).await;
+    let (status, body) = h
+        .req(
+            "POST",
+            "/api/v1/software",
+            Some(ROOT),
+            Some(json!({"name": "unpinned", "kinds": ["service"],
+                        "registration_clients": ["unpinned-prod"]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let detail = body.to_string();
+    assert!(detail.contains("registration_issuer"), "the message must name the field: {detail}");
+    assert!(detail.contains(PARTNER_ISSUER), "and the issuers it has to choose between: {detail}");
+
+    // Naming no clients at all is not affected: there is nothing to disambiguate.
+    let (status, body) = h
+        .req("POST", "/api/v1/software", Some(ROOT), Some(json!({"name": "no-clients", "kinds": ["service"]})))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+/// The issuer survives a round trip and a PATCH that does not mention it.
+#[tokio::test]
+async fn the_registration_issuer_survives_a_partial_update() {
+    let h = harness_two_issuers().await;
+    let (status, sw) = h
+        .req(
+            "POST",
+            "/api/v1/software",
+            Some(ROOT),
+            Some(json!({"name": "patched", "kinds": ["service"],
+                        "registration_clients": ["patched-prod"], "registration_issuer": ISSUER})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    assert_eq!(sw["registration_issuer"], ISSUER, "{sw}");
+    let id = sw["id"].as_str().unwrap().to_string();
+
+    let (status, after) =
+        h.req("PATCH", &format!("/api/v1/software/{id}"), Some(ROOT), Some(json!({"tagline": "now with a tagline"}))).await;
+    assert_eq!(status, StatusCode::OK, "{after}");
+    assert_eq!(after["registration_issuer"], ISSUER, "a PATCH that never mentioned it must not drop it: {after}");
+    assert_eq!(after["registration_clients"][0], "patched-prod", "{after}");
+}

@@ -53,7 +53,9 @@ tar:SoftwareShape a sh:NodeShape ;
     sh:property [ sh:path dcat:endpointDescription ; sh:nodeKind sh:IRI ;
                   sh:message "an API description must be an absolute IRI — the URL the document is served from" ] ;
     sh:property [ sh:path tar:registrationClient ; sh:datatype xsd:string ;
-                  sh:message "a registration client is an OIDC client id, as a string" ] .
+                  sh:message "a registration client is an OIDC client id, as a string" ] ;
+    sh:property [ sh:path tar:registrationIssuer ; sh:datatype xsd:string ; sh:maxCount 1 ;
+                  sh:message "the registration issuer is one issuer URL, as a string" ] .
 
 # An API description document: dcat:endpointDescription is DCAT's own term for "a description
 # of the service endpoint, including its operations, parameters", with OpenAPI as its worked
@@ -107,6 +109,8 @@ tar:InstanceShape a sh:NodeShape ;
                   sh:message "instance_key is a single string naming this deployment" ] ;
     sh:property [ sh:path tar:selfRegisteredBy ; sh:maxCount 1 ; sh:datatype xsd:string ;
                   sh:message "self_registered_by is written by the registry, not by the caller" ] ;
+    sh:property [ sh:path tar:selfRegisteredIssuer ; sh:maxCount 1 ; sh:datatype xsd:string ;
+                  sh:message "self_registered_issuer is written by the registry, not by the caller" ] ;
     sh:property [ sh:path tar:availability ; sh:in ( "public" "restricted" "embargoed" "metadata-only" ) ;
                   sh:message "availability must be one of public, restricted, embargoed, metadata-only" ] ;
     # The standard supplement written beside tar:availability (EU access-right table).

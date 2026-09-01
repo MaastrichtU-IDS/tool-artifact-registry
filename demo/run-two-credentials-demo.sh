@@ -227,11 +227,13 @@ SW_A=$(api POST /api/v1/software "$ROOT" "$(jq -n --arg g "$T_GRAPH" --arg s "$T
 }')" | jq -r '.id')
 note "graph-publisher   $SW_A"
 
-# The one line that makes self-registration possible. It is not a credential and it is not a
-# secret: it names an OIDC client that may create deployment records *of this software*, which
-# is a narrower thing than "may write here" and a different thing from "is that deployment".
+# The two lines that make self-registration possible. Neither is a credential and neither is a
+# secret: together they name an OIDC client *at one issuer* that may create deployment records
+# of this software, which is a narrower thing than "may write here" and a different thing from
+# "is that deployment". The issuer is half the identity — a client id is only unique within
+# one, so without it any provider this registry trusts could mint a client of the same name.
 SW_B=$(api POST /api/v1/software "$ROOT" "$(jq -n --arg g "$T_GRAPH" --arg s "$T_SHAPES" \
-  --arg r "$T_REPORT" --arg m "$T_SUMMARY" --arg c "$CLIENT_ID" '{
+  --arg r "$T_REPORT" --arg m "$T_SUMMARY" --arg c "$CLIENT_ID" --arg iss "$ISSUER" '{
   name: "shacl-manager (simulated)",
   tagline: "Validate a graph against shapes and publish what it found",
   description: "A SIMULATION written for this demo. It stands in for a validation service that authenticates with its own identity provider; the registry issues it no credential of any kind.",
@@ -239,10 +241,12 @@ SW_B=$(api POST /api/v1/software "$ROOT" "$(jq -n --arg g "$T_GRAPH" --arg s "$T
   keywords: ["demo", "simulation", "shacl"],
   publisher: {name: "Maastricht University — Institute of Data Science", kind: "organization", identifier: "https://ror.org/02jz4aj89"},
   registration_clients: [$c],
+  registration_issuer: $iss,
   capability: {consumes: [$g, $s], produces: [$r, $m]}
 }')" | jq -r '.id')
 note "shacl-manager     $SW_B"
 note "                  registration_clients: $CLIENT_ID"
+note "                  registration_issuer:  $ISSUER"
 
 step "5. The curator hand-registers the first deployment, and mints it a token"
 I_A=$(api POST /api/v1/instances "$ROOT" "$(jq -n --arg sw "$SW_A" '{

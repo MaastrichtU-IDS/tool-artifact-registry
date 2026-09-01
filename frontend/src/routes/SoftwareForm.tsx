@@ -36,6 +36,7 @@ export default function SoftwareForm() {
   const [deployable, setDeployable] = useState(true)
   const [apiDocs, setApiDocs] = useState<ApiDoc[]>([])
   const [registrationClients, setRegistrationClients] = useState<string[]>([])
+  const [registrationIssuer, setRegistrationIssuer] = useState('')
   const [loading, setLoading] = useState(editing)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<Error>()
@@ -65,6 +66,7 @@ export default function SoftwareForm() {
       setDeployable(s.deployable)
       setApiDocs(s.api_docs ?? [])
       setRegistrationClients(s.registration_clients ?? [])
+      setRegistrationIssuer(s.registration_issuer ?? '')
       setLoading(false)
     }).catch((e) => { setError(e as Error); setLoading(false) })
   }, [id])
@@ -112,6 +114,7 @@ export default function SoftwareForm() {
       // sending empty URLs the server would have to reject.
       api_docs: apiDocs.filter((d) => d.url.trim() !== ''),
       registration_clients: registrationClients.filter((c) => c.trim() !== ''),
+      registration_issuer: registrationIssuer.trim() === '' ? (editing ? null : undefined) : registrationIssuer.trim(),
       license: cleared(form.license),
       kinds,
       maturity: cleared(form.maturity),
@@ -449,6 +452,23 @@ export default function SoftwareForm() {
         >
           Allow a client to register deployments
         </button>
+        {registrationClients.length > 0 && (
+          <div className="field" style={{ marginTop: 12 }}>
+            <label htmlFor="registration_issuer">Issuer these clients belong to</label>
+            <input
+              id="registration_issuer"
+              value={registrationIssuer}
+              onChange={(e) => setRegistrationIssuer(e.target.value)}
+              placeholder="https://keycloak.example.org/realms/ids"
+            />
+            <p className="hint">
+              A client id is only unique within one identity provider, so on a registry that
+              trusts more than one, naming the issuer is what stops a client of the same name
+              elsewhere registering deployments here. Leave it blank and the registry&rsquo;s own
+              issuer is meant; if it accepts several and has no primary, it will ask for this.
+            </p>
+          </div>
+        )}
       </fieldset>
 
       <fieldset>

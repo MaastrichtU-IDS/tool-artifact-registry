@@ -493,6 +493,7 @@ pub async fn seed_ids_examples(state: &Arc<AppState>, with_runs: bool) -> Result
             screenshots: Vec::new(),
             api_docs: Vec::new(),
             registration_clients: Vec::new(),
+            registration_issuer: None,
             readme: None,
             readme_base_url: None,
             deployable: None,
@@ -536,6 +537,7 @@ pub async fn seed_ids_examples(state: &Arc<AppState>, with_runs: bool) -> Result
             let input = InstanceIn {
                 label: (*label).into(),
                 self_registered_by: None,
+                self_registered_issuer: None,
                 instance_key: None,
                 software: Some(sw_iri.clone()),
                 release: Some(rel_iri.clone()),

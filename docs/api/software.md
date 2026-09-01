@@ -58,7 +58,8 @@ against.
 registry can fetch and render one at `GET /api/v1/software/{id}/api-doc`.
 
 **`registration_clients`** lists the OIDC client ids allowed to self-register deployments of
-this software. See [Registering a deployment](deployments.md#registration_clients).
+this software, and **`registration_issuer`** names the identity provider those ids belong to.
+See [Registering a deployment](deployments.md#registration_clients).
 
 ## Releases
 

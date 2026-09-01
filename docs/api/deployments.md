@@ -114,6 +114,35 @@ registry deliberately does *not* write that client id onto the deployment record
 would make the next replica authenticate as this one. The credential is remembered as
 `self_registered_by`, which is what finds the right record on the next announcement.
 
+### `registration_issuer`
+
+A client id is only unique *within* an identity provider: `validator-prod` at your Keycloak and
+`validator-prod` at a partner's are two different principals that spell their name the same
+way, and registering a client under a given name is free at every issuer. So on a registry that
+accepts more than one issuer — `TAR_OIDC_ISSUER` plus anything in `TAR_WORKLOAD_ISSUERS`, such
+as a Kubernetes API server or GitHub Actions — the client id alone does not say who may
+register.
+
+`registration_issuer` names the provider the ids in `registration_clients` belong to:
+
+```bash
+curl -X PATCH -H "Authorization: Bearer $CURATOR" -H 'content-type: application/json' \
+     -d '{"registration_issuer":"https://keycloak.example.org/realms/ids"}' \
+     https://registry.example.org/api/v1/software/01a05…
+```
+
+Leave it unset and the registry reads the clients against its **primary** issuer, or against
+the sole workload issuer when that is the only one configured. Those are the cases with one
+obvious answer. When several issuers are accepted and none is primary there is no honest
+default — picking one would hand the weakest accepted issuer the authority meant for the
+strongest — so the registry refuses to create the record until the issuer is named, and says so
+at `POST`/`PATCH` rather than as a `403` the first time the workload calls.
+
+The same rule governs the other two bindings: an Instance's `oidc_issuer` beside its
+`oidc_client_id`, and `self_registered_issuer`, which the registry records itself when a
+deployment self-registers so that later announcements from a same-named client at a different
+issuer do not land on the record.
+
 ### The looser third option
 
 `TAR_OIDC_AUTO_REGISTER_INSTANCES` lets **any** accepted credential name its own software and

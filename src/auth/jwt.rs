@@ -336,7 +336,7 @@ pub async fn principal_from_claims(
     // guessing would attribute a run to the wrong one. That case stays unbound and the refusal
     // says why.
     if bound.is_none() {
-        bound = find_self_registered_instance(state, &candidates)?;
+        bound = find_self_registered_instance(state, issuer, &candidates)?;
     }
 
     if let Some(binding) = bound {
@@ -422,9 +422,30 @@ pub struct InstanceBinding {
     pub registers_software: Option<String>,
 }
 
+/// Does a record that pinned `declared` (or pinned nothing) accept a token from `issuer`?
+///
+/// **A pin is required, not merely honoured when present.** The old rule — match the issuer
+/// when the record names one, accept any accepted issuer when it does not — meant an unpinned
+/// record was a wildcard across every issuer the registry trusts. On a registry that accepts a
+/// partner's Keycloak, a Kubernetes API server or GitHub Actions alongside its own, whoever
+/// controls the weakest of those could mint a token whose client id spells the same string as
+/// the intended one and inherit its authority. Nothing had to be compromised for that: naming a
+/// client is free at every issuer.
+///
+/// So an unpinned record now falls back to [`OidcConfig::default_binding_issuer`], which
+/// answers only when the answer is unambiguous. On the single-issuer registries this is the
+/// same behaviour as before; on a multi-issuer one it refuses until a curator says which issuer
+/// was meant.
+fn issuer_admits(cfg: &crate::config::OidcConfig, declared: Option<&str>, issuer: &str) -> bool {
+    match declared {
+        Some(d) => d.trim_end_matches('/') == issuer,
+        None => cfg.default_binding_issuer().as_deref() == Some(issuer),
+    }
+}
+
 /// Find the Instance that declared one of these OIDC client ids (`tar:oidcClientId`).
-/// When the Instance also declares `tar:oidcIssuer`, the issuer must match — a client id is
-/// only unique within an issuer.
+/// The issuer must match what the Instance pinned in `tar:oidcIssuer`, or — when it pinned
+/// nothing — the registry's default binding issuer. See [`issuer_admits`].
 pub async fn find_instance_for_client(
     state: &Arc<AppState>,
     issuer: &str,
@@ -454,10 +475,8 @@ SELECT ?i ?label ?iss (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scopes) 
     );
     let rows = state.store.select(&q).map_err(AppError::from)?;
     for row in rows.rows {
-        if let Some(declared) = row.str("iss") {
-            if declared.trim_end_matches('/') != issuer {
-                continue;
-            }
+        if !issuer_admits(&state.config.oidc, row.str("iss").as_deref(), issuer) {
+            continue;
         }
         let Some(iri) = row.iri("i") else { continue };
         return Ok(Some(InstanceBinding {
@@ -509,6 +528,11 @@ pub use jsonwebtoken;
 /// one would make a single triple mean "this credential *is* this deployment" in one place and
 /// "this credential may create deployments" in another, and the difference between being a
 /// thing and being allowed to create it is the whole of the authorisation question here.
+///
+/// The issuer those client ids belong to is `tar:registrationIssuer`, for the same reason:
+/// `tar:oidcIssuer` is declared with `rdfs:domain tar:Instance`, so putting it on a Software
+/// would assert that the Software is a deployment. Two properties, two domains, one rule —
+/// see [`issuer_admits`], which both go through.
 pub async fn find_software_for_client(
     state: &Arc<AppState>,
     issuer: &str,
@@ -528,7 +552,7 @@ SELECT ?s ?iss WHERE {{
   GRAPH <{g}> {{
     VALUES ?cid {{ {values} }}
     ?s tar:registrationClient ?cid .
-    OPTIONAL {{ ?s tar:oidcIssuer ?iss }}
+    OPTIONAL {{ ?s tar:registrationIssuer ?iss }}
   }}
 }}"#,
         prefixes = ns::PREFIXES,
@@ -536,12 +560,8 @@ SELECT ?s ?iss WHERE {{
     );
     let rows = state.store.select(&q).map_err(AppError::from)?;
     for row in rows.rows {
-        // A client id is only unique within an issuer, so when the record names one it must
-        // match — otherwise any issuer this registry trusts could mint "the same" client.
-        if let Some(declared) = row.str("iss") {
-            if declared.trim_end_matches('/') != issuer {
-                continue;
-            }
+        if !issuer_admits(&state.config.oidc, row.str("iss").as_deref(), issuer) {
+            continue;
         }
         if let Some(iri) = row.iri("s") {
             return Ok(Some(iri));
@@ -555,6 +575,7 @@ SELECT ?s ?iss WHERE {{
 /// See the call site for why ambiguity is left unresolved rather than guessed at.
 pub fn find_self_registered_instance(
     state: &Arc<AppState>,
+    issuer: &str,
     candidates: &[String],
 ) -> AppResult<Option<InstanceBinding>> {
     if candidates.is_empty() {
@@ -567,25 +588,35 @@ pub fn find_self_registered_instance(
         .join(" ");
     let q = format!(
         r#"{prefixes}
-SELECT ?i ?label ?sw (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scopes) WHERE {{
+SELECT ?i ?label ?sw ?iss (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scopes) WHERE {{
   GRAPH <{g}> {{
     VALUES ?sub {{ {values} }}
     ?i tar:selfRegisteredBy ?sub .
     OPTIONAL {{ ?i rdfs:label ?label }}
     OPTIONAL {{ ?i tar:instanceOf ?sw }}
+    OPTIONAL {{ ?i tar:selfRegisteredIssuer ?iss }}
     OPTIONAL {{ ?i tar:allowedScope ?scope }}
   }}
   FILTER NOT EXISTS {{ GRAPH ?tg {{ ?i tar:tombstoned true }} }}
-}} GROUP BY ?i ?label ?sw"#,
+}} GROUP BY ?i ?label ?sw ?iss"#,
         prefixes = ns::PREFIXES,
         g = ns::G_LOCAL,
     );
     let rows = state.store.select(&q).map_err(AppError::from)?;
+    // Only deployments this credential registered *at the issuer it is presenting now*. The
+    // subject here is a client id, and this path was the way past a pinned software: once any
+    // deployment existed under the name, a token from any other accepted issuer that spelled
+    // its client the same way bound to it and inherited its scopes.
+    let rows: Vec<_> = rows
+        .rows
+        .iter()
+        .filter(|r| issuer_admits(&state.config.oidc, r.str("iss").as_deref(), issuer))
+        .collect();
     // More than one is the ambiguous case: bind to nothing rather than to an arbitrary one.
-    if rows.rows.len() != 1 {
+    if rows.len() != 1 {
         return Ok(None);
     }
-    let row = &rows.rows[0];
+    let row = rows[0];
     let Some(iri) = row.iri("i") else { return Ok(None) };
     Ok(Some(InstanceBinding {
         instance_iri: iri,

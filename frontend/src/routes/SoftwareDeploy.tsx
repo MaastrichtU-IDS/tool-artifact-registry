@@ -303,6 +303,11 @@ function SelfWithOidc({
               ))}
             </ul>
             <p className="hint">
+              {software.registration_issuer
+                ? <>Only from <code>{software.registration_issuer}</code> — a token spelling the same client id at another issuer is refused.</>
+                : <>The issuer is not pinned, so the registry&rsquo;s own issuer is meant.</>}
+            </p>
+            <p className="hint">
               <Link to={`/software/${software.id}/edit`}>Edit the list →</Link>
             </p>
           </>

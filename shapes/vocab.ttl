@@ -301,6 +301,18 @@ tar:registrationClient a rdf:Property, owl:DatatypeProperty ;
     rdfs:range xsd:string ;
     rdfs:comment "An OIDC client id allowed to register deployments of this software for itself. Deliberately not tar:oidcClientId, which on an Instance means the credential *is* that deployment: being a thing and being allowed to create it are different permissions." .
 
+tar:selfRegisteredIssuer a rdf:Property, owl:DatatypeProperty ;
+    rdfs:label "self-registered issuer" ;
+    rdfs:domain tar:Instance ;
+    rdfs:range xsd:string ;
+    rdfs:comment "The identity provider that vouched for tar:selfRegisteredBy. Written by the registry, never by a caller: it is half of the identity that decides which announcements update this record, and a subject without an issuer names whoever registers that client id anywhere the registry trusts." .
+
+tar:registrationIssuer a rdf:Property, owl:DatatypeProperty ;
+    rdfs:label "registration issuer" ;
+    rdfs:domain tar:Software ;
+    rdfs:range xsd:string ;
+    rdfs:comment "The identity provider the ids in tar:registrationClient belong to. A client id is only unique within an issuer, so without this a registry that accepts several issuers reads the client id as naming whoever registers that name at any of them. Separate from tar:oidcIssuer because that one's domain is tar:Instance: reusing it here would assert that the software is one of its own deployments." .
+
 tar:producingSystem a prov:Role ;
     rdfs:label "producing system" ;
     rdfs:comment "The role of the software agent a caller says produced an artifact. Carried on a prov:Attribution rather than by a bare prov:wasAttributedTo, because the registry writes that one itself from the presenting credential and reads it back as a single value — a caller-supplied agent there would make the one attribution nobody can forge indistinguishable from the ones anybody can. Normally the run answers this question and answers it better; this is for artifacts that have no run." .

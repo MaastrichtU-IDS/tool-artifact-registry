@@ -41,6 +41,10 @@ pub fn instance_quads(base: &str, iri: &str, input: &InstanceIn, actor: &str, so
     // by whatever `/` happens to return.
     n.opt_link(ns::TAR, "healthEndpoint", &input.health_endpoint);
     n.opt_text(ns::TAR, "selfRegisteredBy", &input.self_registered_by);
+    // Only alongside the subject it qualifies; on its own it names nobody.
+    if input.self_registered_by.is_some() {
+        n.opt_text(ns::TAR, "selfRegisteredIssuer", &input.self_registered_issuer);
+    }
     n.opt_text(ns::TAR, "instanceKey", &input.instance_key);
     n.opt_text(ns::TAR, "availability", &input.availability);
     // Supplement (audit 2026-08-30): dct:accessRights with the EU access-right authority
@@ -105,6 +109,7 @@ pub fn instance_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Instance {
         health_detail: p.str(ns::TAR, "healthDetail"),
         health_endpoint: p.iri(ns::TAR, "healthEndpoint"),
         self_registered_by: p.str(ns::TAR, "selfRegisteredBy"),
+        self_registered_issuer: p.str(ns::TAR, "selfRegisteredIssuer"),
         instance_key: p.str(ns::TAR, "instanceKey"),
         last_seen_at: p.str(ns::TAR, "lastSeenAt"),
         home_registry: p.iri(ns::DCAT, "inCatalog").or_else(|| p.iri(ns::TAR, "homeRegistry")),

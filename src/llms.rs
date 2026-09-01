@@ -314,6 +314,8 @@ pub fn instance(i: &Instance) -> String {
     field(&mut out, "Last seen", i.last_seen_at.as_deref());
     field(&mut out, "Authenticates as (OIDC client)", i.oidc_client_id.as_deref());
     field(&mut out, "Trusted issuer", i.oidc_issuer.as_deref());
+    field(&mut out, "Self-registered by", i.self_registered_by.as_deref());
+    field(&mut out, "Self-registered via issuer", i.self_registered_issuer.as_deref());
     list_field(&mut out, "Allowed scopes", &i.allowed_scopes);
 
     if let Some(cap) = &i.capability {

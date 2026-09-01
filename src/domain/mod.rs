@@ -102,7 +102,12 @@ SELECT ?t ?label ?def WHERE {{
 }}"#,
                 p = ns::PREFIXES
             );
-            if let Ok(res) = self.state.store.select(&q) {
+            // The record store first, then the bundles in memory. Both are asked because a chip
+            // may name a bundled term, a term minted here, or one cached from a peer, and only
+            // the record store holds the last two; `or_insert` then leaves the record store's
+            // label standing where a term is in both.
+            for store in [self.state.store.as_ref(), self.state.reference.as_ref()] {
+                let Ok(res) = store.select(&q) else { continue };
                 for row in res.rows {
                     if let Some(t) = row.iri("t") {
                         let e = labels.entry(t).or_insert((None, None));

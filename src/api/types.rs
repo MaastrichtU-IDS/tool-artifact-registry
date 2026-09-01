@@ -145,19 +145,18 @@ pub async fn create(
     // Re-registering the same slug updates the label rather than minting a duplicate concept:
     // a type IRI is a name, and names are meant to be stable.
     //
-    // Cleared in the seeded graph as well as the local one, for a registry-local type IRI only.
-    // `tar seed` writes its sixteen types into the vocabulary graph, so clearing only the local
-    // graph left the seeded definition standing beside the new one: the same IRI ended up with
-    // two `skos:prefLabel`s, the picker showed whichever it read first, and a curator renaming a
-    // seeded type got a 200 for a change that never appeared. Restricted to `{base}/type/…`
-    // because the rest of the vocabulary graph is reloaded from the shipped files on every boot
-    // — editing a bundled term there would silently revert at the next restart, which is a worse
-    // lie than refusing.
+    // One graph to clear, because there is now one place a type can be. This used to clear the
+    // vocabulary graph too: `tar seed` wrote its sixteen types in beside the bundles, so
+    // clearing only the local graph left the seeded definition standing next to the new one —
+    // the same IRI with two `skos:prefLabel`s, the picker showing whichever it read first, and a
+    // curator getting a 200 for a rename that never appeared. The seeded types are records now
+    // (`seed::type_quads`) and land here like every other minted type, so the second clear has
+    // nothing left to do. A bundle graph is never touched from a write path at all: it is
+    // dropped and reloaded from the file it came from, and a statement in it that the file does
+    // not contain would either vanish at the next restart or outlive everything that could
+    // reproduce it.
     let mut tx = GraphTx::new();
     tx.replace_subject(&iri, ns::G_LOCAL);
-    if iri.starts_with(&format!("{}/type/", state.base())) {
-        tx.replace_subject(&iri, ns::G_VOCAB);
-    }
     let mut n = Node::local(&iri);
     n.a(TYPE_CONCEPT);
     // The class, in the same node and therefore the same graph as `a skos:Concept`, on both the

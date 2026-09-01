@@ -134,7 +134,7 @@ pub fn artifact_quads(base: &str, iri: &str, input: &ArtifactIn, actor: &str, ru
     s.a(TYPE_ARTIFACT_SERIES);
     s.opt_text(ns::SKOS, "prefLabel", &input.title);
     quads.extend(s.finish());
-    crate::rdf::attribution(&mut n, actor);
+    crate::rdf::attribution_at(&mut n, actor, input.modified.as_deref());
 
     if let Some(p) = &input.publisher {
         let (piri, pq) = agent_quads(base, p);
@@ -155,11 +155,14 @@ pub fn artifact_quads(base: &str, iri: &str, input: &ArtifactIn, actor: &str, ru
     if let Some(c) = &input.contact {
         let (iri, aq) = agent_quads(base, c);
         if let Some(i) = iri {
-            n.link(ns::TAR, "contact", &i);
+            // The same term the Software path uses. `tar:contact` said this until the
+            // vocabulary audit found `codemeta:maintainer` already meant it, and the ontology
+            // has marked it deprecated ever since while this line kept writing it — a
+            // contradiction between what the registry says it does and what it does.
+            n.link(ns::CODEMETA, "maintainer", &i);
         }
         quads.extend(aq);
     }
-    n.opt_datetime(ns::DCT, "modified", &input.modified);
     n.opt_text(ns::DCAT, "version", &input.version);
     n.opt_link(ns::DCAT, "landingPage", &input.landing_page);
     n.opt_link(ns::FOAF, "page", &input.documentation);
@@ -301,7 +304,10 @@ pub fn artifact_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Artifact {
         publisher: ctx.opt_agent_ref(p.iri(ns::DCT, "publisher")),
         creators: p.iris(ns::DCT, "creator").iter().map(|i| ctx.agent_ref(i)).collect(),
         contributors: p.iris(ns::DCT, "contributor").iter().map(|i| ctx.agent_ref(i)).collect(),
-        contact: ctx.opt_agent_ref(p.iri(ns::TAR, "contact")),
+        // Standard term first, with the retired one as a fallback so records written before
+        // this change keep resolving. Same pattern as every other term the audit replaced.
+        contact: ctx
+            .opt_agent_ref(p.iri(ns::CODEMETA, "maintainer").or_else(|| p.iri(ns::TAR, "contact"))),
         modified: p.str(ns::DCT, "modified"),
         version: p.str(ns::DCAT, "version"),
         landing_page: p.iri(ns::DCAT, "landingPage"),

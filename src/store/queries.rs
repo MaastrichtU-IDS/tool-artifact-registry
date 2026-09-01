@@ -128,17 +128,19 @@ pub fn exists(subject: &str) -> Result<String> {
 /// The quad-pattern version returned whichever graph the storage index happened to yield
 /// first, which is not a thing a second backend can reproduce and not a thing this one
 /// promises across versions. The order is stated here instead, and it is the order every
-/// caller wanted: what this registry holds itself outranks a cached copy of what a peer said,
-/// and among peers the graph name breaks the tie so the answer is stable between calls.
+/// caller wanted: what this registry holds itself outranks the reference data it ships, which
+/// outranks a cached copy of what a peer said, and among peers the graph name breaks the tie so
+/// the answer is stable between calls.
 pub fn graph_of(subject: &str) -> Result<String> {
     let s = iri(subject)?;
     Ok(format!(
         "SELECT ?g WHERE {{ GRAPH ?g {{ {s} ?p ?o }} }}\n\
-         ORDER BY IF(?g = <{local}>, 0, IF(?g = <{vocab}>, 1, IF(?g = <{shapes}>, 2, 3))) STR(?g)\n\
+         ORDER BY IF(?g = <{local}>, 0, IF(STRSTARTS(STR(?g), \"{bundle}\") || ?g = <{shapes}> || ?g = <{bundles}>, 1, 2)) STR(?g)\n\
          LIMIT 1",
         local = ns::G_LOCAL,
-        vocab = ns::G_VOCAB,
-        shapes = ns::G_SHAPES
+        bundle = ns::G_BUNDLE_PREFIX,
+        shapes = ns::G_SHAPES,
+        bundles = ns::G_BUNDLES
     ))
 }
 

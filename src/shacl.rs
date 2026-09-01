@@ -362,7 +362,7 @@ mod tests {
     use crate::model::*;
 
     fn shapes() -> Shapes {
-        Shapes::parse(crate::seed::SHAPES_TTL).expect("the shipped shapes must parse")
+        Shapes::parse(crate::bundles::SHAPES_TTL).expect("the shipped shapes must parse")
     }
 
     const BASE: &str = "https://reg.test.example";

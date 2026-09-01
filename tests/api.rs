@@ -2817,19 +2817,47 @@ async fn reloading_the_shapes_does_not_add_another_copy_of_them() {
 }
 
 #[tokio::test]
-async fn re_registering_a_seeded_type_replaces_it_rather_than_shadowing_it() {
-    // `tar seed` writes its types into the vocabulary graph while this route cleared only the
-    // local one, so the same IRI ended up carrying two `skos:prefLabel`s. The write answered
-    // 200 and the picker went on showing the old label — a success that changed nothing.
+async fn a_type_left_in_the_retired_vocabulary_graph_is_rescued_and_still_editable() {
+    // The upgrade path, and the bug it closes. Everything used to sit in one graph: four
+    // bundles, the seeded types and every adopted term. `tar seed` wrote its types in beside the
+    // bundles while `POST /api/v1/types` wrote to the local graph, so the same IRI ended up with
+    // two `skos:prefLabel`s — the route answered 200 and the picker went on showing the old
+    // label, a success that changed nothing.
+    //
+    // A bundle graph is now dropped and reloaded from its file, so nothing that a file cannot
+    // reproduce may live in one. This is a store from before that: a type in the retired graph,
+    // which the next boot has to move somewhere it survives.
     let h = harness().await;
     let iri = format!("{BASE}/type/rdf-graph");
     let mut tx = tar::store::GraphTx::new();
-    let mut n = tar::rdf::Node::iri(&iri, tar::ns::G_VOCAB);
+    let mut n = tar::rdf::Node::iri(&iri, tar::ns::G_LEGACY_VOCAB);
     n.a(&format!("{}Concept", tar::ns::SKOS));
     n.a(tar::domain::vocabulary::CLASS_ARTIFACT_TYPE);
     n.text(tar::ns::SKOS, "prefLabel", "RDF graph");
     tx.extend(n.finish());
     h.state.store.apply(tx).unwrap();
+
+    // The restart.
+    tar::seed::load_vocab(&h.state).unwrap();
+
+    assert_eq!(
+        h.state.store.graph_of(&iri).unwrap().as_deref(),
+        Some(tar::ns::G_LOCAL),
+        "a term the binary cannot regenerate moves to the graph this registry writes"
+    );
+    let leftovers = h
+        .state
+        .store
+        .select(&format!(
+            "SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{}> {{ ?s ?p ?o }} }}",
+            tar::ns::G_LEGACY_VOCAB
+        ))
+        .unwrap();
+    assert_eq!(leftovers.rows[0].i64("n"), Some(0), "the retired graph is emptied, not left half-migrated");
+
+    // And it is still a type: held on write, and offered by the picker.
+    let (status, out) = h.post("/api/v1/artifacts", ROOT, json!({"title": "x", "conforms_to": iri})).await;
+    assert_eq!(status, StatusCode::CREATED, "{out}");
 
     let (status, created) = h
         .post("/api/v1/types", ROOT, json!({"slug": "rdf-graph", "label": "RDF graph (renamed)"}))
@@ -2851,6 +2879,39 @@ async fn re_registering_a_seeded_type_replaces_it_rather_than_shadowing_it() {
     let (_, found) = h.get("/api/v1/vocab/search?branch=data&q=RDF%20graph").await;
     let hit = found["items"].as_array().unwrap().iter().find(|i| i["iri"] == iri.as_str()).unwrap();
     assert_eq!(hit["label"], "RDF graph (renamed)", "the picker shows the edit: {found}");
+}
+
+/// The other half of the upgrade: a *bundled* term sitting in the retired graph is a duplicate
+/// of what the bundle graph now holds, and must go rather than be rescued into the local graph,
+/// where nothing would ever refresh it.
+#[tokio::test]
+async fn a_bundled_term_left_in_the_retired_vocabulary_graph_is_dropped_not_copied() {
+    let h = harness().await;
+    let bundled = "http://edamontology.org/data_2048";
+    let mut tx = tar::store::GraphTx::new();
+    let mut n = tar::rdf::Node::iri(bundled, tar::ns::G_LEGACY_VOCAB);
+    n.a(&format!("{}Concept", tar::ns::SKOS));
+    n.text(tar::ns::SKOS, "prefLabel", "Report, from the old single graph");
+    tx.extend(n.finish());
+    h.state.store.apply(tx).unwrap();
+
+    tar::seed::load_vocab(&h.state).unwrap();
+
+    let labels = h
+        .state
+        .store
+        .select(&format!(
+            "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+             SELECT ?l WHERE {{ GRAPH ?g {{ <{bundled}> skos:prefLabel ?l }} }}"
+        ))
+        .unwrap();
+    let labels: Vec<String> = labels.rows.iter().filter_map(|r| r.str("l")).collect();
+    assert_eq!(labels, vec!["Report"], "one label, the bundle's: {labels:?}");
+    assert_eq!(
+        h.state.store.graph_of(bundled).unwrap().as_deref(),
+        Some("urn:tar:bundle:edam"),
+        "and it lives in the graph its bundle owns"
+    );
 }
 
 #[tokio::test]
@@ -3275,4 +3336,254 @@ async fn one_registry_finds_a_peers_record_of_the_same_bytes_without_merging_the
     // A value that names no bytes matches nothing, rather than falling back to everything.
     let (_, nonsense) = a.h.get("/api/v1/artifacts?content=not-a-digest").await;
     assert_eq!(nonsense["total"], 0, "an unusable filter must not read as 'no filter': {nonsense}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reference data: two stores, one hash guard.
+//
+// `crate::bundles` splits the ~12 000 quads of bundled reference data in two. The in-memory
+// reference store is loaded from the compiled-in constants at every start, which is free and
+// correct because memory starts empty. The record store keeps its own copy so `/sparql` can join
+// a record to the term it cites — and that copy is written only when a content hash says it
+// would differ.
+//
+// None of that can be shown by comparing the store before and after a boot: the end state is
+// identical whether or not 12 000 quads went over the wire, which is precisely why the waste
+// went unnoticed for so long. These tests count the calls instead.
+
+/// A registry whose every store call is recorded, with the bundles already loaded once.
+async fn counting_harness(base: &str) -> (Harness, Arc<common::CountingStore>) {
+    let mut config = Config::for_test(base);
+    config.root_token = Some(ROOT.into());
+    let store = common::CountingStore::wrap(common::test_store().await);
+    let ops = Ops::open(":memory:").await.unwrap();
+    let state = Arc::new(AppState::from_parts(config, store.clone(), ops));
+    tar::seed::load_vocab(&state).unwrap();
+    (Harness { app: tar::app(state.clone()), state }, store)
+}
+
+#[tokio::test]
+async fn a_second_boot_over_unchanged_bundles_writes_nothing() {
+    let (h, store) = counting_harness(BASE).await;
+
+    // The first boot is the control: it really did load them.
+    let first = store.calls();
+    assert!(first.loads >= 3, "the first boot loads the bundled files: {first:?}");
+    assert!(first.writes() > 0);
+
+    store.reset();
+    tar::seed::load_vocab(&h.state).unwrap();
+    let second = store.calls();
+    assert_eq!(
+        second.writes(),
+        0,
+        "an unchanged bundle must not be re-sent, dropped or re-loaded: {} apply(s), {} load(s), \
+         dropped {:?}",
+        second.applies,
+        second.loads,
+        second.drops
+    );
+    // What it *did* do: ask. One digest query, the legacy-graph probe, and the migrations'
+    // selects — reads, not 12 000 quads over HTTP.
+    assert!(!second.selects.is_empty(), "it still checks; it just does not write");
+
+    // And a third, to be sure nothing accumulates a boot behind.
+    store.reset();
+    tar::seed::load_vocab(&h.state).unwrap();
+    assert_eq!(store.calls().writes(), 0);
+
+    // The shapes are still there and still validating — a guard that skipped a load it should
+    // have done would leave an empty shapes graph and wave every write through.
+    let (status, body) = h.post("/api/v1/software", ROOT, json!({"tagline": "no name"})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+}
+
+#[tokio::test]
+async fn a_bundle_whose_content_changed_is_reloaded_and_the_others_are_not() {
+    let (h, store) = counting_harness(BASE).await;
+    let graph = "urn:tar:bundle:edam";
+
+    // What a changed file looks like to the guard: the digest on record no longer matches what
+    // the binary would write. (The bundles are compiled in, so the file itself cannot be edited
+    // from a test — this is the same comparison, driven from the other side.)
+    let mut tx = tar::store::GraphTx::new();
+    tx.replace_subject(graph, tar::ns::G_BUNDLES);
+    h.state.store.apply(tx).unwrap();
+    // Also break the graph, so "reloaded" means the content came back rather than that a
+    // timestamp moved.
+    h.state
+        .store
+        .apply({
+            let mut tx = tar::store::GraphTx::new();
+            tx.replace_subject("http://edamontology.org/data_0006", graph);
+            tx
+        })
+        .unwrap();
+    let gone = h
+        .state
+        .store
+        .select(&format!("SELECT ?p WHERE {{ GRAPH <{graph}> {{ <http://edamontology.org/data_0006> ?p ?o }} }}"))
+        .unwrap();
+    assert!(gone.rows.is_empty(), "the term really was removed before the boot");
+
+    store.reset();
+    tar::seed::load_vocab(&h.state).unwrap();
+    let calls = store.calls();
+
+    assert_eq!(calls.drops, vec![graph.to_string()], "exactly one bundle is reloaded: {calls:?}");
+    let back = h
+        .state
+        .store
+        .select(&format!("SELECT ?p WHERE {{ GRAPH <{graph}> {{ <http://edamontology.org/data_0006> ?p ?o }} }}"))
+        .unwrap();
+    assert!(!back.rows.is_empty(), "and its content is back");
+
+    // Settled again: the next boot writes nothing.
+    store.reset();
+    tar::seed::load_vocab(&h.state).unwrap();
+    assert_eq!(store.calls().writes(), 0);
+}
+
+/// The digest covers the base IRI, because the base decides where the keyword concepts live and
+/// how a relative IRI in a bundle resolves. A store brought up under a different base — a
+/// restored dump, a copy on another port — has to reload rather than serve the old registry's
+/// identifiers forever.
+#[tokio::test]
+async fn a_store_brought_up_under_another_base_reloads_its_reference_data() {
+    let (_h, store) = counting_harness(BASE).await;
+
+    let mut config = Config::for_test("https://reg.moved.example");
+    config.root_token = Some(ROOT.into());
+    let moved = Arc::new(AppState::from_parts(config, store.clone(), Ops::open(":memory:").await.unwrap()));
+    store.reset();
+    tar::seed::load_vocab(&moved).unwrap();
+
+    let calls = store.calls();
+    assert_eq!(calls.drops.len(), tar::bundles::BUNDLES.len(), "every bundle is rewritten: {calls:?}");
+    let (status, kw) = Harness { app: tar::app(moved.clone()), state: moved.clone() }
+        .get("/api/v1/vocab/search?branch=keyword&q=SHACL")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        kw["items"].as_array().unwrap().iter().any(|i| i["iri"] == "https://reg.moved.example/keyword/shacl"),
+        "the keyword concepts are minted under the new base: {kw}"
+    );
+}
+
+/// The point of the whole arrangement: the check that runs on every write does not go to the
+/// record store — which, against `TAR_SPARQL_ENDPOINT`, is an HTTP round trip per record.
+#[tokio::test]
+async fn a_write_naming_a_bundled_type_asks_the_record_store_nothing_about_the_vocabulary() {
+    let (h, store) = counting_harness(BASE).await;
+    // The signature of `domain::vocabulary::held`'s query, and of nothing else.
+    let vocabulary_query = "?t a skos:Concept";
+
+    store.reset();
+    let (status, out) = h
+        .post(
+            "/api/v1/artifacts",
+            ROOT,
+            json!({"title": "a report", "conforms_to": "http://edamontology.org/data_2048"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{out}");
+    let calls = store.calls();
+    assert!(
+        !calls.queried(vocabulary_query),
+        "a bundled term is answered in memory; the record store was asked {:?}",
+        calls.selects.iter().filter(|q| q.contains(vocabulary_query)).collect::<Vec<_>>()
+    );
+
+    // The control, so the assertion above is known to be capable of failing: a type this
+    // registry minted lives only in the record store, so that is where the question goes.
+    let (status, minted) =
+        h.post("/api/v1/types", ROOT, json!({"slug": "counted-type", "label": "Counted type"})).await;
+    assert_eq!(status, StatusCode::CREATED, "{minted}");
+    store.reset();
+    let (status, out) = h
+        .post("/api/v1/artifacts", ROOT, json!({"title": "b", "conforms_to": minted["iri"]}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{out}");
+    assert!(store.calls().queried(vocabulary_query), "a minted type is not in the reference store");
+}
+
+/// Every kind of term a write may name, after the split. Two of these are in the record store
+/// only, and a check that stopped at the reference store would refuse both.
+#[tokio::test]
+async fn a_bundled_a_minted_and_a_peer_type_all_still_validate() {
+    let h = harness().await;
+
+    // Bundled.
+    let (status, out) = h
+        .post("/api/v1/artifacts", ROOT, json!({"title": "a", "conforms_to": "http://edamontology.org/data_2048"}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "a bundled type: {out}");
+
+    // Minted here.
+    let (_, minted) = h.post("/api/v1/types", ROOT, json!({"slug": "split-test", "label": "Split test"})).await;
+    let (status, out) =
+        h.post("/api/v1/artifacts", ROOT, json!({"title": "b", "conforms_to": minted["iri"]})).await;
+    assert_eq!(status, StatusCode::CREATED, "a minted type: {out}");
+
+    // Adopted here, under a foreign identifier.
+    let adopted = "http://purl.obolibrary.org/obo/SWO_0000900";
+    let (_, t) = h.post("/api/v1/types", ROOT, json!({"label": "Adopted", "iri": adopted})).await;
+    assert_eq!(t["iri"], adopted, "{t}");
+    let (status, out) = h.post("/api/v1/artifacts", ROOT, json!({"title": "c", "conforms_to": adopted})).await;
+    assert_eq!(status, StatusCode::CREATED, "an adopted type: {out}");
+
+    // Cached from a peer, in that peer's own graph — the allowance that is keyed on *which*
+    // graph the concept sits in, and so can only be answered by the record store.
+    let peer_type = "https://reg.peer.example/type/their-own-thing";
+    let mut tx = tar::store::GraphTx::new();
+    let mut n = tar::rdf::Node::iri(peer_type, &tar::ns::peer_graph("somebody"));
+    n.a(&format!("{}Concept", tar::ns::SKOS));
+    n.text(tar::ns::SKOS, "prefLabel", "Their own thing");
+    tx.extend(n.finish());
+    h.state.store.apply(tx).unwrap();
+    let (status, out) = h.post("/api/v1/artifacts", ROOT, json!({"title": "d", "conforms_to": peer_type})).await;
+    assert_eq!(status, StatusCode::CREATED, "a peer's type: {out}");
+
+    // And the rule still refuses what it always refused.
+    let (status, out) = h
+        .post("/api/v1/artifacts", ROOT, json!({"title": "e", "conforms_to": "https://example.org/type/invented"}))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{out}");
+}
+
+/// `tar dump` and `tar restore` have to carry the new graphs, digests included — otherwise the
+/// restored registry reloads 12 000 quads on its first boot and the guard is decorative.
+#[tokio::test]
+async fn a_dump_round_trips_the_bundle_graphs_and_their_digests() {
+    let (h, _) = counting_harness(BASE).await;
+    h.post("/api/v1/software", ROOT, json!({"name": "carried over"})).await;
+    let dump = h.state.store.dump_nquads(None).unwrap();
+    assert!(dump.contains("urn:tar:bundles"), "the digests are in the dump");
+    assert!(dump.contains("urn:tar:bundle:edam"), "and so are the bundle graphs");
+
+    let restored = common::CountingStore::wrap(common::test_store().await);
+    tar::store::GraphStore::load_nquads(restored.as_ref(), &dump).unwrap();
+    let mut config = Config::for_test(BASE);
+    config.root_token = Some(ROOT.into());
+    let state = Arc::new(AppState::from_parts(config, restored.clone(), Ops::open(":memory:").await.unwrap()));
+
+    restored.reset();
+    tar::seed::load_vocab(&state).unwrap();
+    assert_eq!(
+        restored.calls().writes(),
+        0,
+        "a restored store is already up to date: {:?}",
+        restored.calls()
+    );
+
+    let h2 = Harness { app: tar::app(state.clone()), state };
+    let (status, list) = h2.get("/api/v1/software").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["total"], 1, "the records came back too: {list}");
+    let (status, hits) = h2.get("/api/v1/vocab/search?branch=data&q=Report").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        hits["items"].as_array().unwrap().iter().any(|i| i["iri"] == "http://edamontology.org/data_2048"),
+        "and so did the vocabulary: {hits}"
+    );
 }

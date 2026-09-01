@@ -5,7 +5,8 @@ the registry cannot mint dereferenceable identifiers without knowing what it is 
 refuses to start without it. Everything else has a working default, so `docker run` with one
 variable is a complete install.
 
-`tar config` prints the effective configuration with secrets redacted.
+`tar config` prints the effective configuration with secrets redacted. For how these settings
+land in a real deployment — a container, compose, or a cluster — see [Deployment](deployment.md).
 
 ## Core
 
@@ -142,12 +143,17 @@ See [The hosted MCP server](../mcp.md).
 
 ## Build-time
 
-These affect `build.rs`, not the running server.
+These affect `build.rs`, not the running server. Both take `1`.
 
 | Variable | |
 |---|---|
-| `TAR_UPDATE_EDAM` | Force an upstream vocabulary check rather than waiting for the daily one. |
-| `TAR_EDAM_OFFLINE` | Skip the check entirely. Fails the build if there is no committed bundle. |
+| `TAR_UPDATE_VOCAB` | Force an upstream check of the bundled vocabularies rather than waiting for the daily one. |
+| `TAR_VOCAB_OFFLINE` | Skip the check entirely and build from the committed bundles. Fails the build, loudly, if one is missing. |
+
+**A release build should set `TAR_VOCAB_OFFLINE=1`.** The container image and CI do. Left
+unset, the build may fetch from an upstream host and rewrite the bundles in `shapes/`, which
+makes the output depend on what that host served that day and on it being up at all. The older
+names for these two are still accepted.
 
 ## Durations and sizes
 

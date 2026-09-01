@@ -3,9 +3,9 @@
 An RDF-native, self-hostable, federatable registry of **software**, the **deployments** that run
 it, the **runs** they perform, and the **data artifacts** those runs consume and produce.
 
-**📖 [Documentation](docs/)** — the model, the API, authentication, the vocabulary rules,
-self-hosting. It reads on GitHub as it is, and builds into a site with `mdbook serve docs`;
-pushing to the default branch publishes it to GitHub Pages.
+**📖 [Documentation](https://maastrichtu-ids.github.io/tool-artifact-registry/)** — the model,
+the API, authentication, the vocabulary rules, deployment. The chapters live in [`docs/`](docs/)
+and read on GitHub as they are; pushing to the default branch publishes the site.
 
 ---
 
@@ -49,6 +49,20 @@ With Docker:
 export TAR_ROOT_TOKEN=$(openssl rand -hex 24)
 docker compose up --build
 ```
+
+Or the published image, which is what a real deployment runs:
+
+```bash
+docker run -d -p 8080:8080 \
+  -e TAR_BASE_IRI=https://registry.example.org \
+  -e TAR_ROOT_TOKEN="$TAR_ROOT_TOKEN" \
+  -v tar-data:/data \
+  ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0
+```
+
+`compose.identity.yaml` brings up the registry *and* an identity provider with its realm already
+imported, in one command. [Deployment](docs/operations/deployment.md) covers a single container,
+compose, and Kubernetes manifests under `deploy/kubernetes/`.
 
 `TAR_BASE_IRI` is the only universally required setting — the registry cannot mint
 dereferenceable identifiers without knowing what it is called. Everything else has a working
@@ -111,11 +125,13 @@ src/
   shacl.rs      write validation and sh:ValidationReport generation
   negotiate.rs  content negotiation and FAIR Signposting
   llms.rs       the llms.txt index
-  seed.rs       example content for a fresh install
+  seed.rs       example content, and the boot-time graph migrations
+  bundles.rs    the bundled reference data: an in-memory store, and a hash-guarded copy
+                in the record store, one named graph per bundle
 shapes/         SHACL shapes and the bundled vocabularies
 frontend/       React 18 + Vite + TypeScript UI
 docs/           the documentation site (mdBook)
-deploy/         a local identity provider with an importable realm
+deploy/         Kubernetes manifests, and a local identity provider with an importable realm
 tests/          end-to-end tests against the real router
 ```
 
@@ -125,6 +141,9 @@ tests/          end-to-end tests against the real router
 cargo test                      # unit, end-to-end, MCP and subscription suites
 cd frontend && npm test         # component, parsing and screen tests
 ```
+
+Both run on every push and pull request (`.github/workflows/ci.yml`). Neither needs the network
+or a service.
 
 The graph store is a trait with two implementations — embedded Oxigraph, the default, and any
 external SPARQL 1.1 endpoint ([Graph store](docs/operations/graph-store.md)). The *same*
@@ -153,7 +172,9 @@ mdbook serve docs --open
 | [API](docs/api/conventions.md) | Organised by task: registering, advertising, searching, subscribing, federating. |
 | [How a tool authenticates](docs/api/authentication.md) | The three credential types and when each is right. |
 | [Vocabulary](docs/vocabulary/terms.md) | What types and topics must be, and how to search, adopt or mint one. |
+| [The `tar:` ontology](docs/ontology.md) | The classes and properties the registry declares, and why nothing standard fitted. |
 | [For agents](docs/agents/surfaces.md) | `llms.txt`, Markdown representations, and the hosted [MCP server](docs/mcp.md). |
+| [Deploying it](docs/operations/deployment.md) | A container, compose, or a cluster — and the one setting you cannot change later. |
 | [Operating a registry](docs/operations/configuration.md) | Configuration, identity provider, backup. |
 | [Limitations](docs/limitations.md) | The honest list. |
 | [Design record](docs/specs/README.md) | What was decided, and what else was considered. |

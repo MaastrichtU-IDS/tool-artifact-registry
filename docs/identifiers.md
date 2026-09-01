@@ -68,16 +68,34 @@ and you need a credential" — see [Availability](model.md#availability-and-the-
 
 The store is quads, not triples, and which graph a statement is in carries meaning:
 
-| Graph | Holds |
-|---|---|
-| `<urn:tar:local>` | Records this registry is authoritative for. |
-| `<urn:tar:vocab>` | The bundled vocabularies and the terms this registry has minted. |
-| `<urn:tar:shapes>` | The SHACL shapes that validate writes. |
-| `<urn:tar:peer:{id}>` | A cached stub fetched from one peer. One graph per peer. |
+| Graph | Holds | Written by |
+|---|---|---|
+| `<urn:tar:local>` | Records this registry is authoritative for, including the artifact types it has minted or adopted. | The write handlers |
+| `<urn:tar:peer:{id}>` | A cached stub fetched from one peer. One graph per peer. | The peer resolver |
+| `<urn:tar:shapes>` | The SHACL shapes that validate writes. | The boot loader |
+| `<urn:tar:bundle:vocab>` | The registry's own terms and the classes a concept can carry. | The boot loader |
+| `<urn:tar:bundle:edam>` | One bundled external vocabulary. | The boot loader |
+| `<urn:tar:bundle:euroscivoc>` | The other bundled external vocabulary. | The boot loader |
+| `<urn:tar:bundle:keywords>` | The artifact keyword scheme. | The boot loader |
+| `<urn:tar:bundles>` | One node per bundle graph: its content digest, its size and when this registry last wrote it. | The boot loader |
+
+Three families, and which one a graph is in decides who may write it.
 
 Peer data is loaded straight into its own graph by the resolver and never passes through a
 write handler, which is why rules this registry enforces on its own records are not, and must
 not be, applied to a peer's.
+
+The bundle graphs are **reference data the binary ships**: four files under `shapes/` and one
+table in the source. Each has its own graph and is the only writer of it, because a graph that
+is dropped and reloaded from a file must contain only what the binary can reproduce. They are
+also held a second time, in an in-memory store that is loaded from the same constants at every
+start and never touched by anything else — that is what the write-path check "is this a term the
+registry holds" reads, so a registry pointed at a remote SPARQL endpoint does not make a network
+call per record written. See [Graph store](operations/graph-store.md#reference-data).
+
+A store written before the split has a single `<urn:tar:vocab>` holding all of it at once. The
+first boot on this version moves anything the binary cannot regenerate — a type `tar seed` or an
+older `POST /api/v1/types` wrote there — into `<urn:tar:local>`, and drops the rest.
 
 ## SPARQL
 

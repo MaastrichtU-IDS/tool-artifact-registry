@@ -1,4 +1,9 @@
-//! Bootstrap content (spec §10.7) and the vocabulary preload (§5.4 `<urn:tar:vocab>`).
+//! Bootstrap content (spec §10.7) and the boot-time graph work.
+//!
+//! [`load_vocab`] runs at every start, from `main::boot` and from the test harness. It brings
+//! the record store's copy of the bundled reference data up to date — see [`crate::bundles`]
+//! for the split between that copy and the in-memory reference store — and then applies the
+//! graph migrations, each of which is a correction to something an older build wrote.
 //!
 //! `tar seed --from ids-examples` registers the sibling repos with their declared
 //! capabilities, so a fresh install is demonstrable immediately rather than being an empty
@@ -13,43 +18,96 @@ use crate::store::GraphTx;
 use anyhow::Result;
 use std::sync::Arc;
 
-/// The registry's own terms, plus a working subset of EDAM, preloaded so that chips render
-/// labels without a network call. Since a write may only name a term the registry holds
-/// (`crate::domain::vocabulary`), what is loaded here is also part of what is accepted.
-pub const VOCAB_TTL: &str = include_str!("../shapes/vocab.ttl");
-/// The shape set enforced on every write (spec §5.3). Also loaded into `<urn:tar:shapes>` so
-/// it is queryable and downloadable by any SHACL processor.
-pub const SHAPES_TTL: &str = include_str!("../shapes/tar-shapes.ttl");
-/// EDAM's topic and data branches, bundled so the pickers work offline. See `shapes/edam.ttl`.
-pub const EDAM_TTL: &str = include_str!("../shapes/edam.ttl");
-/// EuroSciVoc, the EU Science Vocabulary — the topics a Software record is classified by.
-/// See `shapes/euroscivoc.ttl` for why it is this and not EDAM's topic branch.
-pub const EUROSCIVOC_TTL: &str = include_str!("../shapes/euroscivoc.ttl");
-
 pub fn load_vocab(state: &AppState) -> Result<usize> {
-    let a = state.store.load_turtle(VOCAB_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
-    // Replaced, not merged. Every `sh:property [ … ]` in the shapes is a blank node, and a
-    // blank node is a fresh identifier on each parse — so re-loading the same unchanged file
-    // added another whole copy of the shapes on every boot rather than being a no-op. A
-    // long-lived registry had accumulated dozens of duplicate shape sets, all validating the
-    // same rule. The shapes ship with the binary and no one else writes to this graph, so the
-    // file is the whole truth about it and dropping first is safe.
-    state.store.drop_graph(ns::G_SHAPES)?;
-    let b = state.store.load_turtle(SHAPES_TTL, ns::G_SHAPES, Some(&state.config.base_iri))?;
-    let c = state.store.load_turtle(EDAM_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
-    let d = state.store.load_turtle(EUROSCIVOC_TTL, ns::G_VOCAB, Some(&state.config.base_iri))?;
-    // Loaded on every start, not only on a seeded registry: the keyword list is the registry's
-    // own and writes normalise against it, so a picker that could not offer it would be
-    // offering nothing on a fresh install.
-    let keywords = keyword_quads(&state.config.base_iri);
-    let n = keywords.len();
-    let mut tx = GraphTx::new();
-    tx.extend(keywords);
-    state.store.apply(tx)?;
-    let migrated =
-        class_existing_types(state)? + drop_branch_markers(state)? + unclaim_series_concepts(state)?;
+    // The bundled reference data, into the record store, only when its content hash says it
+    // would differ. The in-memory reference store every hot read goes to is loaded in
+    // `AppState::from_parts` and needs no guard, because memory starts empty.
+    let loaded = crate::bundles::sync(state)?;
+    // Graph migrations, in dependency order: the legacy vocabulary graph is emptied into
+    // `<urn:tar:local>` first, so that a type rescued out of it is one of the concepts
+    // `class_existing_types` then classes.
+    let migrated = adopt_legacy_vocab_graph(state)?
+        + class_existing_types(state)?
+        + drop_branch_markers(state)?
+        + unclaim_series_concepts(state)?;
     warn_about_unusable_stored_terms(state);
-    Ok(a + b + c + d + n + migrated)
+    Ok(loaded + migrated)
+}
+
+/// Empty `<urn:tar:vocab>` — the graph that used to hold four bundles, the seeded artifact
+/// types and every adopted term at once — and drop it.
+///
+/// Everything the binary can regenerate is now in its own bundle graph and has just been
+/// reloaded there, so those quads are duplicates and go. What cannot be regenerated is a
+/// registry-local or adopted type that `tar seed` or an older `POST /api/v1/types` wrote into
+/// the vocabulary graph, and losing one would break every record citing it: those move to
+/// `<urn:tar:local>`, which is where this build writes them and where they should always have
+/// been.
+///
+/// **Regenerable is decided by asking, not by guessing.** A subject that appears in any bundle
+/// graph is one of the bundles' own and is dropped; anything else is rescued. That is a
+/// question about the store as it is now, so it stays right as bundles are added or trimmed.
+///
+/// **A copy already in `<urn:tar:local>` wins.** `POST /api/v1/types` used to clear both graphs
+/// and write to the local one, so a subject in both is a stale vocabulary-graph copy of a term
+/// that has since been re-registered — the exact split that made one IRI carry two
+/// `skos:prefLabel`s. Merging them would recreate it.
+///
+/// One cheap `ASK` guards the whole thing, so a store that never had the legacy graph pays for
+/// one boolean and a registry that has migrated once never pays again.
+fn adopt_legacy_vocab_graph(state: &AppState) -> Result<usize> {
+    let legacy = ns::G_LEGACY_VOCAB;
+    if !state.store.ask(&format!("ASK {{ GRAPH <{legacy}> {{ ?s ?p ?o }} }}"))? {
+        return Ok(0);
+    }
+    let q = format!(
+        r#"{p}
+SELECT DISTINCT ?s WHERE {{
+  GRAPH <{legacy}> {{ ?s ?p ?o }}
+  FILTER(isIRI(?s))
+  FILTER NOT EXISTS {{ GRAPH ?b {{ ?s ?bp ?bo }} FILTER(STRSTARTS(STR(?b), "{bundle}") || ?b = <{shapes}>) }}
+  FILTER NOT EXISTS {{ GRAPH <{local}> {{ ?s ?lp ?lo }} }}
+}}"#,
+        p = ns::PREFIXES,
+        bundle = ns::G_BUNDLE_PREFIX,
+        shapes = ns::G_SHAPES,
+        local = ns::G_LOCAL
+    );
+    let rescue: Vec<String> = state.store.select(&q)?.rows.iter().filter_map(|r| r.iri("s")).collect();
+
+    let mut tx = GraphTx::new();
+    if !rescue.is_empty() {
+        let values = rescue.iter().map(|i| format!("<{i}>")).collect::<Vec<_>>().join(" ");
+        let statements = format!(
+            "SELECT ?s ?p ?o WHERE {{ VALUES ?s {{ {values} }} GRAPH <{legacy}> {{ ?s ?p ?o }} }}"
+        );
+        for row in &state.store.select(&statements)?.rows {
+            let (Some(s), Some(p), Some(o)) = (row.term("s"), row.term("p"), row.term("o")) else {
+                continue;
+            };
+            let (oxigraph::model::Term::NamedNode(s), oxigraph::model::Term::NamedNode(p)) = (s, p)
+            else {
+                continue;
+            };
+            tx.insert(oxigraph::model::Quad::new(
+                s.clone(),
+                p.clone(),
+                o.clone(),
+                oxigraph::model::GraphName::NamedNode(oxigraph::model::NamedNode::new_unchecked(ns::G_LOCAL)),
+            ));
+        }
+    }
+    let n = tx.insert.len();
+    if n > 0 {
+        state.store.apply(tx)?;
+        tracing::info!(
+            subjects = rescue.len(),
+            quads = n,
+            "moved terms this registry minted or adopted out of the retired vocabulary graph"
+        );
+    }
+    state.store.drop_graph(legacy)?;
+    Ok(n)
 }
 
 /// Give the types of a registry that predates the concept classes the class they should carry.
@@ -58,9 +116,13 @@ pub fn load_vocab(state: &AppState) -> Result<usize> {
 /// pick their classes up for free. A type this registry minted or adopted does not: it was
 /// written once, by `api::types::create`, and nothing rewrites it.
 ///
-/// Only `<urn:tar:local>` and `<urn:tar:vocab>` are considered. A peer's cached graph is left
-/// exactly as the peer served it, for the same reason a peer's record never passes a write
-/// handler: this registry is not authoritative for what a peer's terms are.
+/// Only `<urn:tar:local>` is considered. A peer's cached graph is left exactly as the peer
+/// served it, for the same reason a peer's record never passes a write handler: this registry
+/// is not authoritative for what a peer's terms are. A bundle graph is left alone because the
+/// classes are in the bundle — and because a statement written into one that its file does not
+/// contain would be undone by the next reload, or survive as the one line in it nothing can
+/// reproduce. The types that used to sit in the retired vocabulary graph are in
+/// `<urn:tar:local>` by the time this runs; `adopt_legacy_vocab_graph` puts them there.
 ///
 /// **Which graph.** The concept's own, found per concept — not a graph this file picks. The
 /// marker this replaces was backfilled into `<urn:tar:vocab>` while the concepts it was about
@@ -83,13 +145,12 @@ fn class_existing_types(state: &AppState) -> Result<usize> {
     let q = format!(
         r#"{p}
 SELECT DISTINCT ?c ?g WHERE {{
-  GRAPH ?g {{ ?c a skos:Concept }}
-  FILTER(?g = <{local}> || (?g = <{vocab}> && CONTAINS(STR(?c), "/type/")))
+  GRAPH <{local}> {{ ?c a skos:Concept }}
+  BIND(<{local}> AS ?g)
   FILTER NOT EXISTS {{ GRAPH ?cg {{ ?c a ?any . FILTER(?any IN ({classes})) }} }}
 }}"#,
         p = ns::PREFIXES,
-        local = ns::G_LOCAL,
-        vocab = ns::G_VOCAB
+        local = ns::G_LOCAL
     );
     let rows = state.store.select(&q)?;
     let mut tx = GraphTx::new();
@@ -193,11 +254,13 @@ fn unclaim_series_concepts(state: &AppState) -> Result<usize> {
         r#"{p}
 SELECT DISTINCT ?s ?g WHERE {{
   GRAPH ?g {{ ?s a skos:Concept ; a <{series}> }}
-  FILTER(!STRSTARTS(STR(?g), "{peer}"))
+  FILTER(!STRSTARTS(STR(?g), "{peer}") && !STRSTARTS(STR(?g), "{bundle}") && ?g != <{shapes}>)
 }}"#,
         p = ns::PREFIXES,
         series = crate::domain::artifact::TYPE_ARTIFACT_SERIES,
-        peer = ns::G_PEER_PREFIX
+        peer = ns::G_PEER_PREFIX,
+        bundle = ns::G_BUNDLE_PREFIX,
+        shapes = ns::G_SHAPES
     );
     let rows = state.store.select(&q)?;
     let mut tx = GraphTx::new();
@@ -224,10 +287,12 @@ fn drop_branch_markers(state: &AppState) -> Result<usize> {
         r#"{p}
 SELECT DISTINCT ?c ?g WHERE {{
   GRAPH ?g {{ ?c <{predicate}> ?b }}
-  FILTER(!STRSTARTS(STR(?g), "{peer}"))
+  FILTER(!STRSTARTS(STR(?g), "{peer}") && !STRSTARTS(STR(?g), "{bundle}") && ?g != <{shapes}>)
 }}"#,
         p = ns::PREFIXES,
-        peer = ns::G_PEER_PREFIX
+        peer = ns::G_PEER_PREFIX,
+        bundle = ns::G_BUNDLE_PREFIX,
+        shapes = ns::G_SHAPES
     );
     let rows = state.store.select(&q)?;
     let mut tx = GraphTx::new();
@@ -286,47 +351,18 @@ fn local_types(base: &str) -> Vec<(String, &'static str, &'static str, &'static 
     ]
 }
 
-/// The registry's own artifact keyword list, as a SKOS scheme (`crate::domain::keywords`).
+/// The seeded artifact types, as records.
 ///
-/// The authoritative list is the Rust table — this puts it in the graph so the pickers, the
-/// vocabulary search and a federating peer all see it the same way as any other concept, with
-/// no special case anywhere.
-fn keyword_quads(base: &str) -> Vec<oxigraph::model::Quad> {
-    use crate::domain::keywords;
-    let scheme = keywords::scheme_iri(base);
-    let mut out = Vec::new();
-    let mut sn = crate::rdf::Node::iri(&scheme, ns::G_VOCAB);
-    sn.a(&format!("{}ConceptScheme", ns::SKOS));
-    sn.text(ns::SKOS, "prefLabel", "Artifact keywords");
-    sn.text(
-        ns::SKOS,
-        "definition",
-        "The keywords this registry recognises on artifacts. A keyword outside the list is kept as free text.",
-    );
-    out.extend(sn.finish());
-    for k in keywords::KEYWORDS {
-        let iri = keywords::iri(base, k.slug);
-        let mut n = crate::rdf::Node::iri(&iri, ns::G_VOCAB);
-        n.a(&format!("{}Concept", ns::SKOS));
-        n.text(ns::SKOS, "prefLabel", k.label);
-        n.text(ns::SKOS, "definition", k.definition);
-        for a in k.aliases {
-            n.text(ns::SKOS, "altLabel", a);
-        }
-        n.link(ns::SKOS, "inScheme", &scheme);
-        // The same kind of class the type and topic vocabularies carry, so `vocab_search` scopes
-        // to keywords knowing nothing about this scheme in particular — and so that a keyword,
-        // which is a label rather than a type, is refused where a type is expected.
-        n.a(crate::domain::vocabulary::CLASS_ARTIFACT_KEYWORD);
-        out.extend(n.finish());
-    }
-    out
-}
-
+/// They go into `<urn:tar:local>`, which is where `api::types::create` writes a minted or
+/// adopted type and where `GET /api/v1/types` looks. They used to go into the vocabulary graph
+/// beside the bundles, which meant re-registering one left the seeded definition standing beside
+/// the new one — the same IRI with two `skos:prefLabel`s, the picker showing whichever it read
+/// first, and a curator getting a 200 for a rename that never appeared. A bundle graph is
+/// dropped and reloaded from a file, so nothing that a file cannot reproduce may live in one.
 fn type_quads(base: &str) -> Vec<oxigraph::model::Quad> {
     let mut out = Vec::new();
     for (iri, label, definition, media) in local_types(base) {
-        let mut n = crate::rdf::Node::iri(&iri, ns::G_VOCAB);
+        let mut n = crate::rdf::Node::local(&iri);
         n.a(&format!("{}Concept", ns::SKOS));
         n.text(ns::SKOS, "prefLabel", label);
         n.text(ns::SKOS, "definition", definition);

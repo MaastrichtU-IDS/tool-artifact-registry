@@ -26,11 +26,30 @@ pub const ADMS: &str = "http://www.w3.org/ns/adms#";
 pub const EU_ACCESS_RIGHT: &str = "http://publications.europa.eu/resource/authority/access-right/";
 /// EU dataset-status authority table; `WITHDRAWN` is the tombstone marker.
 pub const EU_DATASET_STATUS: &str = "http://publications.europa.eu/resource/authority/dataset-status/";
+/// VoID, the vocabulary for describing an RDF dataset. Used only for the bundle graphs'
+/// provenance node in `<urn:tar:bundles>` — `void:Dataset`, `void:triples`.
+pub const VOID: &str = "http://rdfs.org/ns/void#";
 
 /// Named graphs (spec §5.4). Provenance of every triple is recoverable by construction.
+///
+/// Three families, and which family a graph is in decides who may write it:
+///
+/// * `urn:tar:local` — the records this registry is authoritative for. Written by the API.
+/// * `urn:tar:peer:{id}` — one cached stub per peer, written by the resolver and by nothing
+///   else. Nothing this registry enforces on its own records is applied here.
+/// * `urn:tar:shapes`, `urn:tar:bundle:{name}`, `urn:tar:bundles` — reference data the binary
+///   ships and owns outright (`crate::bundles`). Dropped and rewritten whenever the bundle's
+///   content hash changes, so nothing but the bundle may ever be written into one.
 pub const G_LOCAL: &str = "urn:tar:local";
 pub const G_SHAPES: &str = "urn:tar:shapes";
-pub const G_VOCAB: &str = "urn:tar:vocab";
+/// One graph per bundled reference file; see `crate::bundles::BUNDLES` for the names.
+pub const G_BUNDLE_PREFIX: &str = "urn:tar:bundle:";
+/// Where each bundle graph's content hash and load timestamp live.
+pub const G_BUNDLES: &str = "urn:tar:bundles";
+/// The graph that held every bundle, the seeded types and every adopted term at once, before
+/// they were split apart. A store written by an older build still has it; `seed::load_vocab`
+/// rescues what the binary cannot regenerate into `urn:tar:local` and drops the rest.
+pub const G_LEGACY_VOCAB: &str = "urn:tar:vocab";
 pub const G_PEER_PREFIX: &str = "urn:tar:peer:";
 
 pub fn peer_graph(id: &str) -> String {

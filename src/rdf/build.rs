@@ -156,6 +156,21 @@ impl Node {
 
 /// `prov:wasAttributedTo` plus a minted timestamp — recorded on every write (spec §8.3).
 pub fn attribution(node: &mut Node, actor: &str) {
+    attribution_at(node, actor, None)
+}
+
+/// Attribution where the caller has its own idea of when the thing was last modified.
+///
+/// `dct:modified` means when the *resource* changed, so a producer that knows that date is a
+/// better source than the clock. Both used to be written — the caller's value and the stamp —
+/// leaving two `dct:modified` triples on one record and a reader taking whichever came back
+/// first. That is not a tie the reader can break, because nothing in the graph says which is
+/// which; the write path is the only place that knows, so it decides here.
+pub fn attribution_at(node: &mut Node, actor: &str, modified: Option<&str>) {
     node.link(ns::PROV, "wasAttributedTo", actor);
-    node.datetime(ns::DCT, "modified", &chrono::Utc::now().to_rfc3339());
+    node.datetime(
+        ns::DCT,
+        "modified",
+        modified.unwrap_or(&chrono::Utc::now().to_rfc3339()),
+    );
 }

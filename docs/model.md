@@ -1,6 +1,8 @@
 # The model
 
-Four layers, plus two things that hang off them.
+Four layers, plus two things that hang off them. This chapter is the conceptual model; for the
+RDF it becomes — the classes, the properties, and why the registry has a vocabulary of its own
+at all — see [The `tar:` ontology](ontology.md).
 
 ```
 Software                      abstract: the program, its repository, licence, responsible party

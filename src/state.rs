@@ -9,7 +9,16 @@ use std::sync::Arc;
 
 pub struct AppState {
     pub config: Config,
+    /// The records: `urn:tar:local`, the peer caches, and a copy of the bundled reference data
+    /// so `/sparql` can join a record to the term it cites. Embedded Oxigraph, or the external
+    /// SPARQL endpoint `TAR_SPARQL_ENDPOINT` names.
     pub store: Arc<dyn GraphStore>,
+    /// The bundled reference data, in memory, always (`crate::bundles`). Every hot reference
+    /// read goes here first — above all `domain::vocabulary::held`, which the SHACL write path
+    /// calls on every write and which used to be an HTTP round trip per write on a remote
+    /// backend. It is read-only, it holds no record and no peer statement, and a term it does
+    /// not have is looked for in `store` instead.
+    pub reference: Arc<dyn GraphStore>,
     pub ops: Ops,
     pub jwt: JwtVerifier,
     /// The shape set every write is validated against (spec §5.3).
@@ -45,7 +54,10 @@ impl AppState {
             jwt: JwtVerifier::new(timeout),
             // A registry that cannot parse its own shapes would accept anything, so this
             // fails loudly at construction rather than quietly at the first write.
-            shapes: Shapes::parse(crate::seed::SHAPES_TTL).expect("the shipped SHACL shapes must parse"),
+            shapes: Shapes::parse(crate::bundles::SHAPES_TTL).expect("the shipped SHACL shapes must parse"),
+            // Built here rather than at the first request, for the same reason: a registry that
+            // cannot load its own reference data would refuse every write that names a term.
+            reference: crate::bundles::reference_store(&config.base_iri),
             http: reqwest::Client::builder()
                 .timeout(timeout)
                 .user_agent(concat!("tool-artifact-registry/", env!("CARGO_PKG_VERSION")))

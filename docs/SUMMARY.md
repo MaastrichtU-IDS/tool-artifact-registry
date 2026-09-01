@@ -5,6 +5,7 @@
 # Understanding it
 
 - [The model](model.md)
+- [The ontology](ontology.md)
 - [Identifiers and representations](identifiers.md)
 
 # Running it

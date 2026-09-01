@@ -1,13 +1,16 @@
 //! Vocabulary lookup for the pickers (handoff §5.7: "EDAM autocomplete plus a free-IRI escape
 //! hatch").
 //!
-//! Nobody should have to paste `http://edamontology.org/topic_3071` by hand to say "data
-//! management". EDAM's topic and data branches ship with the registry (`shapes/edam.ttl`), so
-//! this searches locally: the picker keeps working on a laptop with no network, which is the
-//! same promise the rest of the deployment makes.
+//! Nobody should have to paste `http://edamontology.org/data_2048` by hand to say "report".
+//! The bundled vocabularies ship with the registry (`crate::bundles`), so this searches
+//! locally: the picker keeps working on a laptop with no network, which is the same promise the
+//! rest of the deployment makes.
 //!
-//! It searches whatever is in the vocabulary and local graphs, so registry-minted and adopted
-//! ArtifactTypes appear alongside EDAM without any special casing.
+//! It searches the record store and the in-memory reference store together, so a bundled term,
+//! one this registry minted or adopted, and one cached from a peer all appear side by side with
+//! no special casing. Both are asked because `domain::vocabulary::held` asks both: the write
+//! path accepts exactly the terms this returns, and a search that could not find one of them —
+//! or offered one it refuses — would be the trap the paragraph below warns about.
 //!
 //! This is also the route out of a refused write: `crate::domain::vocabulary` only accepts terms
 //! the registry holds, and those are exactly the terms this returns. The two must not diverge —
@@ -97,7 +100,14 @@ SELECT DISTINCT ?c ?label ?def ?class ?broader WHERE {{
         tar = ns::TAR
     );
 
-    let rows = state.store.select(&sparql).map_err(AppError::from)?;
+    // Both stores, record first. The record store holds the terms this registry minted, adopted
+    // or cached from a peer; the reference store holds the bundles. `domain::vocabulary::held`
+    // reads the same union, and it must: a search that could not find a term the write path
+    // accepts — or that offered one it refuses — is the trap this module's header warns about.
+    // Record first so that a locally adopted copy of a bundled IRI shows the label somebody here
+    // actually gave it.
+    let mut rows = state.store.select(&sparql).map_err(AppError::from)?;
+    rows.rows.extend(state.reference.select(&sparql).map_err(AppError::from)?.rows);
     let mut items: Vec<VocabHit> = Vec::new();
     for row in rows.rows {
         let (Some(iri), Some(label)) = (row.iri("c"), row.str("label")) else { continue };

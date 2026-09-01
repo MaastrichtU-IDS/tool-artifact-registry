@@ -48,9 +48,45 @@ export TAR_SPARQL_PASSWORD=admin
 tar seed && tar serve
 ```
 
-Nothing else changes. The named graphs are the same — `urn:tar:local`, `urn:tar:vocab`,
-`urn:tar:shapes`, `urn:tar:peer:*` — so `tar dump` from an embedded registry restores into an
-external one and vice versa, and the two answer identically for the same data.
+Nothing else changes. The named graphs are the same either way — see
+[Named graphs](../identifiers.md#named-graphs) — so `tar dump` from an embedded registry restores
+into an external one and vice versa, and the two answer identically for the same data.
+
+## Reference data
+
+About 12 000 of the registry's quads are not records at all: four bundled files under `shapes/`
+and one table in the source, holding the SHACL shapes, the registry's own terms, two external
+vocabularies and the artifact keyword scheme. They used to be pushed into the record store on
+every single start, with a `DROP GRAPH` of the shapes each time. Against an external endpoint
+that is 12 000 quads over HTTP at every restart, and the write-path question "is this a term the
+registry holds" was one more round trip per record written.
+
+They now live in two places:
+
+* **An in-memory store, loaded at every start from the constants compiled into the binary.**
+  It starts empty, so loading it every time is correct by construction — no staleness, no guard,
+  no network. This is what the write path reads, which is why registering a record whose type
+  comes from a bundled vocabulary asks the endpoint nothing about the vocabulary at all.
+* **The record store, one graph per bundle, guarded by a content digest.** `/sparql` has to be
+  able to join a record to the term it cites and a peer has to be able to fetch a definition, so
+  the copy is real. `<urn:tar:bundles>` records each graph's digest, its size and when it was
+  written; a boot that finds every digest unchanged issues one `SELECT` and writes nothing.
+
+The digest covers the base IRI as well as the file, because the base decides how a relative IRI
+resolves and where the keyword concepts are minted: a store served under a new `TAR_BASE_IRI`
+reloads its reference data rather than serving the old registry's identifiers.
+
+```console
+$ curl -sG --data-urlencode 'query=PREFIX void: <http://rdfs.org/ns/void#>
+    SELECT ?g ?n WHERE { GRAPH <urn:tar:bundles> { ?g void:triples ?n } }' \
+    -H 'Accept: application/sparql-results+json' https://registry.example/sparql
+```
+
+A term the registry minted, adopted, or cached from a peer is a *record*, not reference data:
+it lives in `urn:tar:local` or in that peer's graph, and the write-path check falls through to
+the record store for exactly those. That fallback is one query — the same one the old code made
+unconditionally — so the worst case is what every write used to cost and the common case is
+nothing.
 
 ## What the two backends share, and what they do not
 

@@ -316,3 +316,98 @@ async fn a_claim_about_who_produced_something_cannot_displace_the_evidence() {
     // ...and the evidence still says which deployment actually presented it.
     assert_eq!(back["attributed_to"], inst["iri"], "{back}");
 }
+
+// ------------------------------------------------------- one modification date, not two
+
+#[tokio::test]
+async fn a_supplied_modification_date_replaces_the_stamp_rather_than_joining_it() {
+    // `dct:modified` says when the resource changed, so a producer that knows beats the clock.
+    // Both used to be written, leaving two values on one record and a reader taking whichever
+    // came back first — a tie nothing in the graph can break.
+    let h = harness().await;
+    let (status, art) = h
+        .req(
+            "POST",
+            "/api/v1/artifacts",
+            Some(ROOT),
+            Some(json!({"title": "Knows its own date", "modified": "2024-03-01T09:00:00Z"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{art}");
+    let iri = art["iri"].as_str().unwrap().to_string();
+
+    let rows = h
+        .state
+        .store
+        .select(&format!(
+            "PREFIX dct: <http://purl.org/dc/terms/>
+             SELECT ?m WHERE {{ GRAPH ?g {{ <{iri}> dct:modified ?m }} }}"
+        ))
+        .unwrap();
+    let dates: Vec<String> = rows.rows.iter().filter_map(|r| r.str("m")).collect();
+    assert_eq!(dates.len(), 1, "exactly one modification date: {dates:?}");
+    assert!(dates[0].starts_with("2024-03-01"), "and it is the one the caller gave: {dates:?}");
+
+    // Saying nothing still gets a stamp — the registry did modify the record.
+    let (status, other) = h
+        .req("POST", "/api/v1/artifacts", Some(ROOT), Some(json!({"title": "Says nothing"})))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+    assert!(other["modified"].as_str().is_some_and(|m| m.starts_with("20")), "{other}");
+}
+
+#[tokio::test]
+async fn an_artifacts_contact_uses_the_standard_term_and_still_reads_the_retired_one() {
+    // The ontology marked `tar:contact` deprecated in favour of `codemeta:maintainer` while the
+    // artifact path went on writing it — the registry contradicting its own published model.
+    let h = harness().await;
+    let (status, art) = h
+        .req(
+            "POST",
+            "/api/v1/artifacts",
+            Some(ROOT),
+            Some(json!({"title": "Has someone to ask",
+                        "contact": {"name": "A Maintainer", "kind": "person"}})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{art}");
+    assert_eq!(art["contact"]["name"], "A Maintainer");
+    let iri = art["iri"].as_str().unwrap().to_string();
+
+    // Asked separately: two OPTIONALs inside one `GRAPH ?g` leave `?g` unbound and match
+    // nothing, which reads as "the triple is absent" whether it is or not.
+    let count = |predicate: &str| {
+        h.state
+            .store
+            .select(&format!(
+                "SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH ?g {{ <{iri}> <{predicate}> ?o }} }}"
+            ))
+            .unwrap()
+            .rows
+            .first()
+            .and_then(|r| r.i64("n"))
+            .unwrap_or(0)
+    };
+    assert_eq!(count("https://w3id.org/codemeta/terms/maintainer"), 1, "the standard term is written");
+    assert_eq!(count("https://w3id.org/tar/ns#contact"), 0, "and the retired one is not");
+
+    // A record written before the change still resolves, which is why the read keeps a fallback.
+    let legacy = format!("{BASE}/artifact/01a05e00-0000-7000-8000-000000000000");
+    let agent = format!("{BASE}/agent/01a05e00-0000-7000-8000-000000000001");
+    let mut tx = tar::store::GraphTx::new();
+    let mut n = tar::rdf::Node::iri(&legacy, tar::ns::G_LOCAL);
+    n.a("http://www.w3.org/ns/dcat#Dataset");
+    n.link(tar::ns::TAR, "contact", &agent);
+    tx.extend(n.finish());
+    let mut a = tar::rdf::Node::iri(&agent, tar::ns::G_LOCAL);
+    a.a("https://schema.org/Person");
+    a.text(tar::ns::SCHEMA, "name", "Written Before The Change");
+    tx.extend(a.finish());
+    h.state.store.apply(tx).unwrap();
+
+    let (status, old) = h
+        .req("GET", &format!("/api/v1/artifacts/{}", legacy.rsplit('/').next().unwrap()), None, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{old}");
+    assert_eq!(old["contact"]["name"], "Written Before The Change", "{old}");
+}

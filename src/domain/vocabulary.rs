@@ -308,14 +308,51 @@ impl Held {
 ///
 /// `a skos:Concept` rather than "has any triple at all": every record in the store is a subject
 /// of something, and a rule that accepted any known IRI would wave an artifact's own IRI into
-/// its type field. Searched across every graph, so a bundled vocabulary, a locally minted type
-/// and a type cached from a peer are all found by the same query with no special case.
+/// its type field.
+///
+/// **Two stores, in that order, and why.** This runs on every write —
+/// `shacl::enforce_write` calls it through [`findings`] — and against `TAR_SPARQL_ENDPOINT` a
+/// question asked of the record store is an HTTP round trip. So it asks the in-memory reference
+/// store first, which holds every bundled term and answers in microseconds without a socket.
+/// That is the overwhelming majority of lookups: the bundles carry some 2 300 concepts and a
+/// record normally cites one of them.
+///
+/// The record store is asked only for what is left over, and it has to be asked, because two
+/// kinds of term live only there and both must keep validating:
+///
+/// * a type this registry minted or adopted, written to `<urn:tar:local>` by
+///   `api::types::create`;
+/// * a type cached from a peer, in that peer's own `<urn:tar:peer:…>` graph — and the peer
+///   allowance in [`Held::usable_as`] is keyed on exactly which graph the concept sits in, so
+///   it cannot be answered anywhere but there.
+///
+/// The worst case is a write that names only minted or peer types, or only terms nobody holds:
+/// one in-memory query that finds nothing, then the same single record-store query the old
+/// code made. Never two round trips, never more than before.
+///
+/// **A reference answer is not overridden.** A bundled term found in the reference store is not
+/// looked up again in the record store, so a locally adopted copy of a bundled IRI cannot
+/// change what kind of thing it is. It cannot anyway: `api::types::adoptable` refuses to adopt
+/// an IRI this registry already holds as something other than a type.
+pub fn held(state: &AppState, iris: &[&str]) -> Option<HashMap<String, Held>> {
+    if iris.is_empty() {
+        return Some(HashMap::new());
+    }
+    let mut out = held_in(state.reference.as_ref(), iris)?;
+    let missing: Vec<&str> = iris.iter().copied().filter(|i| !out.contains_key(*i)).collect();
+    if !missing.is_empty() {
+        out.extend(held_in(state.store.as_ref(), &missing)?);
+    }
+    Some(out)
+}
+
+/// The lookup itself, against one store.
 ///
 /// The class is matched in its own `GRAPH` block rather than inside the one that finds the
 /// concept. Every site that creates a concept now writes both into the same graph, so the two
 /// forms return the same rows — but requiring co-location is exactly what made the branch marker
 /// fail, and there is no reason to write the requirement back in.
-pub fn held(state: &AppState, iris: &[&str]) -> Option<HashMap<String, Held>> {
+fn held_in(store: &dyn crate::store::GraphStore, iris: &[&str]) -> Option<HashMap<String, Held>> {
     let values = iris.iter().map(|i| format!("<{i}>")).collect::<Vec<_>>().join(" ");
     let q = format!(
         "{p}\nSELECT DISTINCT ?t ?g ?class WHERE {{\n  VALUES ?t {{ {values} }}\n\
@@ -324,7 +361,7 @@ pub fn held(state: &AppState, iris: &[&str]) -> Option<HashMap<String, Held>> {
         p = ns::PREFIXES,
         tar = ns::TAR
     );
-    let rows = state.store.select(&q).ok()?;
+    let rows = store.select(&q).ok()?;
     let mut out: HashMap<String, Held> = HashMap::new();
     let mut only_peer: HashMap<String, bool> = HashMap::new();
     for row in rows.rows {

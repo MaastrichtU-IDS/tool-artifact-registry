@@ -1,10 +1,25 @@
 # Demo — four IDS tools, one pizza
 
-> **There are two demos in this directory.** This one loads a worked scenario as *data*.
+> **There are three demos in this directory.** This one loads a worked scenario as *data*.
 > [`README-two-apps.md`](README-two-apps.md) runs two actual programs that coordinate through
 > the registry — one advertises an OWL ontology, the other has a subscription that matches it,
 > is notified, ingests it, and advertises what it derived. Start there if what you want to see
 > is a tool reacting to another tool.
+>
+> [`run-workload-identity-demo.sh`](run-workload-identity-demo.sh) is the third, and the only
+> one where a deployment is not handed a registry API token: it exchanges a credential for its
+> *own* identity provider and the registry works out which deployment that is. The other two
+> use registry tokens, which is the simpler path and the wrong one to copy if you have an
+> identity provider already.
+>
+> ```bash
+> docker compose -f deploy/keycloak/compose.yaml up -d
+> TAR_ROOT_TOKEN=… ./demo/run-workload-identity-demo.sh
+> ```
+>
+> It ends by showing a *curator's* token being refused the same call — because advertising is
+> something a deployment does about itself, and being trusted is not the same as being the
+> thing that ran.
 >
 > **Two records below are known to be modelled wrong and are left unfixed.** RDFCraft is
 > registered as a deployable service producing RDF, and shacl-rust's own CI is bound as a

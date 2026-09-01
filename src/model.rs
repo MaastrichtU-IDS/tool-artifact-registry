@@ -45,6 +45,8 @@ pub struct AgentRef {
     pub email: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -53,7 +55,7 @@ pub struct AgentIn {
     pub iri: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// `person` | `organization`
+    /// `person` | `organization` | `software`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// ORCID or ROR IRI.
@@ -63,6 +65,10 @@ pub struct AgentIn {
     pub email: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    /// Which version of it, when the agent is software. A system that produced something is
+    /// only reproducible if you know which build of it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 /// A typed reference with a label, so a chip can render without a second request
@@ -733,6 +739,27 @@ pub struct ArtifactIn {
     /// Who to ask about it, when that is not the publisher.
     #[serde(default)]
     pub contact: Option<AgentIn>,
+    /// The system that produced this — a service, a pipeline step, a model.
+    ///
+    /// Normally the run answers this: an artifact points at the run that generated it, the run
+    /// at the deployment that performed it, the deployment at its software. That chain is the
+    /// better answer, because the registry built it from the credential rather than from a
+    /// payload. But plenty of artifacts arrive with no run at all — registered by hand, or
+    /// exported from something that will never advertise one — and for those the chain has no
+    /// first link and "what made this" had no answer at all.
+    ///
+    /// A *claim by the caller*, unlike `Artifact::attributed_to`, which the registry writes
+    /// from the presenting credential and no payload can influence. Both are kept; only one is
+    /// evidence.
+    #[serde(default)]
+    pub produced_by: Option<AgentIn>,
+    /// The person or agent on whose behalf it was produced.
+    ///
+    /// Distinct from `creators`, which is authorship in the sense that survives into a
+    /// citation. This is who was at the keyboard, or which account an agent acted under: the
+    /// operational question, asked when something needs explaining rather than crediting.
+    #[serde(default)]
+    pub produced_by_user: Option<AgentIn>,
     #[serde(default)]
     pub modified: Option<String>,
     /// The artifact's own version string, distinct from the version *series* it belongs to.
@@ -812,6 +839,12 @@ pub struct Artifact {
     /// by the caller — this is what makes attribution trustworthy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attributed_to: Option<String>,
+    /// The system the caller says produced this, and the person or agent it acted for. Claims,
+    /// unlike `attributed_to` — see `ArtifactIn::produced_by`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub produced_by: Option<AgentRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub produced_by_user: Option<AgentRef>,
     pub distributions: Vec<Distribution>,
     /// Every content identifier this artifact's distributions carry. Read-only: it is projected
     /// from the distributions on the way out and never accepted on the way in, because a caller

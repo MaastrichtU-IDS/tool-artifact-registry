@@ -25,6 +25,7 @@ const ROOT: &str = "test-root-token-0123456789";
 
 struct Harness {
     app: axum::Router,
+    state: Arc<AppState>,
 }
 
 async fn harness() -> Harness {
@@ -34,7 +35,7 @@ async fn harness() -> Harness {
     let ops = Ops::open(":memory:").await.unwrap();
     let state = Arc::new(AppState::from_parts(config, store, ops));
     tar::seed::load_vocab(&state).unwrap();
-    Harness { app: tar::app(state.clone()) }
+    Harness { app: tar::app(state.clone()), state }
 }
 
 impl Harness {
@@ -194,4 +195,123 @@ async fn the_retired_topic_branch_no_longer_names_a_vocabulary() {
     for item in current["items"].as_array().unwrap() {
         assert_ne!(item["branch"], "topic-retired", "{item}");
     }
+}
+
+// ------------------------------------------------- who produced an artifact, with no run
+
+#[tokio::test]
+async fn an_artifact_with_no_run_can_still_say_what_made_it_and_for_whom() {
+    // Normally the run answers this — artifact → run → deployment → software — and answers it
+    // better, because the registry built that chain from the credential. An artifact registered
+    // by hand has no run, so the chain has no first link and the question had no answer at all.
+    let h = harness().await;
+    let (status, art) = h
+        .req(
+            "POST",
+            "/api/v1/artifacts",
+            Some(ROOT),
+            Some(json!({
+                "title": "An export from something that will never advertise a run",
+                "produced_by": {
+                    "name": "batch-exporter",
+                    "kind": "software",
+                    "version": "3.2.1",
+                    "homepage": "https://example.org/batch-exporter"
+                },
+                "produced_by_user": {
+                    "name": "A Researcher",
+                    "kind": "person",
+                    "identifier": "https://orcid.org/0000-0002-1825-0097",
+                    "email": "researcher@example.org"
+                }
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{art}");
+    let id = art["id"].as_str().unwrap().to_string();
+
+    let (_, back) = h.req("GET", &format!("/api/v1/artifacts/{id}"), None, None).await;
+    assert_eq!(back["produced_by"]["name"], "batch-exporter", "{back}");
+    assert_eq!(back["produced_by"]["kind"], "software");
+    assert_eq!(back["produced_by"]["version"], "3.2.1", "a system is only reproducible with one");
+    assert_eq!(back["produced_by_user"]["name"], "A Researcher");
+    assert_eq!(back["produced_by_user"]["email"], "researcher@example.org");
+    // An ORCID becomes the agent's own identity, so the same researcher is one node everywhere.
+    assert_eq!(back["produced_by_user"]["iri"], "https://orcid.org/0000-0002-1825-0097");
+
+    // The registry's own attribution is untouched and still single — that is the whole reason
+    // these went on qualified attributions instead of `prov:wasAttributedTo`.
+    assert_eq!(back["attributed_to"], "urn:tar:root", "{back}");
+
+    // The system acted for the person, and PROV says so. Asserted between the *same* two nodes
+    // the attributions point at: building an agent twice mints two IRIs, and the delegation
+    // silently landed on an orphan nobody referenced.
+    let system = back["produced_by"]["iri"].as_str().unwrap();
+    let user = back["produced_by_user"]["iri"].as_str().unwrap();
+    let rows = h
+        .state
+        .store
+        .select(&format!(
+            "PREFIX prov: <http://www.w3.org/ns/prov#>
+             SELECT ?o WHERE {{ GRAPH ?g {{ <{system}> prov:actedOnBehalfOf ?o }} }}"
+        ))
+        .unwrap();
+    let behalf: Vec<String> = rows.rows.iter().filter_map(|r| r.iri("o")).collect();
+    assert_eq!(behalf, vec![user.to_string()], "the delegation must join the two agents");
+
+    // And no orphan agent was minted along the way.
+    let agents = h
+        .state
+        .store
+        .select(
+            "PREFIX prov: <http://www.w3.org/ns/prov#>
+             PREFIX schema: <https://schema.org/>
+             SELECT ?a WHERE { GRAPH ?g { ?a a prov:SoftwareAgent ; schema:name \"batch-exporter\" } }",
+        )
+        .unwrap();
+    assert_eq!(agents.rows.len(), 1, "one system named once, not two");
+}
+
+#[tokio::test]
+async fn a_claim_about_who_produced_something_cannot_displace_the_evidence() {
+    // A caller may say anything about who produced an artifact. What it must never be able to
+    // do is overwrite what the registry knows: which credential presented the record.
+    let h = harness().await;
+    let (status, sw) = h
+        .req("POST", "/api/v1/software", Some(ROOT), Some(json!({"name": "a-service", "kinds": ["service"]})))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    let (status, inst) = h
+        .req("POST", "/api/v1/instances", Some(ROOT), Some(json!({"label": "d", "software": sw["id"]})))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{inst}");
+    let (status, minted) = h
+        .req("POST", &format!("/api/v1/instances/{}/tokens", inst["id"].as_str().unwrap()), Some(ROOT), Some(json!({})))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{minted}");
+    let token = minted["token"].as_str().unwrap().to_string();
+
+    let (status, out) = h
+        .req(
+            "POST",
+            "/api/v1/advertise/produced",
+            Some(&token),
+            Some(json!({
+                "run": {"status": "success", "external_key": "x/1"},
+                "artifacts": [{
+                    "title": "Claims a different producer",
+                    "produced_by": {"name": "somebody else entirely", "kind": "software"}
+                }]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{out}");
+    let iri = out["artifacts"][0].as_str().unwrap();
+    let id = iri.rsplit('/').next().unwrap();
+
+    let (_, back) = h.req("GET", &format!("/api/v1/artifacts/{id}"), None, None).await;
+    // The claim is recorded...
+    assert_eq!(back["produced_by"]["name"], "somebody else entirely", "{back}");
+    // ...and the evidence still says which deployment actually presented it.
+    assert_eq!(back["attributed_to"], inst["iri"], "{back}");
 }

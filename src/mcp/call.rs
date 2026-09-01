@@ -606,7 +606,12 @@ fn list_enumerations() -> Outcome {
                 "admin:*": "everything",
             }
         },
-        "agent_kind": { "field": "publisher.kind, operator.kind, creators[].kind", "values": ["person", "organization"] },
+        "agent_kind": {
+            "field": "publisher.kind, operator.kind, creators[].kind, produced_by.kind, produced_by_user.kind",
+            "note": "`software` is for a program acting on its own account — the thing that produced an \
+                     artifact, as opposed to the people responsible for it.",
+            "values": ["person", "organization", "software"],
+        },
         "lineage_direction": { "field": "direction (get_artifact_lineage)", "values": ["up", "down", "both"] },
         "vocab_branch": {
             "field": "branch (vocab_search)",

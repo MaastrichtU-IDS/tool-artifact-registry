@@ -41,6 +41,22 @@ pub fn access_right(availability: &str) -> Option<String> {
     Some(format!("{}{}", ns::EU_ACCESS_RIGHT, concept))
 }
 
+/// The roles a qualified attribution can carry. Roles are the part PROV expects a domain to
+/// define; the relation and the node type are its own.
+pub const ROLE_PRODUCING_SYSTEM: &str = "https://w3id.org/tar/ns#producingSystem";
+pub const ROLE_PRODUCING_USER: &str = "https://w3id.org/tar/ns#producingUser";
+
+/// The agent behind one role's qualified attribution.
+fn attributed_agent(ctx: &Ctx, p: &Props, role: &str) -> Option<AgentRef> {
+    for key in p.node_keys(ns::PROV, "qualifiedAttribution") {
+        let Some(a) = p.nested_for(&key) else { continue };
+        if a.iri(ns::PROV, "hadRole").as_deref() == Some(role) {
+            return ctx.opt_agent_ref(a.iri(ns::PROV, "agent"));
+        }
+    }
+    None
+}
+
 pub fn artifact_quads(base: &str, iri: &str, input: &ArtifactIn, actor: &str, run_iri: Option<&str>) -> Vec<Quad> {
     let mut quads = Vec::new();
     let mut n = Node::local(iri);
@@ -62,6 +78,48 @@ pub fn artifact_quads(base: &str, iri: &str, input: &ArtifactIn, actor: &str, ru
     n.opt_link(ns::PROV, "wasRevisionOf", &input.was_revision_of);
     // Audit 2026-08-30: dct:identifier replaces tar:externalKey for the producer's own key.
     n.opt_text(ns::DCT, "identifier", &input.external_key);
+    // Who produced it, when the run chain cannot say.
+    //
+    // `prov:wasAttributedTo` would be the obvious predicate and is the wrong one to reuse: the
+    // registry already writes it with the credential that presented the record, and reads it
+    // back as a single value. Adding caller-supplied agents there would leave the one
+    // attribution nobody can forge indistinguishable from the ones anybody can.
+    //
+    // PROV's answer to several attributions is `prov:qualifiedAttribution` — an Attribution node
+    // carrying the agent and the role it played. So the trustworthy statement keeps the plain
+    // predicate, the claims get qualified ones, and a reader can tell which is which by shape
+    // rather than by convention.
+    // Each agent is built exactly once and its IRI reused. `agent_quads` *mints* an IRI for an
+    // agent that carries no identifier of its own, so calling it twice for the same input
+    // produces two different nodes — which is how the delegation below first came to be written
+    // onto an orphan agent that nothing referenced and no query could reach.
+    let mut produced: Vec<(&str, String)> = Vec::new();
+    for (agent, role) in [
+        (&input.produced_by, ROLE_PRODUCING_SYSTEM),
+        (&input.produced_by_user, ROLE_PRODUCING_USER),
+    ] {
+        let Some(a) = agent else { continue };
+        let (Some(agent_iri), agent_body) = agent_quads(base, a) else { continue };
+        quads.extend(agent_body);
+        // The role's own local name, so the node reads `…artifact/01a…#producingSystem`. Split
+        // on the fragment as well as the path: these role IRIs end in `…/ns#producingSystem`,
+        // and splitting on `/` alone left the namespace segment glued to the front.
+        let local = role.rsplit(['#', '/']).next().unwrap_or(role);
+        let mut attribution = Node::local(&format!("{iri}#{local}"));
+        attribution.a(&format!("{}Attribution", ns::PROV));
+        attribution.link(ns::PROV, "agent", &agent_iri);
+        attribution.link(ns::PROV, "hadRole", role);
+        n.child(ns::PROV, "qualifiedAttribution", attribution);
+        produced.push((role, agent_iri));
+    }
+    // A system acting for a person is a delegation, and PROV has the word for it. Written only
+    // when both are given, because that is the only case in which the relation is asserted.
+    let find = |role: &str| produced.iter().find(|(r, _)| *r == role).map(|(_, i)| i.clone());
+    if let (Some(system), Some(user)) = (find(ROLE_PRODUCING_SYSTEM), find(ROLE_PRODUCING_USER)) {
+        let mut d = Node::local(&system);
+        d.link(ns::PROV, "actedOnBehalfOf", &user);
+        quads.extend(d.finish());
+    }
     if let Some(r) = run_iri {
         n.link(ns::PROV, "wasGeneratedBy", r);
     }
@@ -254,6 +312,8 @@ pub fn artifact_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Artifact {
         temporal_start: p.str(ns::TAR, "temporalStart"),
         temporal_end: p.str(ns::TAR, "temporalEnd"),
         attributed_to: p.iri(ns::PROV, "wasAttributedTo"),
+        produced_by: attributed_agent(ctx, p, ROLE_PRODUCING_SYSTEM),
+        produced_by_user: attributed_agent(ctx, p, ROLE_PRODUCING_USER),
         availability: overall_availability(&distributions),
         // Projected from the distributions rather than stored on the artifact. The digest is a
         // fact about bytes and an artifact may have several sets of them (the same graph as

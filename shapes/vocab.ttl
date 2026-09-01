@@ -10,6 +10,7 @@
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix owl:  <http://www.w3.org/2002/07/owl#> .
 @prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
 @prefix dct:  <http://purl.org/dc/terms/> .
 
 # --- EDAM data types -------------------------------------------------------
@@ -223,6 +224,14 @@ tar:instanceKey a rdf:Property ;
 tar:registrationClient a rdf:Property ;
     rdfs:label "registration client" ;
     rdfs:comment "An OIDC client id allowed to register deployments of this software for itself. Deliberately not tar:oidcClientId, which on an Instance means the credential *is* that deployment: being a thing and being allowed to create it are different permissions." .
+
+tar:producingSystem a prov:Role ;
+    rdfs:label "producing system" ;
+    rdfs:comment "The role of the software agent a caller says produced an artifact. Carried on a prov:Attribution rather than by a bare prov:wasAttributedTo, because the registry writes that one itself from the presenting credential and reads it back as a single value — a caller-supplied agent there would make the one attribution nobody can forge indistinguishable from the ones anybody can. Normally the run answers this question and answers it better; this is for artifacts that have no run." .
+
+tar:producingUser a prov:Role ;
+    rdfs:label "producing user" ;
+    rdfs:comment "The role of the person or agent on whose behalf an artifact was produced. Distinct from dct:creator, which is authorship in the sense that survives into a citation: this is who was at the keyboard, or which account an agent acted under, and it is asked when something needs explaining rather than crediting." .
 
 tar:apiFormat a rdf:Property ;
     rdfs:label "api format" ;

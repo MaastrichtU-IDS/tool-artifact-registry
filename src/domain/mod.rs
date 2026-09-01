@@ -146,6 +146,8 @@ SELECT ?t ?label ?def WHERE {{
             Some("person".to_string())
         } else if props.has_type(&format!("{}Organization", ns::SCHEMA)) {
             Some("organization".to_string())
+        } else if props.has_type(&format!("{}SoftwareAgent", ns::PROV)) {
+            Some("software".to_string())
         } else {
             None
         };
@@ -155,6 +157,7 @@ SELECT ?t ?label ?def WHERE {{
             identifier: props.iri(ns::SCHEMA, "identifier").or_else(|| props.str(ns::SCHEMA, "identifier")),
             email: props.str(ns::SCHEMA, "email"),
             homepage: props.iri(ns::SCHEMA, "url"),
+            version: props.str(ns::SCHEMA, "softwareVersion"),
             iri: iri.to_string(),
         }
     }
@@ -245,6 +248,13 @@ fn agent_body(n: &mut Node, a: &AgentIn) {
         Some("organization") => {
             n.a(&format!("{}Organization", ns::SCHEMA));
         }
+        // A piece of software acting on its own account — a pipeline step, a service, a model.
+        // PROV distinguishes this from a person because the questions differ: you ask a person
+        // why, and a system what version.
+        Some("software") => {
+            n.a(&format!("{}SoftwareAgent", ns::PROV));
+            n.a(&format!("{}SoftwareApplication", ns::SCHEMA));
+        }
         _ => {
             n.a(&format!("{}Agent", ns::PROV));
         }
@@ -254,6 +264,7 @@ fn agent_body(n: &mut Node, a: &AgentIn) {
     n.opt_link(ns::SCHEMA, "identifier", &a.identifier);
     n.opt_text(ns::SCHEMA, "email", &a.email);
     n.opt_link(ns::SCHEMA, "url", &a.homepage);
+    n.opt_text(ns::SCHEMA, "softwareVersion", &a.version);
 }
 
 /// `xsd:dateTime` for "30 days ago", used by the runs/30d signals.

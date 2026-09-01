@@ -45,7 +45,11 @@ impl OxigraphStore {
 /// Predicates whose objects are sub-resources of the subject rather than records in their own
 /// right (see `GraphStore::describe`). `dct:publisher` is deliberately absent: an Agent is its
 /// own record, shared between many.
-const OWNED_SUBRESOURCE_PREDICATES: [&str; 6] = [
+const OWNED_SUBRESOURCE_PREDICATES: [&str; 7] = [
+    // An Attribution node says which agent played which role for *this* record. It is a
+    // sub-resource in the same sense as a distribution: it exists only to qualify this subject
+    // and is meaningless apart from it.
+    "http://www.w3.org/ns/prov#qualifiedAttribution",
     "http://www.w3.org/ns/dcat#distribution",
     // An API description node carries dct:conformsTo and a title *about this record's API*.
     // Without this the triples exist but never come back with the record, because the node's

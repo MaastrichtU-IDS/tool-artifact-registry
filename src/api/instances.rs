@@ -227,6 +227,7 @@ pub fn instance_in_from(i: &Instance) -> InstanceIn {
             identifier: a.identifier.clone(),
             email: a.email.clone(),
             homepage: a.homepage.clone(),
+            version: a.version.clone(),
         }),
         availability: i.availability.clone(),
         jurisdiction: i.jurisdiction.clone(),

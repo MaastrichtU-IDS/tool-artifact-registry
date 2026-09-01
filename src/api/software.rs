@@ -460,6 +460,7 @@ fn agent_in(a: &crate::model::AgentRef) -> crate::model::AgentIn {
         identifier: a.identifier.clone(),
         email: a.email.clone(),
         homepage: a.homepage.clone(),
+        version: a.version.clone(),
     }
 }
 

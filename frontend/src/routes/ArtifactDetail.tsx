@@ -146,6 +146,30 @@ export default function ArtifactDetail() {
                   <dd>{a.publisher.name ?? a.publisher.iri}</dd>
                 </>
               )}
+              {a.produced_by && (
+                <>
+                  <dt title="What the caller says made this. The run, where there is one, is the better answer — the registry builds that from the credential.">
+                    Produced by
+                  </dt>
+                  <dd>
+                    {a.produced_by.name ?? a.produced_by.iri}
+                    {a.produced_by.version && <span className="muted"> {a.produced_by.version}</span>}
+                  </dd>
+                </>
+              )}
+              {a.produced_by_user && (
+                <>
+                  <dt title="Who it was produced for or by — the operational question, not authorship.">
+                    On behalf of
+                  </dt>
+                  <dd>
+                    {a.produced_by_user.name ?? a.produced_by_user.iri}
+                    {a.produced_by_user.email && (
+                      <> · <a href={`mailto:${a.produced_by_user.email}`}>{a.produced_by_user.email}</a></>
+                    )}
+                  </dd>
+                </>
+              )}
               {a.external_key && (
                 <>
                   <dt>External key</dt>

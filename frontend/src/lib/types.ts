@@ -25,6 +25,8 @@ export interface AgentRef {
   identifier?: string
   email?: string
   homepage?: string
+  /** Which build of it, when the agent is software. */
+  version?: string
 }
 
 export interface Capability {
@@ -246,6 +248,10 @@ export interface Artifact {
   keywords: string[]
   issued?: string
   publisher?: AgentRef
+  /** What the caller says produced this, and who for. Claims — unlike the registry's own
+   *  attribution, which it writes from the presenting credential and no payload can influence. */
+  produced_by?: AgentRef
+  produced_by_user?: AgentRef
   distributions: Distribution[]
   availability: Availability
   was_derived_from: string[]

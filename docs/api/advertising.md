@@ -139,6 +139,51 @@ depend on the registry at all.
 predates the registry, or arrived from outside it. Same body shape as one element of
 `artifacts`, same vocabulary rule.
 
+### Saying what made it
+
+Where there *is* a run, the registry already knows: an artifact points at the run that generated
+it, the run at the deployment that performed it, the deployment at its software. That chain is
+the better answer, because the registry built it from the credential rather than from anything a
+caller typed.
+
+With no run, that chain has no first link, so two optional fields carry the answer instead:
+
+```json
+{
+  "title": "Nightly cohort export",
+  "produced_by": {
+    "name": "cohort-exporter", "kind": "software", "version": "2.4.0",
+    "homepage": "https://example.org/cohort-exporter"
+  },
+  "produced_by_user": {
+    "name": "A Researcher", "kind": "person",
+    "identifier": "https://orcid.org/0000-0002-1825-0097",
+    "email": "researcher@example.org"
+  }
+}
+```
+
+`produced_by_user` is deliberately not `creators`. Creators are authorship, the kind that
+survives into a citation. This is the operational question — who was at the keyboard, or which
+account an agent acted under — asked when something needs explaining rather than crediting. An
+artifact can reasonably have both, and they can name different people.
+
+Give an `identifier` where one exists. An ORCID or a ROR becomes the agent's own identity rather
+than a node this registry minted, so the same person is the same node in every registry that
+federates with this one.
+
+**These are claims, and the difference matters.** `attributed_to` on the record is written by
+the registry from the credential that presented it, and no payload can influence it. `produced_by`
+is whatever the caller said. Both are kept, because both are useful; only one is evidence. A
+record can perfectly well say it was produced by one system while the attribution shows it
+arrived from another, and that discrepancy is a fact worth being able to see.
+
+In RDF these are `prov:qualifiedAttribution` nodes carrying `prov:agent` and a `prov:hadRole` of
+`tar:producingSystem` or `tar:producingUser`, with `prov:actedOnBehalfOf` between them when both
+are given. They are qualified rather than plain `prov:wasAttributedTo` for exactly the reason
+above: that predicate is the registry's own, and a caller-supplied agent sitting beside it would
+make the one attribution nobody can forge indistinguishable from the ones anybody can.
+
 ## OpenLineage
 
 Airflow, dbt, Spark and anything else that already emits [OpenLineage] can post its native

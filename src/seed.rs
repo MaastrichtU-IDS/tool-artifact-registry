@@ -439,6 +439,7 @@ pub async fn seed_ids_examples(state: &Arc<AppState>, with_runs: bool) -> Result
         identifier: Some("https://ror.org/02jz4aj89".into()),
         email: None,
         homepage: Some("https://www.maastrichtuniversity.nl/ids".into()),
+        version: None,
     };
 
     let mut created_software = Vec::new();

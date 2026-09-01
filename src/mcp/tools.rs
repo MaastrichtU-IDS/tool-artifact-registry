@@ -220,9 +220,13 @@ fn agent_schema(what: &str) -> Value {
         "properties": {
             "iri": s("ORCID, ROR or other persistent identifier IRI."),
             "name": s("Display name, when no identifier is known."),
-            "kind": s_enum("person or organization.", &["person", "organization"]),
+            "kind": s_enum(
+                "person, organization, or software when the agent is a program acting on its own account.",
+                &["person", "organization", "software"],
+            ),
             "email": s("Contact email, only if the repository publishes one."),
             "homepage": s("URL."),
+            "version": s("Which build, when `kind` is software. A system is only reproducible if you know which version of it ran."),
         },
         "additionalProperties": false,
     })
@@ -282,6 +286,16 @@ fn artifact_schema(with_iri: bool) -> Value {
         "issued": s("ISO 8601 date or datetime the artifact was issued."),
         "publisher": agent_schema("Who published it."),
         "creators": json!({ "type": "array", "items": agent_schema("Who made it."), "description": "Creators, distinct from the publisher." }),
+        "produced_by": agent_schema(
+            "The system that produced this artifact — set `kind` to software. Only worth sending when \
+             there is no run: an advertised run already says which deployment produced the artifact, \
+             and the registry takes that from your credential rather than from this field, so it is \
+             the better answer where it exists.",
+        ),
+        "produced_by_user": agent_schema(
+            "The person or account this was produced for or by. Distinct from `creators`, which is \
+             authorship for a citation; this is the operational question of who was responsible.",
+        ),
         "was_derived_from": arr_s("IRIs of artifacts this one was derived from. Foreign IRIs from other registries are welcome — that is how cross-registry lineage forms."),
         "distributions": json!({ "type": "array", "items": distribution_schema(), "description": "Concrete ways to get the bytes." }),
     });

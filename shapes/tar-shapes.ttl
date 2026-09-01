@@ -69,6 +69,16 @@ tar:ApiDocShape a sh:NodeShape ;
     sh:property [ sh:path dct:title ; sh:maxCount 1 ; sh:datatype xsd:string ;
                   sh:message "an API description has at most one title" ] .
 
+# A qualified attribution: PROV's way of recording several attributions with different roles,
+# used here because the plain prov:wasAttributedTo is the registry's own and must stay
+# single-valued and unforgeable.
+tar:AttributionShape a sh:NodeShape ;
+    sh:targetClass prov:Attribution ;
+    sh:property [ sh:path prov:agent ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+                  sh:message "an attribution names exactly one agent" ] ;
+    sh:property [ sh:path prov:hadRole ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ;
+                  sh:message "an attribution says which role the agent played" ] .
+
 tar:ReleaseShape a sh:NodeShape ;
     sh:targetClass tar:Release ;
     sh:property [ sh:path schema:softwareVersion ; sh:minCount 1 ; sh:maxCount 1 ;

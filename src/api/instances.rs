@@ -290,6 +290,35 @@ pub async fn patch(
     }
     let ctx = Ctx::new(&state).await?;
     let current = dom::load_instance(&ctx, &iri)?;
+
+    // A self-registered deployment owns its own record, and nobody else may edit it here.
+    //
+    // Not a policy so much as an admission of what is already true: the deployment re-states
+    // these fields on every announcement, so a curator's edit survives only until the next one
+    // and then vanishes with no error and no trace. Offering an edit that will be silently
+    // undone is worse than refusing it. The credential that registered the record is the one
+    // that may change it, through `PUT /api/v1/instances/self`.
+    //
+    // A curator is not powerless — the remedies are the ones that actually work: withdraw the
+    // record, or revoke what lets the deployment speak (the key, or the client id in the
+    // software's `registration_clients`). Editing the description of a deployment that is
+    // misbehaving was never the fix.
+    //
+    // Below the API there is no such rule: someone with the store itself can write anything.
+    // That is the break-glass path, deliberately out of band and deliberately not an endpoint —
+    // the SPARQL surface is read-only, so nothing here can be talked into doing it.
+    if let Some(owner) = current.self_registered_by.as_deref() {
+        if principal.instance_iri.as_deref() != Some(iri.as_str()) {
+            return Err(AppError::forbidden(format!(
+                "this deployment maintains its own record — it was registered by {owner}, and \
+                 re-states these fields every time it announces itself, so an edit made here \
+                 would be overwritten without warning. The deployment changes them at \
+                 PUT /api/v1/instances/self. To stop it, withdraw the record or revoke the \
+                 credential it registered with."
+            )));
+        }
+    }
+
     let merged = merge_json(
         serde_json::to_value(instance_in_from(&current)).map_err(|e| AppError::internal(e.to_string()))?,
         body,

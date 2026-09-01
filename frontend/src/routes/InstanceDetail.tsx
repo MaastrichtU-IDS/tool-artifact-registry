@@ -30,6 +30,21 @@ export default function InstanceDetail() {
     <>
       {i.tombstoned && <Tombstone what="deployment record" />}
       {foreign && <ForeignNotice homeIri={i.iri} />}
+      {/* Said out loud, because a missing Edit button otherwise reads as something broken
+          rather than as a record that belongs to somebody else. */}
+      {i.self_registered_by && !foreign && (
+        <div className="banner info">
+          <p style={{ marginTop: 0 }}>
+            <strong>This deployment maintains its own record.</strong> It registered itself and
+            re-states these fields every time it announces itself, so an edit made here would be
+            overwritten without warning — the registry refuses one rather than accepting it.
+          </p>
+          <p style={{ marginBottom: 0 }}>
+            To change it, change what the deployment announces. To stop it, withdraw the record
+            or revoke the credential it registered with.
+          </p>
+        </div>
+      )}
       {i.outdated && (
         <div className="banner warn">
           <h3>Running an older release</h3>
@@ -45,7 +60,13 @@ export default function InstanceDetail() {
               <div className="inline">
                 <HealthDot health={i.health} />
                 <OriginChip origin={i.origin} />
-                {mayManage && !foreign && <Link className="chip" to={`/instances/${i.id}/edit`}>Edit</Link>}
+                {/* A self-registered deployment re-states these fields every time it announces
+                    itself, so an edit here lasts until the next announcement and then vanishes.
+                    The API refuses it; offering the button anyway would only send someone to a
+                    form that fails on save. */}
+                {mayManage && !foreign && !i.self_registered_by && (
+                  <Link className="chip" to={`/instances/${i.id}/edit`}>Edit</Link>
+                )}
                 {mayManage && !foreign && <Link className="chip" to={`/instances/${i.id}/tokens`}>Credentials</Link>}
                 {mayManage && !foreign && <Link className="chip" to={`/instances/${i.id}/subscriptions`}>Subscriptions</Link>}
               </div>
@@ -217,7 +238,9 @@ export default function InstanceDetail() {
               <p className="hint" style={{ marginTop: 0 }}>
                 No workload identity is bound. This deployment can only advertise with a
                 registry API token.{' '}
-                {mayManage && <Link to={`/instances/${i.id}/edit`}>Bind an OIDC client →</Link>}
+                {mayManage && !i.self_registered_by && (
+                  <Link to={`/instances/${i.id}/edit`}>Bind an OIDC client →</Link>
+                )}
               </p>
             )}
             {mayManage && (

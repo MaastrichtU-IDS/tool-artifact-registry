@@ -2882,3 +2882,175 @@ async fn a_version_series_stops_claiming_to_be_a_vocabulary_concept() {
         .unwrap();
     assert_eq!(label.rows.len(), 1, "the series keeps its label");
 }
+
+#[tokio::test]
+async fn an_oidc_client_a_software_authorises_can_register_itself_and_then_advertise() {
+    // The workload-identity path end to end, with no registry token in it. This had no test at
+    // all, and did not work: a fresh record was written with the issuer but deliberately without
+    // the client id — a combination the shapes refuse — so an authorised client got a 422 about
+    // a field it had never sent.
+    let h = harness_with_oidc(true).await;
+    let (status, sw) = h
+        .post(
+            "/api/v1/software",
+            ROOT,
+            json!({
+                "name": "ontoexplorer",
+                "kinds": ["service"],
+                "registration_clients": ["ontoexplorer-prod"],
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    let software_id = sw["id"].as_str().unwrap().to_string();
+
+    // A client_credentials token: a client id, no roles, and no `sid` — a machine, not a person.
+    let token = jwt(json!({
+        "iss": ISSUER, "aud": BASE, "exp": exp(),
+        "sub": "service-account-ontoexplorer-prod", "azp": "ontoexplorer-prod",
+    }));
+
+    // Before registering it is nobody's deployment, but the software has vouched for it.
+    let (status, who, _) = h.req("GET", "/api/v1/whoami", Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "{who}");
+    assert_eq!(who["credential"], "oidc-workload");
+    assert!(who["instance"].is_null(), "{who}");
+    assert_eq!(who["may_register_deployments_of"], format!("{BASE}/software/{software_id}"));
+
+    let (status, first, _) = h
+        .req(
+            "PUT",
+            "/api/v1/instances/self",
+            Some(&token),
+            Some(json!({
+                "label": "OntoExplorer on prod",
+                "instance_key": "prod",
+                "endpoint_url": "https://onto.example.org",
+                "health_endpoint": "https://onto.example.org/healthz",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let iri = first["iri"].as_str().unwrap().to_string();
+    assert_eq!(first["software"], format!("{BASE}/software/{software_id}"));
+    // The shared credential is not written onto the record: every deployment of this software
+    // presents the same one, so binding it here would make the next one authenticate as this.
+    assert!(first["oidc_client_id"].is_null(), "{first}");
+    assert!(first["oidc_issuer"].is_null(), "{first}");
+
+    // Announcing again finds the same record rather than making a second.
+    let (status, again, _) = h
+        .req(
+            "PUT",
+            "/api/v1/instances/self",
+            Some(&token),
+            Some(json!({"instance_key": "prod", "availability": "restricted"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["iri"], iri);
+    assert_eq!(again["label"], "OntoExplorer on prod", "the rest of the record survives");
+
+    // And the same token can now advertise, because registering granted the advertise scopes.
+    let (status, out, _) = h
+        .req(
+            "POST",
+            "/api/v1/advertise/produced",
+            Some(&token),
+            Some(json!({
+                "run": {"status": "success", "external_key": "kc/1"},
+                "artifacts": [{"title": "Ingested ontology"}]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{out}");
+
+    // The run is attributed to the deployment the credential registered — never to the payload.
+    let run = out["run"].as_str().unwrap();
+    let (_, run_rec) = h.get(&format!("/api/v1/runs/{}", run.rsplit('/').next().unwrap())).await;
+    assert_eq!(run_rec["instance"], iri, "{run_rec}");
+}
+
+#[tokio::test]
+async fn an_oidc_client_no_software_vouches_for_cannot_register_itself() {
+    let h = harness_with_oidc(true).await;
+    let (status, sw) = h.post("/api/v1/software", ROOT, json!({"name": "ontoexplorer"})).await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+
+    let token = jwt(json!({
+        "iss": ISSUER, "aud": BASE, "exp": exp(),
+        "sub": "service-account-stranger", "azp": "stranger",
+    }));
+    let (status, body, _) = h
+        .req("PUT", "/api/v1/instances/self", Some(&token), Some(json!({"label": "uninvited"})))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    // The refusal names every way an operator could legitimately allow it.
+    let detail = body["detail"].as_str().unwrap();
+    assert!(detail.contains("registration_clients"), "{detail}");
+    assert!(detail.contains("stranger"), "the message names the client id to add: {detail}");
+}
+
+#[tokio::test]
+async fn one_credential_registering_two_deployments_will_not_guess_which_one_ran() {
+    // A credential shared by several deployments is bound to the deployment it registered — but
+    // only while there is exactly one. An announcement carries `instance_key` and says which; an
+    // advertisement carries no such field, so with two there is no honest answer to "which
+    // deployment did this run", and attributing it to whichever the query returned first would
+    // put someone else's run on a record that never made it.
+    let h = harness_with_oidc(true).await;
+    let (_, sw) = h
+        .post(
+            "/api/v1/software",
+            ROOT,
+            json!({"name": "ontoexplorer", "kinds": ["service"],
+                   "registration_clients": ["ontoexplorer-prod"]}),
+        )
+        .await;
+    let software_id = sw["id"].as_str().unwrap().to_string();
+    let token = jwt(json!({
+        "iss": ISSUER, "aud": BASE, "exp": exp(),
+        "sub": "service-account-ontoexplorer-prod", "azp": "ontoexplorer-prod",
+    }));
+
+    for key in ["eu-west", "eu-central"] {
+        let (status, r, _) = h
+            .req(
+                "PUT",
+                "/api/v1/instances/self",
+                Some(&token),
+                Some(json!({"label": format!("OntoExplorer {key}"), "instance_key": key})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{r}");
+    }
+    let (_, list) = h.get(&format!("/api/v1/instances?software={software_id}")).await;
+    assert_eq!(list["total"], 2, "{list}");
+
+    // Announcing still works — the payload says which deployment it is.
+    let (status, again, _) = h
+        .req(
+            "PUT",
+            "/api/v1/instances/self",
+            Some(&token),
+            Some(json!({"instance_key": "eu-west", "availability": "public"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["label"], "OntoExplorer eu-west");
+
+    // Advertising does not, and is refused rather than attributed to a guess.
+    let (status, out, _) = h
+        .req(
+            "POST",
+            "/api/v1/advertise/produced",
+            Some(&token),
+            Some(json!({"run": {"status": "success"}, "artifacts": [{"title": "Whose run?"}]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
+
+    // And nothing was written under either deployment.
+    let (_, runs) = h.get("/api/v1/runs").await;
+    assert_eq!(runs["total"], 0, "{runs}");
+}

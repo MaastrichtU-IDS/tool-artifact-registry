@@ -319,7 +319,25 @@ pub async fn principal_from_claims(
     }
 
     // Bind to an Instance, if one declares any of the candidate client ids.
-    let bound = find_instance_for_client(state, issuer, &candidates).await?;
+    let mut bound = find_instance_for_client(state, issuer, &candidates).await?;
+
+    // Failing that, the deployment this credential registered for itself.
+    //
+    // A credential authorised through a software's `registration_clients` is shared by every
+    // deployment of that application, so the record deliberately does not name it — writing the
+    // client id there would make the next deployment authenticate as this one. But then nothing
+    // bound the credential to what it had just created: it could register a deployment and was
+    // then refused the advertise call it registered in order to make, with a message about a
+    // missing scope that no amount of configuration would have supplied.
+    //
+    // Resolved only when it is unambiguous. One credential may register several deployments,
+    // told apart by the `instance_key` each announcement carries; an advertisement carries no
+    // such field, so with more than one there is no honest way to say which deployment ran, and
+    // guessing would attribute a run to the wrong one. That case stays unbound and the refusal
+    // says why.
+    if bound.is_none() {
+        bound = find_self_registered_instance(state, &candidates)?;
+    }
 
     if let Some(binding) = bound {
         // A workload: the deployment itself is the principal (spec §8.3).
@@ -336,7 +354,7 @@ pub async fn principal_from_claims(
         return Ok(Principal {
             credential: CredentialKind::OidcWorkload,
             instance_iri: Some(binding.instance_iri),
-            software_iri: None,
+            software_iri: binding.registers_software,
             subject: candidates.first().cloned().unwrap_or(sub),
             display_name: binding.label.or(name),
             scopes,
@@ -398,6 +416,10 @@ pub struct InstanceBinding {
     pub instance_iri: String,
     pub label: Option<String>,
     pub allowed_scopes: Vec<String>,
+    /// Set only when the binding was *inferred* from a deployment this credential registered,
+    /// rather than declared by a deployment naming this client id. A shared registration
+    /// credential, in other words.
+    pub registers_software: Option<String>,
 }
 
 /// Find the Instance that declared one of these OIDC client ids (`tar:oidcClientId`).
@@ -445,6 +467,8 @@ SELECT ?i ?label ?iss (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scopes) 
                 .str("scopes")
                 .map(|s| s.split_whitespace().map(str::to_string).collect())
                 .unwrap_or_default(),
+            // Declared by the deployment itself, so not shared.
+            registers_software: None,
         }));
     }
     Ok(None)
@@ -524,4 +548,56 @@ SELECT ?s ?iss WHERE {{
         }
     }
     Ok(None)
+}
+
+/// The deployment a credential registered for itself, when there is exactly one.
+///
+/// See the call site for why ambiguity is left unresolved rather than guessed at.
+pub fn find_self_registered_instance(
+    state: &Arc<AppState>,
+    candidates: &[String],
+) -> AppResult<Option<InstanceBinding>> {
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let values = candidates
+        .iter()
+        .map(|c| format!("\"{}\"", c.replace('\\', "\\\\").replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let q = format!(
+        r#"{prefixes}
+SELECT ?i ?label ?sw (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scopes) WHERE {{
+  GRAPH <{g}> {{
+    VALUES ?sub {{ {values} }}
+    ?i tar:selfRegisteredBy ?sub .
+    OPTIONAL {{ ?i rdfs:label ?label }}
+    OPTIONAL {{ ?i tar:instanceOf ?sw }}
+    OPTIONAL {{ ?i tar:allowedScope ?scope }}
+  }}
+  FILTER NOT EXISTS {{ GRAPH ?tg {{ ?i tar:tombstoned true }} }}
+}} GROUP BY ?i ?label ?sw"#,
+        prefixes = ns::PREFIXES,
+        g = ns::G_LOCAL,
+    );
+    let rows = state.store.select(&q).map_err(AppError::from)?;
+    // More than one is the ambiguous case: bind to nothing rather than to an arbitrary one.
+    if rows.rows.len() != 1 {
+        return Ok(None);
+    }
+    let row = &rows.rows[0];
+    let Some(iri) = row.iri("i") else { return Ok(None) };
+    Ok(Some(InstanceBinding {
+        instance_iri: iri,
+        label: row.str("label"),
+        allowed_scopes: row
+            .str("scopes")
+            .map(|s| s.split_whitespace().map(str::to_string).collect())
+            .unwrap_or_default(),
+        // The software this credential demonstrably registers deployments of. Carried so that
+        // `announce_self` can tell this apart from a credential that *is* one deployment: a
+        // shared one must keep honouring `instance_key`, or the second deployment to announce
+        // silently overwrites the first.
+        registers_software: row.iri("sw"),
+    }))
 }

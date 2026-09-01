@@ -379,10 +379,23 @@ pub async fn announce_self(
     // by the credential plus the name it calls itself. Look for the record it made last time
     // before deciding this is a first announcement.
     let self_key = input.instance_key.clone().unwrap_or_else(|| principal.subject.clone());
-    let existing = principal
-        .instance_iri
-        .clone()
-        .or_else(|| find_self_registered(&state, &principal.subject, &self_key));
+    // Which record this announcement is about.
+    //
+    // For a credential that *is* one deployment, that deployment — it has no key to give and
+    // none to honour. For a shared registration credential the `instance_key` decides, and it
+    // must be consulted *first*: the credential is also bound to whichever deployment it
+    // registered, and taking that binding would make the second deployment to announce merge
+    // into the first and relabel it, which is what happened.
+    let shared = principal.software_iri.is_some();
+    let existing = if shared {
+        find_self_registered(&state, &principal.subject, &self_key)
+            .or_else(|| principal.instance_iri.clone().filter(|_| input.instance_key.is_none()))
+    } else {
+        principal
+            .instance_iri
+            .clone()
+            .or_else(|| find_self_registered(&state, &principal.subject, &self_key))
+    };
 
     if let Some(iri) = existing {
         // Known deployment: merge what it said onto what we hold.
@@ -457,8 +470,15 @@ pub async fn announce_self(
         // Only bind the client id when the credential *is* this deployment. A software-scoped
         // credential is shared by every deployment of the application, and writing it here
         // would make the next one authenticate as this one.
+        //
+        // The issuer goes with it, both or neither. Writing the issuer alone produced a record
+        // saying "authenticated somewhere, by nobody in particular", which the shapes reject
+        // outright — so an OIDC client authorised through `registration_clients` could not
+        // register itself at all: it got a 422 about a field it had never sent. The credential
+        // is remembered as `self_registered_by` regardless, which is what finds this record on
+        // the next announcement.
         oidc_client_id: bound_software.is_none().then(|| client_id.clone()),
-        oidc_issuer: principal.issuer.clone(),
+        oidc_issuer: bound_software.is_none().then(|| principal.issuer.clone()).flatten(),
         allowed_scopes: vec!["advertise:produce".into(), "advertise:consume".into()],
         ..Default::default()
     };

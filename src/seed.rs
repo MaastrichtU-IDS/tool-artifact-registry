@@ -623,7 +623,20 @@ fn seed_runs(state: &Arc<AppState>, instances: &[String], base: &str, actor: &st
                             download_url: Some(format!("https://shacl.ids.unimaas.nl/reports/{}{}.ttl", n, i)),
                             media_type: Some("text/turtle".into()),
                             byte_size: Some(2_118_342 + (i as i64) * 1024),
-                            checksum: Some(ChecksumIn { algorithm: "sha256".into(), value: format!("9f2a{n}{i}c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2") }),
+                            // A real digest of a made-up thing, rather than a made-up digest.
+                            // The seed invents these files, so no digest here is the digest of
+                            // anything you can fetch — but it has to be a well-formed sha-256 or
+                            // the registry declines to derive a content identifier from it and
+                            // the seeded catalogue cannot demonstrate the one feature that
+                            // needs several registries to show. Hashing the download URL also
+                            // makes two seeded registries agree, which is the point being made.
+                            checksum: Some(ChecksumIn {
+                                algorithm: "sha256".into(),
+                                value: {
+                                    use sha2::{Digest, Sha256};
+                                    hex::encode(Sha256::digest(format!("https://shacl.ids.unimaas.nl/reports/{n}{i}.ttl").as_bytes()))
+                                },
+                            }),
                             access_protocol: Some("https".into()),
                             auth_method: Some("apikey".into()),
                             availability: Some("restricted".into()),

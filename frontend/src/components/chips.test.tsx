@@ -65,12 +65,12 @@ describe('AvailabilityBadge', () => {
 
 describe('ArtifactTypeChip', () => {
   it('falls back to the last IRI segment when the type has no label', () => {
-    wrap(<ArtifactTypeChip type={{ iri: 'http://edamontology.org/data_2048', source: 'edam' }} />)
+    wrap(<ArtifactTypeChip type={{ iri: 'http://edamontology.org/data_2048', source: 'bundled' }} />)
     expect(screen.getByText('data_2048')).toBeInTheDocument()
   })
 
   it('links to artifacts of that type', () => {
-    wrap(<ArtifactTypeChip type={{ iri: 'http://edamontology.org/data_2048', label: 'Report', source: 'edam' }} />)
+    wrap(<ArtifactTypeChip type={{ iri: 'http://edamontology.org/data_2048', label: 'Report', source: 'bundled' }} />)
     expect(screen.getByRole('link', { name: /Report/ })).toHaveAttribute(
       'href',
       '/artifacts?conforms_to=http%3A%2F%2Fedamontology.org%2Fdata_2048',

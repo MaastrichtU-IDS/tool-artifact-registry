@@ -1,0 +1,75 @@
+# Build the documentation site and publish it to GitHub Pages.
+#
+# Deploy runs only on a push to the default branch of this repository, so a fork that enables
+# Actions builds the site (catching a broken link or a missing chapter) and stops there rather
+# than failing loudly against a Pages environment it does not have.
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Read-only by default; the deploy job asks for exactly what it needs.
+permissions:
+  contents: read
+
+# One deploy at a time. In-progress deploys are allowed to finish, because cancelling one
+# leaves Pages serving a half-published site.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  MDBOOK_VERSION: "0.4.52"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the mdBook binary
+        id: mdbook-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/mdbook
+          key: mdbook-${{ runner.os }}-${{ env.MDBOOK_VERSION }}
+
+      - name: Install mdBook
+        if: steps.mdbook-cache.outputs.cache-hit != 'true'
+        run: cargo install mdbook --locked --version ${{ env.MDBOOK_VERSION }}
+
+      # Both of these touch the Pages environment, so they are skipped anywhere the deploy job
+      # will not run: pull requests, and forks that have Actions enabled but no Pages site.
+      - name: Configure Pages
+        if: github.event_name == 'push' && github.event.repository.fork == false
+        uses: actions/configure-pages@v5
+
+      - name: Build
+        run: mdbook build docs
+
+      - name: Upload artifact
+        if: github.event_name == 'push' && github.event.repository.fork == false
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/book
+
+  deploy:
+    # Only an upstream push: a fork has no Pages environment to deploy to, and a pull request
+    # must not be able to publish.
+    if: github.event_name == 'push' && github.event.repository.fork == false
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -340,3 +340,24 @@ later, follow the `dataviz` guidance rather than inventing a palette.
    alongside the *declared* capability, and how do we render a disagreement between them?
 4. How much of a peer's record do we render before resolution completes — a skeleton, or the
    bare IRI with a *Resolve now* action?
+
+---
+
+## 11. The answers those questions got
+
+Recorded here rather than in the README, so the questions and their answers stay together.
+
+1. **Dark mode in v1?** Yes — tokens in `frontend/src/styles.css`. Cheap now, expensive to
+   retrofit, exactly as the question said.
+2. **Component library?** Hand-rolled, matching the sibling repositories. About 10 KB of CSS
+   and no dependency to track. The extra surface did not turn out to change the answer.
+3. **Observed vs declared capability on the Software page?** Not built. The declared capability
+   is shown; the observed one is one SPARQL query away. It should be added once there is enough
+   run data for a disagreement between the two to mean something — showing a disagreement drawn
+   from three runs would be noise presented as a finding.
+4. **How much of an unresolved peer record to render?** The bare IRI, marked "not resolved yet",
+   plus the origin chip. Never a skeleton: a skeleton promises content that may never arrive.
+
+The liveness-metrics note above went the way it feared — repository *sync* is implemented,
+repository *liveness metrics* are not, and the UI omits those cells. See
+[Limitations](limitations.md).

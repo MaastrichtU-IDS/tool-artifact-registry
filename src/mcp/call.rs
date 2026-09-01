@@ -341,6 +341,7 @@ pub async fn call(
         "get_record" => get_record(state, auth, args).await,
         "find_capable_software" => find_capable(state, auth, args).await,
         "get_artifact_lineage" => lineage(state, auth, args).await,
+        "identify_content" => identify_content(state, auth, args).await,
         "register_software" => register_software(state, auth, args).await,
         "update_software" => update_software(state, auth, args).await,
         "add_release" => add_release(state, auth, args).await,
@@ -556,6 +557,27 @@ fn list_enumerations() -> Outcome {
                 .map(|k| (k.label.to_string(), json!(k.definition)))
                 .collect::<serde_json::Map<_, _>>(),
         },
+        "checksum_algorithms": {
+            "field": "distributions[].checksum.algorithm",
+            "note": "The registry checks a digest is the right length and alphabet for its \
+                     algorithm and refuses one that is not, because a malformed digest cannot \
+                     match anything anywhere. `derives_content_identifier` marks the algorithms \
+                     a stable, cross-registry name for the bytes is built from; the others are \
+                     recorded but yield no name, because a digest with practical collisions \
+                     cannot carry an identity.",
+            "values": crate::domain::content::ALGORITHMS
+                .iter()
+                .map(|a| {
+                    (
+                        a.name.to_string(),
+                        json!({
+                            "hex_characters": a.bytes * 2,
+                            "derives_content_identifier": a.derives,
+                        }),
+                    )
+                })
+                .collect::<serde_json::Map<_, _>>(),
+        },
         "access_protocol": {
             "field": "distributions[].access_protocol",
             "values": ["https", "http", "s3", "sparql", "oci", "ipfs", "file"],
@@ -691,6 +713,7 @@ async fn list_records(state: &Arc<AppState>, auth: Option<&str>, args: &Value) -
                 ("instance", str_arg(args, "instance").map(String::from)),
                 ("software", str_arg(args, "software").map(String::from)),
                 ("run", str_arg(args, "run").map(String::from)),
+                ("content", str_arg(args, "content").map(String::from)),
                 ("registry", str_arg(args, "registry").map(String::from)),
             ]);
             "/api/v1/artifacts".to_string()
@@ -890,6 +913,38 @@ async fn lineage(state: &Arc<AppState>, auth: Option<&str>, args: &Value) -> Out
         return Outcome::err(problem_to_message(status, &body));
     }
     Outcome::ok(format!("Lineage around {id}."), body)
+}
+
+/// The identifier for a set of bytes, and — in the same answer — how to stop asking for it.
+///
+/// A model cannot run `sha256sum`, but the process it is driving usually can, and the tool's
+/// answer carries the one-liner so the next call happens in the pipeline instead of here.
+async fn identify_content(state: &Arc<AppState>, auth: Option<&str>, args: &Value) -> Outcome {
+    let Some(value) = str_arg(args, "value") else {
+        return Outcome::err(
+            "`value` is required: the digest of the bytes, as hexadecimal — what `sha256sum FILE` \
+             prints. This tool will not accept the data itself; nothing here holds bytes."
+                .to_string(),
+        );
+    };
+    let body = json!({ "algorithm": str_arg(args, "algorithm").unwrap_or("sha256"), "value": value });
+    let (status, resp) = rest(state, auth, "POST", "/api/v1/artifacts/identify", Some(body)).await;
+    if !status.is_success() {
+        return Outcome::err(problem_to_message(status, &resp));
+    }
+    let id = resp.get("content_identifier").and_then(Value::as_str).unwrap_or_default().to_string();
+    Outcome::ok(
+        format!(
+            "{id}\n\nThis is a pure function of the digest — every registry derives the same \
+             string from it, so you can compute it yourself and never call this again:\n  \
+             printf 'ni:///sha-256;%s\\n' \"$(openssl dgst -binary -sha256 FILE | openssl base64 -A \
+             | tr '+/' '-_' | tr -d '=')\"\n\nPut the digest in a distribution's `checksum` when you \
+             advertise and the registry records this alongside. To find every record of these \
+             bytes, here and in the peers this registry caches, call `list_records` with \
+             kind=artifact and content set to this identifier."
+        ),
+        resp,
+    )
 }
 
 const SOFTWARE_FIELDS: [&str; 18] = [

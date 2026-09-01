@@ -14,7 +14,8 @@ export interface TypeRef {
   iri: string
   label?: string
   definition?: string
-  source: 'edam' | 'local' | 'external'
+  /** Where the term stands relative to this registry — never which vocabulary it is from. */
+  source: 'bundled' | 'local' | 'external'
 }
 
 export interface AgentRef {

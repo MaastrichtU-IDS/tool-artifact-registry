@@ -143,14 +143,39 @@ pub fn distribution_quads(iri: &str, d: &DistributionIn) -> Vec<Quad> {
         n.link(ns::DCT, "accessRights", &ar);
     }
     n.opt_link(ns::TAR, "accessRequestURL", &d.access_request_url);
+    let mut extra = Vec::new();
     if let Some(c) = &d.checksum {
         let mut cn = Node::blank(ns::G_LOCAL);
         cn.a(&format!("{}Checksum", ns::SPDX));
         cn.link(ns::SPDX, "algorithm", &format!("{}checksumAlgorithm_{}", ns::SPDX, c.algorithm));
         cn.text(ns::SPDX, "checksumValue", &c.value);
         n.child(ns::SPDX, "checksum", cn);
+        // The digest again, as a name instead of a literal. The checksum node already holds the
+        // fact; what it does not give anybody is something to join on — matching two registries'
+        // records through `spdx:checksum/spdx:checksumValue` means agreeing on the spelling of
+        // the algorithm and the case of the hex first. See `super::content` for the form and
+        // why `prov:specializationOf` carries it.
+        if let Ok(id) = super::content::identify(&c.algorithm, &c.value) {
+            n.link(ns::PROV, "specializationOf", &id.iri);
+            // PROV defines specialization between two entities, so the bit-string is typed as
+            // one. Without this the record asserts a PROV relation with nothing on the far end,
+            // and a reasoner or a peer merging our Turtle has to guess what it was given.
+            let mut cid = Node::local(&id.iri);
+            cid.a(TYPE_ENTITY);
+            extra.extend(cid.finish());
+        }
     }
-    n.finish()
+    let mut quads = n.finish();
+    quads.extend(extra);
+    quads
+}
+
+/// The content identifier on a distribution, if it has one.
+///
+/// Read back rather than recomputed, so a record loaded from a peer's graph reports the name that
+/// peer actually wrote — which is the only way to notice if two implementations ever disagree.
+pub fn content_identifier(d: &Props) -> Option<String> {
+    d.iris(ns::PROV, "specializationOf").into_iter().find(|i| i.starts_with("ni:"))
 }
 
 pub fn distribution_from(p: &Props, key: &str) -> Option<Distribution> {
@@ -167,6 +192,7 @@ pub fn distribution_from(p: &Props, key: &str) -> Option<Distribution> {
     });
     Some(Distribution {
         iri: key.to_string(),
+        content_identifier: content_identifier(d),
         title: d.str(ns::DCT, "title"),
         access_url: d.iri(ns::DCAT, "accessURL"),
         download_url: d.iri(ns::DCAT, "downloadURL"),
@@ -229,6 +255,12 @@ pub fn artifact_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Artifact {
         temporal_end: p.str(ns::TAR, "temporalEnd"),
         attributed_to: p.iri(ns::PROV, "wasAttributedTo"),
         availability: overall_availability(&distributions),
+        // Projected from the distributions rather than stored on the artifact. The digest is a
+        // fact about bytes and an artifact may have several sets of them (the same graph as
+        // Turtle and as N-Triples), so an artifact-level triple would have to pick one
+        // arbitrarily or claim the artifact is several things at once. This field is the list a
+        // reader wants; the graph keeps the honest one-per-distribution relation.
+        content_identifiers: distributions.iter().filter_map(|d| d.content_identifier.clone()).collect(),
         distributions,
         was_derived_from: p.iris(ns::PROV, "wasDerivedFrom"),
         was_revision_of: p.iri(ns::PROV, "wasRevisionOf"),

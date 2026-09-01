@@ -672,6 +672,11 @@ pub struct DistributionIn {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Distribution {
     pub iri: String,
+    /// A name for the bytes, derived from the checksum rather than minted here, so two
+    /// registries holding the same file report the same value (`domain::content`). Absent when
+    /// there is no checksum, or none this registry builds a name from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_identifier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -808,6 +813,11 @@ pub struct Artifact {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attributed_to: Option<String>,
     pub distributions: Vec<Distribution>,
+    /// Every content identifier this artifact's distributions carry. Read-only: it is projected
+    /// from the distributions on the way out and never accepted on the way in, because a caller
+    /// who could set it directly could name bytes no distribution here describes.
+    #[serde(default)]
+    pub content_identifiers: Vec<String>,
     /// The strongest availability across distributions; `metadata-only` when there are none.
     pub availability: String,
     pub was_derived_from: Vec<String>,

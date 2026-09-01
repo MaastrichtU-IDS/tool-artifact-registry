@@ -35,7 +35,7 @@ use std::sync::Arc;
 pub struct VocabQuery {
     pub q: Option<String>,
     /// Which kind of concept to offer: `topic` for the fields of science a Software is about,
-    /// `data` for what an artifact can conform to, `keyword`, or `topic-edam` for the subject
+    /// `data` for what an artifact can conform to, `keyword`, or `topic-retired` for the subject
     /// areas kept only so older records still render a label. Omit for all of them at once.
     /// Each value names a class in `BRANCHES`; an unrecognised one returns nothing.
     pub branch: Option<String>,
@@ -134,17 +134,30 @@ pub struct VocabResults {
 /// The public `branch` tokens, and the concept class each one names.
 ///
 /// One table, read in both directions, so the value a caller filters by and the value they get
-/// back in `branch` cannot drift apart. `topic-edam` is the kind kept only so a record that
+/// back in `branch` cannot drift apart. `topic-retired` is the kind kept only so a record that
 /// already cites one of those terms still renders a label: it is searchable on request and is
 /// never what `branch=topic` returns.
+///
+/// It used to be spelled `topic-edam`, which put a vocabulary's name in an API value — the one
+/// place this project does not put one, because the value would then be wrong the moment the
+/// retired vocabulary is a different one. The old spelling is still accepted, since records and
+/// clients in the wild use it, but it is never returned.
 const BRANCHES: [(&str, &str); 4] = [
     ("data", vocabulary::CLASS_ARTIFACT_TYPE),
     ("topic", vocabulary::CLASS_RESEARCH_TOPIC),
     ("keyword", vocabulary::CLASS_ARTIFACT_KEYWORD),
-    ("topic-edam", vocabulary::CLASS_LEGACY_TOPIC),
+    ("topic-retired", vocabulary::CLASS_LEGACY_TOPIC),
 ];
 
+/// Spellings that are still understood but never produced.
+const BRANCH_ALIASES: [(&str, &str); 1] = [("topic-edam", "topic-retired")];
+
 fn class_for_branch(branch: &str) -> Option<&'static str> {
+    let branch = BRANCH_ALIASES
+        .iter()
+        .find(|(old, _)| *old == branch)
+        .map(|(_, now)| *now)
+        .unwrap_or(branch);
     BRANCHES.iter().find(|(b, _)| *b == branch).map(|(_, c)| *c)
 }
 

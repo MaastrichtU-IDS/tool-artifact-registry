@@ -27,7 +27,13 @@ async fn harness() -> Harness {
 }
 
 async fn harness_with_oidc(oidc: bool) -> Harness {
-    let mut config = Config::for_test(BASE);
+    harness_at(BASE, oidc).await
+}
+
+/// A registry whose IRIs are minted under `base`. Two of these, with different bases, is how a
+/// test can tell an identifier that is derived from the content apart from one that is minted.
+async fn harness_at(base: &str, oidc: bool) -> Harness {
+    let mut config = Config::for_test(base);
     config.root_token = Some(ROOT.into());
     if oidc {
         config.oidc.issuer = Some(ISSUER.into());
@@ -233,7 +239,10 @@ async fn advertising_produced_records_lineage_and_is_idempotent() {
                 "download_url": "https://shacl.ids.unimaas.nl/reports/9f2a.ttl",
                 "media_type": "text/turtle",
                 "byte_size": 2118342,
-                "checksum": {"algorithm": "sha256", "value": "9f2acafe"},
+                // A whole digest, not an abbreviation: the registry checks the length and the
+                // alphabet, because a truncated one produces a content identifier that will
+                // never match anything at any registry.
+                "checksum": {"algorithm": "sha256", "value": "9f2acafe1f6c0d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e"},
                 "access_protocol": "https",
                 "auth_method": "apikey",
                 "availability": "restricted",
@@ -1074,7 +1083,9 @@ async fn keyset_pagination_walks_the_whole_list_without_repeats() {
 }
 
 fn urlencoding(s: &str) -> String {
-    s.replace(':', "%3A").replace('/', "%2F")
+    // `;` is here because a content identifier carries one, and enough query parsers still read
+    // a bare `;` as a parameter separator that sending it raw is not worth the risk.
+    s.replace(':', "%3A").replace('/', "%2F").replace(';', "%3B")
 }
 
 #[tokio::test]
@@ -3053,4 +3064,214 @@ async fn one_credential_registering_two_deployments_will_not_guess_which_one_ran
     // And nothing was written under either deployment.
     let (_, runs) = h.get("/api/v1/runs").await;
     assert_eq!(runs["total"], 0, "{runs}");
+}
+
+// ------------------------------------------------------- naming bytes across registries
+//
+// An artifact's IRI is minted here and means nothing anywhere else. Its *content* identifier is
+// derived from the digest the producer supplied, so two registries that never spoke arrive at
+// the same string for the same file. These tests are about that difference: that the derivation
+// really is independent of the registry, that a digest which cannot be a digest is refused
+// before it becomes an identifier nothing will ever match, that an artifact with no bytes is
+// unaffected, and that the identifier is enough to find a peer's record of the same file.
+
+/// The digest of the empty string. Any implementation anywhere produces this for an empty file,
+/// which is what makes it the right constant for a test about agreeing without coordinating.
+const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const EMPTY_CONTENT_ID: &str = "ni:///sha-256;47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU";
+
+fn artifact_with_digest(title: &str, digest: &str) -> Value {
+    json!({
+        "title": title,
+        "distributions": [{
+            "download_url": "https://data.example.org/f.ttl",
+            "media_type": "text/turtle",
+            "checksum": {"algorithm": "sha256", "value": digest}
+        }]
+    })
+}
+
+#[tokio::test]
+async fn two_registries_derive_one_identifier_for_one_digest_while_minting_two_iris() {
+    // Deliberately different base IRIs: everything a registry mints differs between these two,
+    // so anything that comes out the same has to have come from the content and nowhere else.
+    let a = harness_at("https://reg.a.example", false).await;
+    let b = harness_at("https://reg.b.example", false).await;
+
+    let (status, first) = a.post("/api/v1/artifacts", ROOT, artifact_with_digest("the same file, over here", EMPTY_SHA256)).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    // The same bytes described differently, at the other registry: a different title, a
+    // different publisher's registry, and the same digest.
+    let (status, second) = b.post("/api/v1/artifacts", ROOT, artifact_with_digest("the same file, over there", EMPTY_SHA256)).await;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+
+    assert_ne!(first["iri"], second["iri"], "each registry still mints its own record IRI, and they must not collide");
+    let (ia, ib) = (&first["content_identifiers"][0], &second["content_identifiers"][0]);
+    assert_eq!(ia, EMPTY_CONTENT_ID, "the identifier must be the derived form, not something registry-specific: {first}");
+    assert_eq!(
+        ia, ib,
+        "two registries handed one digest must arrive at one identifier, or federation cannot \
+         recognise the same bytes: {ia} vs {ib}"
+    );
+    assert_eq!(first["distributions"][0]["content_identifier"], *ia, "the identifier belongs to the distribution that has the bytes");
+
+    // And the endpoint agrees with the record, at both registries.
+    for (h, who) in [(&a, "a"), (&b, "b")] {
+        let (status, out) = h.get(&format!("/api/v1/artifacts/identify?algorithm=sha256&value={EMPTY_SHA256}")).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        assert_eq!(out["content_identifier"], EMPTY_CONTENT_ID, "registry {who} derived a different name than it stored: {out}");
+    }
+}
+
+#[tokio::test]
+async fn the_identify_endpoint_is_a_pure_function_and_will_not_take_the_bytes() {
+    let h = harness().await;
+
+    // Same input, same answer, twice, with no write in between and none after.
+    let (s1, first) = h.post("/api/v1/artifacts/identify", ROOT, json!({"algorithm": "sha256", "value": EMPTY_SHA256})).await;
+    let (s2, again) = h.post("/api/v1/artifacts/identify", ROOT, json!({"algorithm": "sha256", "value": EMPTY_SHA256})).await;
+    assert_eq!((s1, s2), (StatusCode::OK, StatusCode::OK), "{first} / {again}");
+    assert_eq!(first, again, "a pure function cannot answer two ways");
+    assert_eq!(first["content_identifier"], EMPTY_CONTENT_ID, "{first}");
+
+    // The same digest written the other way names the same bytes.
+    let (_, from_b64) = h.post("/api/v1/artifacts/identify", ROOT, json!({"algorithm": "SHA-256", "value": first["digest_base64url"]})).await;
+    assert_eq!(from_b64["content_identifier"], first["content_identifier"], "hex and base64 are one digest: {from_b64}");
+
+    // No credential is needed beyond what a read needs, and it works without one.
+    let (status, anon, _) = h.req("POST", "/api/v1/artifacts/identify", None, Some(json!({"value": EMPTY_SHA256}))).await;
+    assert_eq!(status, StatusCode::OK, "identifying bytes is a read, not a write: {anon}");
+    assert_eq!(anon["content_identifier"], EMPTY_CONTENT_ID);
+
+    // Nothing was created by any of that.
+    let (_, artifacts) = h.get("/api/v1/artifacts").await;
+    assert_eq!(artifacts["total"], 0, "identifying bytes must write nothing: {artifacts}");
+
+    // The answer carries the way to stop calling it, because a producer who is not told will
+    // wire this endpoint into a pipeline that never needed it.
+    let how = &first["how_to_compute"];
+    assert!(how["shell"].as_str().unwrap().contains("sha256"), "the response must carry the one-liner: {how}");
+    assert!(how["python"].is_string() && how["javascript"].is_string(), "and the same in a couple of languages: {how}");
+
+    // Sending the file instead of the digest is refused, and the refusal says where to hash it.
+    let (status, refused) = h.post("/api/v1/artifacts/identify", ROOT, json!({"bytes": "aGVsbG8="})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["detail"].as_str().unwrap().contains("sha256sum"),
+        "refusing the bytes is only useful if it says what to send instead: {refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_digest_that_cannot_be_a_digest_is_refused_and_the_form_is_told_which_input() {
+    let h = harness().await;
+
+    // Right alphabet, wrong length: the classic truncated paste, and the one that would
+    // otherwise produce an identifier that silently matches nothing at any registry.
+    let (status, body) = h.post("/api/v1/artifacts", ROOT, artifact_with_digest("truncated", "e3b0c44298fc1c14")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let report = body["report"].as_str().expect("a rejected write reports as SHACL, like every other one");
+    assert!(
+        report.contains("distributions[0].checksum.value"),
+        "the report has to name the input that carried it, or the edit form highlights nothing: {report}"
+    );
+    assert!(
+        body["detail"].as_str().unwrap().contains("64 hexadecimal"),
+        "the refusal must say how long a sha-256 digest is: {body}"
+    );
+
+    // The endpoint refuses the same value, with the same diagnosis and something to act on.
+    let (status, out) = h.post("/api/v1/artifacts/identify", ROOT, json!({"algorithm": "sha256", "value": "zzzz"})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{out}");
+    assert_eq!(out["expected_hex_characters"], 64, "{out}");
+
+    // An algorithm nobody can build an identity on is not an error on a record — the digest is
+    // recorded, and simply yields no name.
+    let (status, weak) = h
+        .post(
+            "/api/v1/artifacts",
+            ROOT,
+            json!({"title": "an old record", "distributions": [{
+                "download_url": "https://data.example.org/legacy.zip",
+                "checksum": {"algorithm": "md5", "value": "d41d8cd98f00b204e9800998ecf8427e"}
+            }]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "a weak digest is still a fact worth recording: {weak}");
+    assert!(weak["content_identifiers"].as_array().unwrap().is_empty(), "but it must not become a name: {weak}");
+    assert_eq!(weak["distributions"][0]["checksum"]["algorithm"], "md5", "the digest itself is kept: {weak}");
+}
+
+#[tokio::test]
+async fn an_artifact_whose_bytes_nobody_can_fetch_needs_no_content_identifier() {
+    let h = harness().await;
+
+    // The metadata-only case: findable, described, provably not retrievable, and with no digest
+    // because there is nothing to have hashed. It must be as acceptable as it was before.
+    let (status, body) = h
+        .post(
+            "/api/v1/artifacts",
+            ROOT,
+            json!({
+                "title": "Cohort extract held at the hospital",
+                "distributions": [{"access_url": "https://ids.unimaas.nl/request", "availability": "metadata-only"}]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["availability"], "metadata-only");
+    assert!(body["content_identifiers"].as_array().unwrap().is_empty(), "no bytes, no name: {body}");
+    assert!(body["distributions"][0]["content_identifier"].is_null(), "{body}");
+
+    // So does an artifact with no distribution at all.
+    let (status, bare) = h.post("/api/v1/artifacts", ROOT, json!({"title": "Described, nowhere to be had"})).await;
+    assert_eq!(status, StatusCode::CREATED, "{bare}");
+    assert!(bare["content_identifiers"].as_array().unwrap().is_empty(), "{bare}");
+
+    // And the listing still returns them; nothing about this feature narrows what is findable.
+    let (_, all) = h.get("/api/v1/artifacts").await;
+    assert_eq!(all["total"], 2, "{all}");
+}
+
+#[tokio::test]
+async fn one_registry_finds_a_peers_record_of_the_same_bytes_without_merging_the_two() {
+    let a = spawn_registry("A", "shacl-manager").await;
+    let b = spawn_registry("B", "shacl-manager").await;
+    peer_with(&a, &b).await;
+
+    // B describes the file. A describes the same file, in its own words.
+    let (status, theirs) = b.h.post("/api/v1/artifacts", ROOT, artifact_with_digest("validation report, as B calls it", EMPTY_SHA256)).await;
+    assert_eq!(status, StatusCode::CREATED, "{theirs}");
+    let (status, mine) = a.h.post("/api/v1/artifacts", ROOT, artifact_with_digest("validation report, as A calls it", EMPTY_SHA256)).await;
+    assert_eq!(status, StatusCode::CREATED, "{mine}");
+
+    // A caches B's record the way it caches any foreign IRI: by dereferencing it into B's own
+    // read-only graph. The identifier has to survive that round trip through Turtle, or the
+    // cached copy is unrecognisable for exactly the thing it was cached to be recognised by.
+    let theirs_iri = theirs["iri"].as_str().unwrap().to_string();
+    let (status, resolved) = a.h.get(&format!("/api/v1/resolve?iri={}", urlencoding(&theirs_iri))).await;
+    assert_eq!(status, StatusCode::OK, "{resolved}");
+    assert!(resolved["graph"].as_str().unwrap().starts_with("urn:tar:peer:"), "{resolved}");
+
+    // One filter, both registries' records, found by the bytes rather than by any IRI either
+    // of them minted.
+    let (status, found) = a.h.get(&format!("/api/v1/artifacts?content={}", urlencoding(EMPTY_CONTENT_ID))).await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    let titles: Vec<&str> = found["items"].as_array().unwrap().iter().map(|i| i["title"].as_str().unwrap()).collect();
+    assert_eq!(found["total"], 2, "the local record and the peer's must both match: {found}");
+    assert!(titles.contains(&"validation report, as A calls it") && titles.contains(&"validation report, as B calls it"), "{titles:?}");
+
+    // Two records, not one. Which registry is authoritative for what is a question this does
+    // not answer, and must not answer as a side effect of a filter.
+    let origins: Vec<&str> = found["items"].as_array().unwrap().iter().map(|i| i["origin"]["kind"].as_str().unwrap()).collect();
+    assert!(origins.contains(&"local") && origins.contains(&"peer"), "each match keeps its own origin: {origins:?}");
+    assert_ne!(found["items"][0]["iri"], found["items"][1]["iri"], "nothing is merged: {found}");
+
+    // The bare digest works too, which is what a producer has just after running sha256sum.
+    let (_, by_digest) = a.h.get(&format!("/api/v1/artifacts?content={EMPTY_SHA256}")).await;
+    assert_eq!(by_digest["total"], 2, "a digest names the same bytes as the identifier built from it: {by_digest}");
+
+    // A value that names no bytes matches nothing, rather than falling back to everything.
+    let (_, nonsense) = a.h.get("/api/v1/artifacts?content=not-a-digest").await;
+    assert_eq!(nonsense["total"], 0, "an unusable filter must not read as 'no filter': {nonsense}");
 }

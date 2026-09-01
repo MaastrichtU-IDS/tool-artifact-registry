@@ -15,7 +15,7 @@ const software: Software = {
   license: 'https://spdx.org/licenses/Apache-2.0',
   kind: 'service',
   kinds: ['service'],
-  topics: [{ iri: 'http://edamontology.org/topic_3071', label: 'Data management', source: 'edam' }],
+  topics: [{ iri: 'http://edamontology.org/topic_3071', label: 'Data management', source: 'bundled' }],
   keywords: ['shacl'],
   screenshots: [],
   api_docs: [],
@@ -25,7 +25,7 @@ const software: Software = {
   capability: {
     iri: 'https://reg.test/capability/1',
     declared_at: 'software',
-    consumes: [{ iri: 'http://edamontology.org/data_2600', label: 'RDF graph', source: 'edam' }],
+    consumes: [{ iri: 'http://edamontology.org/data_2600', label: 'RDF graph', source: 'bundled' }],
     produces: [{ iri: 'https://reg.test/type/shacl-validation-report', label: 'SHACL validation report', source: 'local' }],
   },
   instance_count: 2,
@@ -47,7 +47,7 @@ const metadataOnly: Artifact = {
   iri: 'https://reg.test/artifact/01b',
   id: '01b',
   title: 'Masked replica of the MUMC cohort',
-  conforms_to: { iri: 'http://edamontology.org/data_2600', label: 'RDF graph', source: 'edam' },
+  conforms_to: { iri: 'http://edamontology.org/data_2600', label: 'RDF graph', source: 'bundled' },
   keywords: [],
   distributions: [{
     iri: 'https://reg.test/distribution/1',

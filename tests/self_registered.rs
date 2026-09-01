@@ -167,3 +167,31 @@ async fn a_curator_created_record_stays_editable() {
     assert_eq!(status, StatusCode::OK, "{patched}");
     assert_eq!(patched["label"], "renamed by a person");
 }
+
+// ---------------------------------------------------------------- vocabulary branches
+
+#[tokio::test]
+async fn the_retired_topic_branch_no_longer_names_a_vocabulary() {
+    // `topic-edam` put a vocabulary's name in an API value, which is the one place this project
+    // does not put one — the value would be wrong the moment the retired vocabulary is a
+    // different one. Records and clients in the wild still send it, so it keeps working.
+    let h = harness().await;
+
+    let (status, now) = h.req("GET", "/api/v1/vocab/search?branch=topic-retired&q=ontology", None, None).await;
+    assert_eq!(status, StatusCode::OK, "{now}");
+    let (status, old) = h.req("GET", "/api/v1/vocab/search?branch=topic-edam&q=ontology", None, None).await;
+    assert_eq!(status, StatusCode::OK, "{old}");
+    assert_eq!(now["items"], old["items"], "the old spelling means the same thing");
+    assert!(!now["items"].as_array().unwrap().is_empty(), "the fixture needs a retired topic: {now}");
+
+    // But it is never handed back.
+    for item in now["items"].as_array().unwrap() {
+        assert_eq!(item["branch"], "topic-retired", "{item}");
+    }
+
+    // And a retired topic is still not what the current topic branch offers.
+    let (_, current) = h.req("GET", "/api/v1/vocab/search?branch=topic&q=ontology", None, None).await;
+    for item in current["items"].as_array().unwrap() {
+        assert_ne!(item["branch"], "topic-retired", "{item}");
+    }
+}

@@ -1,6 +1,7 @@
 //! Read projections and write builders between the graph and the API model.
 
 pub mod artifact;
+pub mod content;
 pub mod forge;
 pub mod instance;
 pub mod keywords;

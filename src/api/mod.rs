@@ -86,6 +86,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/subscriptions/{sid}/deliveries/ack", post(subscriptions::ack))
         // artifacts and runs
         .route("/artifacts", get(artifacts::list).post(artifacts::create))
+        // Must precede /artifacts/{id}: `identify` is a function, not a record.
+        .route("/artifacts/identify", post(artifacts::identify).get(artifacts::identify_get))
         .route("/artifacts/{id}", get(artifacts::get))
         .route("/artifacts/{id}/lineage", get(artifacts::lineage))
         .route("/runs", get(runs::list))
@@ -184,7 +186,11 @@ async fn require_read_access(
     }
     // Writes carry their own authorisation, and every handler already enforces it. This gate is
     // only about anonymous *reading*.
-    let is_read = matches!(req.method(), &axum::http::Method::GET | &axum::http::Method::HEAD);
+    // A POST that writes nothing and reads nothing is a read whatever the verb says, and gating
+    // it differently from its own GET twin would mean the same pure function needed a credential
+    // under one method and not the other.
+    let is_read = matches!(req.method(), &axum::http::Method::GET | &axum::http::Method::HEAD)
+        || req.uri().path() == artifacts::IDENTIFY_PATH;
     if !is_read || is_always_public(req.uri().path()) {
         return next.run(req).await;
     }

@@ -240,8 +240,24 @@ fn distribution_schema() -> Value {
             "byte_size": int("Size in bytes, if known exactly. Do not estimate."),
             "checksum": json!({
                 "type": "object",
-                "description": "Only if you have actually computed or been given the digest.",
-                "properties": { "algorithm": s("e.g. sha256"), "value": s("Hex digest.") },
+                "description": "Only if you have actually computed or been given the digest. Worth \
+                                giving whenever you can: from it the registry derives a name for the \
+                                bytes that no registry mints and every registry agrees on, which is \
+                                what lets another registry's record for the same file be recognised \
+                                as the same file. The digest is checked for length and alphabet and \
+                                a malformed one is refused, so pass what the tool printed rather \
+                                than a shortened or remembered value.",
+                "properties": {
+                    "algorithm": s_enum(
+                        "The algorithm that produced the digest. sha256, sha384 and sha512 also \
+                         yield a content identifier; the rest are recorded but yield none.",
+                        &["sha256", "sha384", "sha512", "sha224", "sha3-256", "sha3-384", "sha3-512",
+                          "blake2b-256", "blake2b-512", "blake3", "sha1", "md5"],
+                    ),
+                    "value": s("The digest, in hexadecimal — exactly what `sha256sum FILE` or \
+                                `openssl dgst -sha256 FILE` prints. Base64 is accepted too. Never \
+                                invent or truncate one."),
+                },
                 "required": ["algorithm", "value"],
                 "additionalProperties": false,
             }),
@@ -328,7 +344,7 @@ pub fn catalogue() -> Vec<Tool> {
             description:
                 "Search the controlled vocabulary by label, synonym or definition, over the bundled \
                  ontology plus every artifact type this registry has minted locally. Returns IRIs with \
-                 their labels, definitions, source (edam | local | external) and a match score.\n\n\
+                 their labels, definitions, source (bundled | local | external) and a match score.\n\n\
                  THIS IS THE ONLY LEGITIMATE SOURCE OF AN ONTOLOGY IRI. Call it before every write that \
                  takes a topic or an artifact type, and use the IRI it returns verbatim. If nothing \
                  matches, the answer is either to omit the field or to mint a local type with \
@@ -447,9 +463,11 @@ pub fn catalogue() -> Vec<Tool> {
                 "Paginated, filtered listing of one record kind. Use the filters rather than fetching \
                  everything: `software` filters by licence, publisher, topic, keyword, kind and by \
                  what its capability produces or consumes; `instance` by software, release, operator and \
-                 health; `artifact` by type, licence, availability, and the instance, software or run \
-                 involved; `run` by instance, software and status; `release` lists the releases of one \
-                 software and requires `software`.\n\n\
+                 health; `artifact` by type, licence, availability, `content` (the identifier from \
+                 `identify_content`, or the bare digest, which finds every record of exactly those \
+                 bytes including peers\' cached ones), and the instance, software or run \
+                 involved; `run` by instance, software and status; `release` lists the releases \
+                 of one software and requires `software`.\n\n\
                  Paginate with `cursor`, which each response returns as `next_cursor` when more remain."
                     .into(),
             schema: obj(
@@ -460,6 +478,12 @@ pub fn catalogue() -> Vec<Tool> {
                     "instance": s("Instance id or IRI."),
                     "release": s("Release id or IRI."),
                     "run": s("Run id or IRI."),
+                    "content": s("Artifacts only. Find records of one exact set of bytes: the \
+                                  identifier `identify_content` returns, or the bare digest itself. \
+                                  Spans this registry and the peer records it caches, so this is \
+                                  how you discover that somebody else already describes the same \
+                                  file. Nothing is merged — two descriptions of one file come back \
+                                  as two records, each saying where it came from."),
                     "conforms_to": s("Artifact type IRI, for kind=artifact. Must come from `vocab_search`."),
                     "topic": s("Topic IRI, for kind=software. Must come from `vocab_search` (branch=topic)."),
                     "produces": s("Artifact type IRI the software's capability emits."),
@@ -545,6 +569,37 @@ pub fn catalogue() -> Vec<Tool> {
             idempotent: true,
         },
         // --------------------------------------------------------------- write
+        Tool {
+            name: "identify_content",
+            title: "Name a set of bytes by its digest",
+            description:
+                "Turn a digest into the identifier this registry derives for those bytes. Every \
+                 record here has an identifier this registry minted and no other registry can \
+                 guess; a file additionally has one that *nobody* mints, computed from its digest, \
+                 so two registries handed the same file arrive at the same string with no \
+                 coordination. That is what makes it possible to tell that a peer's record and a \
+                 local one describe the same data.\n\n\
+                 It is a pure function: same digest, same answer, forever, and nothing about this \
+                 registry goes into it. So this tool is a convenience and not the source of truth \
+                 — compute it in the pipeline instead and you owe this registry no availability:\n\n\
+                 \x20 printf 'ni:///sha-256;%s\\n' \"$(openssl dgst -binary -sha256 FILE | openssl \
+                 base64 -A | tr '+/' '-_' | tr -d '=')\"\n\n\
+                 Send the digest, never the data — this registry holds no bytes and this tool will \
+                 refuse them. Then pass the identifier to `list_records` (kind=artifact, `content`) \
+                 to find every record of those bytes, here and in the peers this registry caches."
+                    .into(),
+            schema: obj(
+                json!({
+                    "value": s("The digest, in hexadecimal — what `sha256sum FILE` prints. Base64 \
+                                is accepted. Not the file, and not a digest you assembled."),
+                    "algorithm": s_enum("Which algorithm produced it. Default sha256.", &["sha256", "sha384", "sha512"]),
+                }),
+                &["value"],
+            ),
+            write: false,
+            gate: Gate::Read,
+            idempotent: true,
+        },
         Tool {
             name: "register_software",
             title: "Register a piece of software",

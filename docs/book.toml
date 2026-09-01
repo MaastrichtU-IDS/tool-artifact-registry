@@ -1,0 +1,29 @@
+[book]
+title = "Tool Artifact Registry"
+description = "A registry of software, the deployments that run it, the runs they perform, and the data artifacts those runs consume and produce."
+authors = ["Tool Artifact Registry contributors"]
+language = "en"
+# The chapters live beside the design record and the handoff rather than under a `src/`
+# subdirectory, so that every path this repository already links to — `docs/mcp.md`,
+# `docs/specs/…` — keeps working on GitHub and in `src/**` doc comments.
+src = "."
+
+[build]
+# Outside `src`, and already ignored by `.gitignore`.
+build-dir = "../target/book"
+create-missing = false
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+# Set `git-repository-url` and `edit-url-template` here once the repository has a canonical
+# remote; a wrong link is worse than no link.
+no-section-label = false
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 20

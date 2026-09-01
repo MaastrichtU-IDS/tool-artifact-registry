@@ -137,7 +137,14 @@ tar:DistributionShape a sh:NodeShape ;
     sh:property [ sh:path dct:accessRights ; sh:nodeKind sh:IRI ; sh:maxCount 1 ;
                   sh:message "dct:accessRights must be a single IRI, normally from the EU access-right authority table" ] ;
     sh:property [ sh:path dcat:byteSize ; sh:datatype xsd:integer ;
-                  sh:message "byte_size must be an integer" ] .
+                  sh:message "byte_size must be an integer" ] ;
+    # The content identifier: a name for the bytes, derived from the checksum by the registry
+    # and never taken from the request. It is here so the shapes describe the whole model, not
+    # to guard a caller — the thing a caller *can* get wrong is the digest, and that is checked
+    # in `src/domain/content.rs` because the rule depends on which algorithm the sibling triple
+    # names, which SHACL Core cannot express.
+    sh:property [ sh:path prov:specializationOf ; sh:nodeKind sh:IRI ; sh:maxCount 1 ;
+                  sh:message "the content identifier must be an IRI derived from the checksum" ] .
 
 # A metadata-only distribution carries no downloadURL at all (spec §6.2). Expressed as its own
 # node shape so the violation carries this message rather than a generic sh:not one.

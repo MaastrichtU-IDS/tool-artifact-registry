@@ -316,17 +316,19 @@ fn field_for(path: &str, focus: &str, hints: &HashMap<String, String>) -> String
     }
 }
 
-/// Everything a write must satisfy before it is committed: the shapes, and the vocabulary rule
-/// the shapes cannot express.
+/// Everything a write must satisfy before it is committed: the shapes, and the two rules the
+/// shapes cannot express — which vocabulary terms exist, and whether a digest is well formed.
 ///
-/// The two are merged into one report rather than checked one after the other, so a write that
-/// is wrong in both ways comes back naming both fields instead of sending the caller round the
-/// loop twice.
+/// All three are merged into one report rather than checked one after the other, so a write that
+/// is wrong in more than one way comes back naming every field instead of sending the caller
+/// round the loop once per mistake.
 ///
 /// `TAR_SHACL_VALIDATE_WRITES=false` downgrades shape violations to warnings, as it always has —
-/// an estate that would rather have a half-described artifact than none. It deliberately does
-/// not reach the vocabulary rule: an unknown type is not a half-described artifact, it is a new
-/// tag minted by accident, and that is the one thing the switch must not turn off.
+/// an estate that would rather have a half-described artifact than none. It deliberately reaches
+/// neither of the other two. An unknown type is not a half-described artifact, it is a new tag
+/// minted by accident; a digest that cannot be a digest is not a half-described artifact either,
+/// it is a false claim about bytes that costs the record the one identity another registry could
+/// have recognised it by. Those are the two things the switch must not turn off.
 pub fn enforce_write(state: &crate::state::AppState, quads: &[Quad]) -> Result<Report, crate::error::AppError> {
     let mut report = state.shapes.validate_quads(quads);
     if !state.config.shacl_validate_writes {
@@ -335,6 +337,11 @@ pub fn enforce_write(state: &crate::state::AppState, quads: &[Quad]) -> Result<R
         }
     }
     report.findings.extend(crate::domain::vocabulary::findings(state, quads));
+    // The other rule a shape cannot state: whether a digest is a digest at all. Unlike the
+    // vocabulary rule it needs nothing from the store — it is a property of the write alone —
+    // but it lands in the same report for the same reason, so a caller who got both an
+    // unknown type and a mistyped digest is told both at once.
+    report.findings.extend(crate::domain::content::findings(quads));
     report.findings.sort_by(|a, b| a.field.cmp(&b.field).then_with(|| a.message.cmp(&b.message)));
     enforce(report, true)
 }

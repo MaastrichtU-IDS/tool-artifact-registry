@@ -405,6 +405,13 @@ pub fn artifact(a: &Artifact) -> String {
         if let Some(c) = &d.checksum {
             out.push_str(&format!("- **Checksum:** {} `{}`\n", c.algorithm, c.value));
         }
+        if let Some(cid) = &d.content_identifier {
+            out.push_str(&format!(
+                "- **Content identifier:** `{cid}` — derived from the checksum above, not minted \
+                 here. Any registry given the same digest derives the same string, so this is how \
+                 to tell that another registry's record describes these same bytes.\n"
+            ));
+        }
         field(&mut out, "Access protocol", d.access_protocol.as_deref());
         field(&mut out, "Authentication", d.auth_method.as_deref());
         field(&mut out, "Availability", Some(&d.availability));
@@ -622,12 +629,12 @@ pub fn site_index(ix: &SiteIndex<'_>) -> String {
     out.push_str(&format!("- [Search]({}/api/v1/search?q=): free-text search across every record type. Add `&federated=true` to ask this registry's peers too.\n", ix.base));
     out.push_str(&format!("- [Software]({}/api/v1/software): the catalogue. Filter by `?kind=`, `?topic=`, `?keyword=`, `?license=`, `?produces=`, `?consumes=`.\n", ix.base));
     out.push_str(&format!("- [Deployments]({}/api/v1/instances): where the software actually runs, with health.\n", ix.base));
-    out.push_str(&format!("- [Artifacts]({}/api/v1/artifacts): the data. Filter by `?conforms_to=`, `?availability=` and `?keyword=`.\n", ix.base));
+    out.push_str(&format!("- [Artifacts]({}/api/v1/artifacts): the data. Filter by `?conforms_to=`, `?availability=`, `?keyword=` and `?content=`.\n", ix.base));
+    out.push_str(&format!("- [Name a set of bytes]({}/api/v1/artifacts/identify?algorithm=sha256&value=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855): turn a digest into the content identifier this registry derives from it. `GET` with `?algorithm=&value=`, or `POST` `{{\"algorithm\":\"sha256\",\"value\":\"…\"}}`. It writes nothing and needs no more credential than a read; the section on naming bytes, at the end of this file, has how to compute the same string without calling it at all.\n", ix.base));
     out.push_str(&format!("- [Runs]({}/api/v1/runs): executions, each linking the artifacts it used and generated.\n", ix.base));
     out.push_str(&format!("- [Capability matchmaking]({}/api/v1/capabilities?produces=): which software can produce or consume a given type of artifact.\n", ix.base));
     out.push_str(&format!("- [Vocabulary search]({}/api/v1/vocab/search?q=&branch=topic): look up a controlled term before citing it. `branch=topic` for research topics, `branch=data` for artifact types. Never guess a term IRI — a write naming one this registry cannot resolve is refused, and the refusal says how to recover.\n", ix.base));
     out.push_str(&format!("- [Artifact types]({}/api/v1/types): what an artifact may say it is. When the search has nothing, POST here — with an `iri` to adopt a term that already has one elsewhere, without to have this registry name it.\n", ix.base));
-    out.push_str(&format!("- [Artifact types]({}/api/v1/types): the types this registry has minted or seen in use.\n", ix.base));
     out.push_str(&format!("- [Artifact keywords]({}/api/v1/keywords): the short list of keywords this registry recognises on artifacts. Use these spellings; anything else is kept as free text and will not match a keyword filter or a subscription written against the list.\n", ix.base));
     if ix.sparql_public {
         out.push_str(&format!("- [SPARQL]({}/sparql?query=): read-only SPARQL 1.1 over everything above, open without credentials. `POST` a query as `application/sparql-query`, or `GET` with `?query=`. Ask for `Accept: application/sparql-results+json`.\n", ix.base));
@@ -656,7 +663,61 @@ pub fn site_index(ix: &SiteIndex<'_>) -> String {
            that belongs to the wrong branch is rejected on write.\n\
          - **Artifact keywords are normalised against the registry's list.** Write `shacl` or \
            `SHACL Shapes` and it is stored as `SHACL`; write something not on the list and it \
-           is kept verbatim, which is fine but will not match a keyword filter.\n",
+           is kept verbatim, which is fine but will not match a keyword filter.\n\
+         - **A hash the registry cannot verify is an assertion, not a proof.** The registry never \
+           holds the bytes. What it does record, and what no caller can set, is which credential \
+           asserted the digest. Two records may claim the same content identifier; the registry \
+           shows both and merges neither.\n",
     );
+
+    out.push_str("\n## Naming a set of bytes\n\n");
+    out.push_str(
+        "Every record here has an identifier this registry minted, and no other registry can \
+         guess it. A file also has an identifier that *nobody* mints: it is computed from the \
+         file's digest, so two registries handed the same file arrive at the same string with no \
+         coordination. That is what makes it possible to notice that a peer's record and a local \
+         one describe the same data.\n\n\
+         The form is [RFC 6920](https://www.rfc-editor.org/rfc/rfc6920): `ni:///<algorithm>;<digest \
+         in base64url, unpadded>`, for example \
+         `ni:///sha-256;47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU`. Compute it yourself — it is \
+         a pure function of the digest and calling a registry to learn it is a dependency you do \
+         not need:\n\n",
+    );
+    out.push_str(
+        "```sh\n\
+         # the identifier, in one line\n\
+         printf 'ni:///sha-256;%s\\n' \\\n\
+         \x20 \"$(openssl dgst -binary -sha256 FILE | openssl base64 -A | tr '+/' '-_' | tr -d '=')\"\n\
+         \n\
+         # just the digest, if that is all you need for the record\n\
+         sha256sum FILE | cut -d' ' -f1\n\
+         ```\n\n",
+    );
+    out.push_str(
+        "```python\n\
+         import hashlib, base64\n\
+         d = hashlib.sha256(open('FILE','rb').read()).digest()\n\
+         print('ni:///sha-256;' + base64.urlsafe_b64encode(d).decode().rstrip('='))\n\
+         ```\n\n",
+    );
+    out.push_str(
+        "```javascript\n\
+         const { createHash } = require('node:crypto'), { readFileSync } = require('node:fs');\n\
+         const d = createHash('sha256').update(readFileSync('FILE')).digest('base64url');\n\
+         console.log(`ni:///sha-256;${d}`);\n\
+         ```\n\n",
+    );
+    out.push_str(&format!(
+        "Send the digest as a distribution's `checksum` when you advertise, and the registry \
+         derives the identifier and records it alongside. To find every record of those bytes, \
+         here and in the peer registries this one caches, ask \
+         `{}/api/v1/artifacts?content=` with either the identifier or the bare digest. Records are \
+         never merged: two descriptions of one file come back as two records, each saying where it \
+         came from.\n\n\
+         Not every artifact has bytes. `availability: metadata-only` means the registry knows the \
+         artifact exists and holds no way to fetch it; those records carry no digest and no \
+         content identifier, and that is correct rather than incomplete.\n",
+        ix.base
+    ));
     out
 }

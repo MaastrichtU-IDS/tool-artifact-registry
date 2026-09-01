@@ -30,6 +30,9 @@ pub struct ArtifactFilter {
     pub instance: Option<String>,
     pub software: Option<String>,
     pub run: Option<String>,
+    /// Bytes, named. Takes the content identifier, or the bare digest a producer has just
+    /// computed. Spans local and peer graphs, which is the whole point of it.
+    pub content: Option<String>,
     pub registry: Option<String>,
     #[serde(flatten)]
     pub paging: Paging,
@@ -88,6 +91,19 @@ fn where_body(base: &str, f: &ArtifactFilter) -> String {
     if let Some(r) = f.run.as_deref().filter(|v| !v.is_empty()) {
         let iri = ids::iri_for(base, Kind::Run, r);
         w.push_str(&format!("\nGRAPH ?g {{ ?s prov:wasGeneratedBy <{iri}> }}"));
+    }
+    if let Some(c) = f.content.as_deref().filter(|v| !v.is_empty()) {
+        // One hop through the distribution, because that is where the identifier honestly sits.
+        // `?g` stays unbound so a peer's cached record matches on the same footing as a local
+        // one — recognising the same bytes across registries is the reason this filter exists,
+        // and binding the graph to <urn:tar:local> would quietly remove it. Nothing is merged:
+        // two records for one file come back as two rows, each with its own origin.
+        match crate::domain::content::parse_query(c) {
+            Some(iri) => w.push_str(&format!("\nGRAPH ?g {{ ?s dcat:distribution/prov:specializationOf <{iri}> }}")),
+            // A value that names no bytes cannot match anything. Answering it with an unfiltered
+            // list would look like "every artifact has this content", which is worse than empty.
+            None => w.push_str("\nFILTER(false)"),
+        }
     }
     match f.registry.as_deref() {
         Some("local") => w.push_str(&format!("\nFILTER(?g = <{}>)", ns::G_LOCAL)),
@@ -176,6 +192,130 @@ pub async fn create(
         .await;
     let ctx = Ctx::new(&state).await?;
     Ok((StatusCode::CREATED, Json(dom::load_artifact(&ctx, &iri)?)))
+}
+
+// ------------------------------------------------------- naming bytes
+
+/// The path `require_read_access` has to treat as a read even though it arrives as a POST.
+pub const IDENTIFY_PATH: &str = "/api/v1/artifacts/identify";
+
+#[derive(Debug, Deserialize, Default)]
+pub struct IdentifyIn {
+    /// The same two fields a distribution's `checksum` carries, so a producer can post exactly
+    /// what it is about to put in the record.
+    #[serde(default)]
+    pub algorithm: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
+    /// Not a parameter — a trap, and a deliberate one. A caller who sends the file expects the
+    /// registry to hash it, and the refusal is the only place that expectation can be corrected
+    /// before it becomes a dependency. See `refuse_bytes`.
+    #[serde(default)]
+    pub bytes: Option<serde_json::Value>,
+    #[serde(default)]
+    pub data: Option<serde_json::Value>,
+}
+
+fn refuse_bytes() -> AppError {
+    AppError::new(StatusCode::UNPROCESSABLE_ENTITY, "bytes-not-accepted", "Send a digest, not the data")
+        .detail(
+            "This registry never holds the bytes of an artifact, and this endpoint will not take \
+             them either: streaming a file here to compute a digest the caller can compute \
+             locally would put a network round trip, a size limit and this registry's \
+             availability between a producer and an identifier that is a pure function of the \
+             file. Hash it where the file already is — `sha256sum FILE` — and send the digest.",
+        )
+}
+
+fn invalid_checksum(algorithm: &str, problem: &crate::domain::content::Problem) -> AppError {
+    use crate::domain::content::Problem;
+    let mut e = AppError::new(StatusCode::UNPROCESSABLE_ENTITY, "invalid-checksum", "Unusable checksum")
+        .detail(problem.message(algorithm))
+        .with("field", serde_json::json!("value"))
+        .with("algorithms", serde_json::json!(crate::domain::content::deriving()));
+    if let Problem::MalformedDigest { expected_hex_chars } = problem {
+        e = e.with("expected_hex_characters", serde_json::json!(expected_hex_chars));
+    }
+    e
+}
+
+/// Everything a producer needs to stop calling this endpoint.
+///
+/// Carried in the response body on purpose. The identifier is a pure function of the digest, so
+/// anyone who can hash a file can compute it offline — but only if they are told how, and a
+/// producer who is never told will wire this endpoint into their pipeline and acquire an
+/// availability dependency on a registry they did not need to talk to at all.
+fn how_to_compute() -> serde_json::Value {
+    serde_json::json!({
+        "summary":
+            "The identifier is a pure function of the algorithm and the digest: the digest in \
+             base64url without padding, after `ni:///<algorithm>;`. Nothing about this registry \
+             goes into it, so you can compute it offline and never call this endpoint again. \
+             This endpoint is a convenience, not the source of truth.",
+        "shell":
+            "printf 'ni:///sha-256;%s\\n' \
+             \"$(openssl dgst -binary -sha256 FILE | openssl base64 -A | tr '+/' '-_' | tr -d '=')\"",
+        "shell_digest_only": "sha256sum FILE | cut -d' ' -f1",
+        "python":
+            "import hashlib, base64\n\
+             d = hashlib.sha256(open('FILE','rb').read()).digest()\n\
+             print('ni:///sha-256;' + base64.urlsafe_b64encode(d).decode().rstrip('='))",
+        "javascript":
+            "const { createHash } = require('node:crypto'), { readFileSync } = require('node:fs');\n\
+             const d = createHash('sha256').update(readFileSync('FILE')).digest('base64url');\n\
+             console.log(`ni:///sha-256;${d}`);",
+        "algorithms": crate::domain::content::deriving(),
+        "specification": "https://www.rfc-editor.org/rfc/rfc6920",
+    })
+}
+
+/// `POST /api/v1/artifacts/identify` — the identifier this registry derives for a digest.
+///
+/// Stateless in the sense that matters: it writes nothing, reads nothing, needs no credential a
+/// read does not need, and two calls with the same input give the same answer forever. It is
+/// deliberately not a lookup — a digest nothing here describes gets an identifier all the same,
+/// because the identifier exists whether or not anybody has advertised those bytes.
+pub async fn identify(
+    State(state): State<Arc<AppState>>,
+    Json(input): Json<IdentifyIn>,
+) -> AppResult<impl IntoResponse> {
+    if input.bytes.is_some() || input.data.is_some() {
+        return Err(refuse_bytes());
+    }
+    identified(&state, input.algorithm.as_deref(), input.value.as_deref())
+}
+
+/// The same function under `GET`, because a pure function of two short strings should be a URL
+/// somebody can paste, bookmark and cache.
+pub async fn identify_get(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<IdentifyIn>,
+) -> AppResult<impl IntoResponse> {
+    identified(&state, q.algorithm.as_deref(), q.value.as_deref())
+}
+
+fn identified(state: &AppState, algorithm: Option<&str>, value: Option<&str>) -> AppResult<axum::response::Response> {
+    let algorithm = algorithm.map(str::trim).filter(|v| !v.is_empty()).unwrap_or("sha256");
+    let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Err(AppError::bad_request(
+            "send the digest as `value`, with the algorithm that produced it as `algorithm` \
+             (default sha256)",
+        ));
+    };
+    let id = crate::domain::content::identify(algorithm, value).map_err(|p| invalid_checksum(algorithm, &p))?;
+    let encoded: String =
+        percent_encoding::utf8_percent_encode(&id.iri, percent_encoding::NON_ALPHANUMERIC).to_string();
+    Ok(Json(serde_json::json!({
+        "content_identifier": id.iri,
+        "algorithm": id.algorithm,
+        "digest_hex": id.hex,
+        "digest_base64url": id.base64url,
+        // Both halves of what a caller does next: look for these bytes here, and look for them
+        // everywhere this registry can reach.
+        "find": format!("{}/api/v1/artifacts?content={}", state.base(), encoded),
+        "how_to_compute": how_to_compute(),
+    }))
+    .into_response())
 }
 
 #[derive(Debug, Deserialize)]

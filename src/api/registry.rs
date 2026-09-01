@@ -33,7 +33,9 @@ pub async fn well_known(State(state): State<Arc<AppState>>) -> AppResult<impl In
         // rather than having to know the convention.
         "llms_txt": format!("{}/llms.txt", cfg.base_iri),
         "record_markdown": "append .md to any record IRI, or send Accept: text/markdown",
-        "capabilities": ["software", "instances", "artifacts", "runs", "capabilities", "federation", "openlineage", "sparql"],
+        // Named so a peer can tell, before it queries, that artifacts here carry a name for
+        // their bytes that it can match against its own.
+        "capabilities": ["software", "instances", "artifacts", "runs", "capabilities", "federation", "openlineage", "sparql", "content-identity"],
         // How a client should authenticate. A peer or a tool reads this to learn whether it
         // needs a registry token or can present an OIDC token it already holds.
         "auth": {

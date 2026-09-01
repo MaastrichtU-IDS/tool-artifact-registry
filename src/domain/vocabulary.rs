@@ -18,7 +18,7 @@
 //! tar:ArtifactType ]` is what SHACL is for, and it was tried before this was written.
 //! `Shapes::validate_quads` hands the engine the candidate record alone, so the class
 //! assertions would have to be read out of the store and injected into that data graph on every
-//! write. Measured on the shipped bundles (2273 classified concepts): validation goes from
+//! write. Measured on the shipped bundles: validation goes from
 //! 1.9 ms to 9.8 ms, and reading the assertions back costs a further 2.8 ms against the 52 µs
 //! the targeted lookup below costs — call it 2 ms a write against 12.6 ms, six and a half times.
 //!

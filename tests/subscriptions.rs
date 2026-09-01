@@ -20,8 +20,9 @@ use std::sync::Arc;
 use tar::config::Config;
 use tar::ops::Ops;
 use tar::state::AppState;
-use tar::store::OxigraphStore;
 use tower::ServiceExt;
+
+mod common;
 
 const BASE: &str = "https://reg.test.example";
 const ROOT: &str = "test-root-token-0123456789";
@@ -36,7 +37,7 @@ struct Harness {
 async fn harness() -> Harness {
     let mut config = Config::for_test(BASE);
     config.root_token = Some(ROOT.into());
-    let store = Arc::new(OxigraphStore::memory().unwrap());
+    let store = common::test_store().await;
     let ops = Ops::open(":memory:").await.unwrap();
     let state = Arc::new(AppState::from_parts(config, store, ops));
     tar::seed::load_vocab(&state).unwrap();

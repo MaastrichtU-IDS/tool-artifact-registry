@@ -9,8 +9,9 @@ use tar::auth::jwt::jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, 
 use tar::config::Config;
 use tar::ops::Ops;
 use tar::state::AppState;
-use tar::store::OxigraphStore;
 use tower::ServiceExt;
+
+mod common;
 
 const BASE: &str = "https://reg.test.example";
 const ROOT: &str = "test-root-token-0123456789";
@@ -40,7 +41,7 @@ async fn harness_at(base: &str, oidc: bool) -> Harness {
         config.oidc.client_id = Some("tar-ui".into());
         config.oidc.audience = Some(BASE.into());
     }
-    let store = Arc::new(OxigraphStore::memory().unwrap());
+    let store = common::test_store().await;
     let ops = Ops::open(":memory:").await.unwrap();
     let mut state = AppState::from_parts(config, store, ops);
     // Pin a signing key instead of fetching JWKS over the network.
@@ -1122,7 +1123,7 @@ async fn harness_with_workload_issuer() -> Harness {
     config.oidc.client_id = Some("tar-ui".into());
     config.oidc.audience = Some(BASE.into());
     config.oidc.workload_issuers = vec![PARTNER_ISSUER.into()];
-    let store = Arc::new(OxigraphStore::memory().unwrap());
+    let store = common::test_store().await;
     let ops = Ops::open(":memory:").await.unwrap();
     let mut state = AppState::from_parts(config, store, ops);
     state.jwt = state.jwt.with_static_key("test-key", Algorithm::HS256, DecodingKey::from_secret(HS_SECRET));
@@ -1236,7 +1237,7 @@ async fn spawn_registry(title: &str, software_name: &str) -> FedNode {
     let mut config = Config::for_test(&base);
     config.root_token = Some(ROOT.into());
     config.title = title.to_string();
-    let store = Arc::new(OxigraphStore::memory().unwrap());
+    let store = common::test_store().await;
     let ops = Ops::open(":memory:").await.unwrap();
     let state = Arc::new(AppState::from_parts(config, store, ops));
     tar::seed::load_vocab(&state).unwrap();
@@ -2416,7 +2417,7 @@ async fn sparql_stays_public_even_when_rest_reads_are_closed() {
     config.root_token = Some(ROOT.into());
     // The operator closed anonymous REST reads but left the query endpoint alone.
     config.public_read = false;
-    let store = Arc::new(OxigraphStore::memory().unwrap());
+    let store = common::test_store().await;
     let ops = Ops::open(":memory:").await.unwrap();
     let state = Arc::new(AppState::from_parts(config, store, ops));
     tar::seed::load_vocab(&state).unwrap();

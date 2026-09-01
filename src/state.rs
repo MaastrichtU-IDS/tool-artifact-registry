@@ -4,7 +4,7 @@ use crate::auth::jwt::JwtVerifier;
 use crate::config::Config;
 use crate::ops::Ops;
 use crate::shacl::Shapes;
-use crate::store::{GraphStore, OxigraphStore};
+use crate::store::GraphStore;
 use std::sync::Arc;
 
 pub struct AppState {
@@ -34,7 +34,7 @@ impl AppState {
         } else {
             format!("{}/ops.db", config.data_dir.trim_end_matches('/'))
         };
-        let store = Arc::new(OxigraphStore::open(&graph_path)?);
+        let store = crate::store::open(config.sparql_backend.as_ref(), &graph_path)?;
         let ops = Ops::open(&ops_path).await?;
         Ok(Arc::new(Self::from_parts(config, store, ops)))
     }

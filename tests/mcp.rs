@@ -17,8 +17,9 @@ use std::sync::Arc;
 use tar::config::Config;
 use tar::ops::Ops;
 use tar::state::AppState;
-use tar::store::OxigraphStore;
 use tower::ServiceExt;
+
+mod common;
 
 const BASE: &str = "https://reg.mcp.test";
 const ROOT: &str = "test-root-token-0123456789";
@@ -45,7 +46,7 @@ async fn harness_with(public_read: bool) -> Harness {
     config.root_token = Some(ROOT.into());
     config.oidc.issuer = Some("https://kc.test/realms/tar".into());
     config.oidc.client_id = Some("tar-ui".into());
-    let store = Arc::new(OxigraphStore::memory().unwrap());
+    let store = common::test_store().await;
     let ops = Ops::open(":memory:").await.unwrap();
     let state = Arc::new(AppState::from_parts(config, store, ops));
     tar::seed::load_vocab(&state).unwrap();

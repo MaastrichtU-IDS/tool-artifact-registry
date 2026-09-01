@@ -3,13 +3,14 @@
 use anyhow::{anyhow, Context, Result};
 use oxigraph::io::{RdfFormat, RdfParser, RdfSerializer};
 use oxigraph::model::{
-    GraphName, GraphNameRef, NamedNode, NamedNodeRef, Quad, NamedOrBlankNode, NamedOrBlankNodeRef, Term, Triple,
+    GraphNameRef, NamedNode, Quad, NamedOrBlankNode, NamedOrBlankNodeRef, Term, Triple,
 };
 use oxigraph::sparql::{QueryResults, SparqlEvaluator};
 use oxigraph::store::Store;
 use std::collections::HashSet;
 use std::path::Path;
 
+use super::queries::is_owned_subresource;
 use super::{Bindings, GraphStore, GraphTx, Row};
 
 pub struct OxigraphStore {
@@ -40,29 +41,6 @@ impl OxigraphStore {
     fn subject_ref(iri: &str) -> Result<NamedNode> {
         NamedNode::new(iri).map_err(|e| anyhow!("bad IRI {iri}: {e}"))
     }
-}
-
-/// Predicates whose objects are sub-resources of the subject rather than records in their own
-/// right (see `GraphStore::describe`). `dct:publisher` is deliberately absent: an Agent is its
-/// own record, shared between many.
-const OWNED_SUBRESOURCE_PREDICATES: [&str; 7] = [
-    // An Attribution node says which agent played which role for *this* record. It is a
-    // sub-resource in the same sense as a distribution: it exists only to qualify this subject
-    // and is meaningless apart from it.
-    "http://www.w3.org/ns/prov#qualifiedAttribution",
-    "http://www.w3.org/ns/dcat#distribution",
-    // An API description node carries dct:conformsTo and a title *about this record's API*.
-    // Without this the triples exist but never come back with the record, because the node's
-    // IRI is the document's own URL rather than something under the registry's base.
-    "http://www.w3.org/ns/dcat#endpointDescription",
-    "https://w3id.org/tar/ns#hasCapability",
-    "https://w3id.org/tar/ns#sync",
-    "http://spdx.org/rdf/terms#checksum",
-    "http://www.w3.org/ns/prov#qualifiedAssociation",
-];
-
-fn is_owned_subresource(predicate: &str) -> bool {
-    OWNED_SUBRESOURCE_PREDICATES.contains(&predicate)
 }
 
 impl GraphStore for OxigraphStore {
@@ -169,54 +147,6 @@ impl GraphStore for OxigraphStore {
         Ok(())
     }
 
-    fn describe(&self, subject: &str) -> Result<Vec<Quad>> {
-        let s = Self::subject_ref(subject)?;
-        let mut out: Vec<Quad> = Vec::new();
-        let mut frontier: Vec<NamedOrBlankNode> = vec![NamedOrBlankNode::NamedNode(s)];
-        let mut seen: HashSet<String> = HashSet::new();
-        while let Some(node) = frontier.pop() {
-            if !seen.insert(node.to_string()) {
-                continue;
-            }
-            for q in self.store.quads_for_pattern(Some(NamedOrBlankNodeRef::from(&node)), None, None, None) {
-                let q = q?;
-                match &q.object {
-                    Term::BlankNode(b) => frontier.push(NamedOrBlankNode::BlankNode(b.clone())),
-                    Term::NamedNode(n) if is_owned_subresource(q.predicate.as_str()) => {
-                        frontier.push(NamedOrBlankNode::NamedNode(n.clone()))
-                    }
-                    _ => {}
-                }
-                out.push(q);
-            }
-        }
-        Ok(out)
-    }
-
-    fn exists(&self, subject: &str) -> Result<bool> {
-        let s = Self::subject_ref(subject)?;
-        Ok(self
-            .store
-            .quads_for_pattern(Some(NamedNodeRef::from(s.as_ref()).into()), None, None, None)
-            .next()
-            .transpose()?
-            .is_some())
-    }
-
-    fn graph_of(&self, subject: &str) -> Result<Option<String>> {
-        let s = Self::subject_ref(subject)?;
-        for q in
-            self.store.quads_for_pattern(Some(NamedNodeRef::from(s.as_ref()).into()), None, None, None)
-        {
-            let q = q?;
-            return Ok(match q.graph_name {
-                GraphName::NamedNode(n) => Some(n.as_str().to_string()),
-                _ => None,
-            });
-        }
-        Ok(None)
-    }
-
     fn drop_graph(&self, graph: &str) -> Result<()> {
         let g = Self::subject_ref(graph)?;
         self.store.remove_named_graph(g.as_ref())?;
@@ -261,7 +191,4 @@ impl GraphStore for OxigraphStore {
         Ok(self.store.len()?.saturating_sub(before))
     }
 
-    fn count(&self) -> Result<usize> {
-        Ok(self.store.len()?)
-    }
 }

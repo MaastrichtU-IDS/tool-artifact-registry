@@ -29,7 +29,89 @@ pub struct Config {
     pub peer_resolve_ttl: Duration,
     pub peer_resolve_timeout: Duration,
     pub federated_search_timeout: Duration,
+    /// An external SPARQL 1.1 endpoint to use *instead of* the embedded store. Absent — the
+    /// default, and what everybody running this today has — means embedded Oxigraph under
+    /// `data_dir`, unchanged.
+    pub sparql_backend: Option<SparqlBackend>,
     pub oidc: OidcConfig,
+}
+
+/// A remote graph store, reached over SPARQL 1.1 Query and Update.
+///
+/// This is a *backend* connection and has nothing to do with `/sparql`, the registry's own
+/// read-only query surface. `/sparql` stays read-only whichever backend is configured.
+#[derive(Clone, Debug)]
+pub struct SparqlBackend {
+    pub query_endpoint: String,
+    /// Many servers split query and update onto separate URLs (Fuseki's `/ds/sparql` and
+    /// `/ds/update`), so this is configured separately and defaults to the query endpoint for
+    /// the servers that do not.
+    pub update_endpoint: String,
+    pub auth: SparqlAuth,
+    pub timeout: Duration,
+}
+
+/// How the registry authenticates to its graph store. Never guessed: a credential is used
+/// only when it is configured, and configuring both forms is an error rather than a silent
+/// preference.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SparqlAuth {
+    #[default]
+    None,
+    Bearer(String),
+    Basic {
+        username: String,
+        password: String,
+    },
+}
+
+impl SparqlBackend {
+    fn from_env(endpoint: String) -> Result<Self> {
+        let bearer = env("TAR_SPARQL_BEARER_TOKEN");
+        let username = env("TAR_SPARQL_USERNAME");
+        let password = env("TAR_SPARQL_PASSWORD");
+        let auth = match (bearer, username, password) {
+            (Some(_), Some(_), _) | (Some(_), _, Some(_)) => bail!(
+                "TAR_SPARQL_BEARER_TOKEN and TAR_SPARQL_USERNAME/TAR_SPARQL_PASSWORD are both set \
+                 — pick one; the registry will not choose a credential for you"
+            ),
+            (Some(t), None, None) => SparqlAuth::Bearer(t),
+            (None, Some(u), Some(p)) => SparqlAuth::Basic { username: u, password: p },
+            (None, Some(_), None) => {
+                bail!("TAR_SPARQL_USERNAME is set without TAR_SPARQL_PASSWORD")
+            }
+            (None, None, Some(_)) => {
+                bail!("TAR_SPARQL_PASSWORD is set without TAR_SPARQL_USERNAME")
+            }
+            (None, None, None) => SparqlAuth::None,
+        };
+        if !(endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
+            bail!("TAR_SPARQL_ENDPOINT must be an http(s) URL, got {endpoint:?}");
+        }
+        let update_endpoint = env("TAR_SPARQL_UPDATE_ENDPOINT").unwrap_or_else(|| endpoint.clone());
+        Ok(Self {
+            query_endpoint: endpoint,
+            update_endpoint,
+            auth,
+            // Generous next to the peer-resolution timeouts: this is the registry's own
+            // storage, and a boot-time bulk load of the bundled vocabularies is one request.
+            timeout: env_duration("TAR_SPARQL_TIMEOUT", "60s")?,
+        })
+    }
+
+    /// What `tar config` and the logs say. Never the credential itself.
+    pub fn describe(&self) -> String {
+        let auth = match &self.auth {
+            SparqlAuth::None => "no credential",
+            SparqlAuth::Bearer(_) => "bearer token",
+            SparqlAuth::Basic { .. } => "basic auth",
+        };
+        if self.update_endpoint == self.query_endpoint {
+            format!("{} ({auth})", self.query_endpoint)
+        } else {
+            format!("query {} / update {} ({auth})", self.query_endpoint, self.update_endpoint)
+        }
+    }
 }
 
 /// Workload and human identity via OIDC (spec §8, workload-identity addendum).
@@ -172,6 +254,10 @@ impl Config {
             peer_resolve_ttl: env_duration("TAR_PEER_RESOLVE_TTL", "24h")?,
             peer_resolve_timeout: env_duration("TAR_PEER_RESOLVE_TIMEOUT", "5s")?,
             federated_search_timeout: env_duration("TAR_FEDERATED_SEARCH_TIMEOUT", "3s")?,
+            // "if user doesn't provide a sparql endpoint, fall back to oxigraph" — so the
+            // absence of one variable is the whole switch, and an existing install changes
+            // nothing.
+            sparql_backend: env("TAR_SPARQL_ENDPOINT").map(SparqlBackend::from_env).transpose()?,
             oidc,
         })
     }
@@ -194,6 +280,7 @@ impl Config {
             peer_resolve_ttl: Duration::from_secs(86400),
             peer_resolve_timeout: Duration::from_secs(5),
             federated_search_timeout: Duration::from_secs(3),
+            sparql_backend: None,
             oidc: OidcConfig { client_claim: "azp".into(), roles_claim: "realm_access.roles".into(), scope_claim: "scope".into(), require_audience: true, ..Default::default() },
         }
     }

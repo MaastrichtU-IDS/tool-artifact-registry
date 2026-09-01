@@ -244,8 +244,33 @@ impl Paging {
     }
 }
 
+/// Escape a string for a SPARQL double-quoted literal (`STRING_LITERAL2`).
+///
+/// This is for the `FILTER` fragments built below out of a caller's cursor or search text; the
+/// remote backend does not use it, because every literal it writes is serialised by Oxigraph's
+/// own N-Triples `Display` (`store::http::insert_data`).
+///
+/// It used to replace a newline with a space and leave `\r`, `\t` and the other control
+/// characters alone. A tab is legal inside `STRING_LITERAL2` so that was survivable; a bare
+/// carriage return is not, so a search box that had picked up a Windows line ending produced a
+/// SPARQL syntax error and a 500 rather than no results. Escaped rather than substituted now,
+/// so the filter searches for what the caller typed.
 pub fn escape_literal(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // The remaining C0 controls have no escape of their own in SPARQL and cannot
+            // appear raw; \uXXXX is the general form.
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// A SPARQL regex-safe, case-insensitive contains filter over several variables.

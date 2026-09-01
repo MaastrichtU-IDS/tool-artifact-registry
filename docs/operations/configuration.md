@@ -21,6 +21,19 @@ variable is a complete install.
 | `TAR_MAX_PAYLOAD_BYTES` | `2MiB` | Accepts `KiB`, `MiB`, `MB` suffixes. Raise it if you import software records with large READMEs. |
 | `TAR_LOG` | `info,tower_http=warn` | Tracing filter, `tracing-subscriber` `EnvFilter` syntax. |
 
+## Graph store
+
+| Variable | Default | |
+|---|---|---|
+| `TAR_SPARQL_ENDPOINT` | — | An external SPARQL 1.1 Query endpoint to use **instead of** the embedded store. Unset, the registry uses embedded Oxigraph under `TAR_DATA_DIR` — which is what every existing install does, and nothing about it changes. |
+| `TAR_SPARQL_UPDATE_ENDPOINT` | the query endpoint | Many servers split query and update onto separate URLs. |
+| `TAR_SPARQL_BEARER_TOKEN` | — | Bearer credential for the endpoint. |
+| `TAR_SPARQL_USERNAME` / `TAR_SPARQL_PASSWORD` | — | HTTP basic credential. Both or neither, and not alongside a bearer token. |
+| `TAR_SPARQL_TIMEOUT` | `60s` | Per request. |
+
+`TAR_DATA_DIR` still holds the SQLite operational database either way; only the graph moves.
+Details, and what atomicity means over HTTP, in [Graph store](graph-store.md).
+
 ## Read access
 
 | Variable | Default | |

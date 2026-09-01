@@ -44,6 +44,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v7", "v4", "serde"] }
 
+[dev-dependencies]
+# Only so the integration suite can create a dataset on a real SPARQL server when
+# `TAR_TEST_SPARQL_ENDPOINT` is set (see `tests/common/mod.rs`). Same version and features as
+# the dependency above, so it costs no extra compilation.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+
 [profile.release]
 opt-level = 2
 strip = true

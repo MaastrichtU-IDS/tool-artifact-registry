@@ -12,6 +12,15 @@ services:
       # TAR_OIDC_ISSUER: https://keycloak.example.org/realms/ids
       # TAR_OIDC_CLIENT_ID: tar-ui
       # TAR_WORKLOAD_ISSUERS: https://token.actions.githubusercontent.com
+      #
+      # Uncomment — together with the `fuseki` service and profile below — to keep the graph in
+      # an external triple store instead of the embedded one. The volume is still needed: the
+      # operational database (tokens, peers, audit, subscriptions) is SQLite either way, and
+      # only the graph moves. See docs/operations/graph-store.md.
+      # TAR_SPARQL_ENDPOINT: http://fuseki:3030/tar/sparql
+      # TAR_SPARQL_UPDATE_ENDPOINT: http://fuseki:3030/tar/update
+      # TAR_SPARQL_USERNAME: admin
+      # TAR_SPARQL_PASSWORD: ${FUSEKI_PASSWORD:-admin}
     ports: ["8080:8080"]
     volumes: ["tar-data:/data"]
     healthcheck:
@@ -21,5 +30,18 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # Off unless asked for: `docker compose --profile external-store up`. The default install is
+  # still one service and one volume.
+  fuseki:
+    image: stain/jena-fuseki
+    profiles: ["external-store"]
+    environment:
+      ADMIN_PASSWORD: ${FUSEKI_PASSWORD:-admin}
+      # Create the dataset on first start, so the registry has somewhere to write.
+      FUSEKI_DATASET_1: tar
+    volumes: ["fuseki-data:/fuseki"]
+    restart: unless-stopped
+
 volumes:
   tar-data:
+  fuseki-data:

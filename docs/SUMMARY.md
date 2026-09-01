@@ -35,6 +35,7 @@
 # Operating a registry
 
 - [Configuration](operations/configuration.md)
+- [Graph store](operations/graph-store.md)
 - [Identity provider setup](operations/identity-provider.md)
 - [Backup and restore](operations/backup.md)
 

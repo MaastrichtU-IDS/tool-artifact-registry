@@ -105,7 +105,7 @@ src/
   domain/       projections between the graph and the JSON API
   mcp/          the hosted Model Context Protocol server
   rdf/          property maps and quad builders
-  store/        GraphStore trait + embedded Oxigraph implementation
+  store/        GraphStore trait, portable SPARQL, embedded Oxigraph and remote-endpoint backends
   ops/          SQLite: tokens, peers, audit, federation, subscriptions, idempotency
   health.rs     background liveness probing of deployment endpoints
   shacl.rs      write validation and sh:ValidationReport generation
@@ -124,6 +124,16 @@ tests/          end-to-end tests against the real router
 ```bash
 cargo test                      # unit, end-to-end, MCP and subscription suites
 cd frontend && npm test         # component, parsing and screen tests
+```
+
+The graph store is a trait with two implementations — embedded Oxigraph, the default, and any
+external SPARQL 1.1 endpoint ([Graph store](docs/operations/graph-store.md)). The *same*
+end-to-end suite runs against either, so the two answering identically is enforced rather than
+asserted. Point it at a real server and it creates a dataset per test:
+
+```bash
+docker run --rm -d --name tar-fuseki -p 3030:3030 -e ADMIN_PASSWORD=admin stain/jena-fuseki
+TAR_TEST_SPARQL_ENDPOINT=http://127.0.0.1:3030 cargo test
 ```
 
 ## Documentation

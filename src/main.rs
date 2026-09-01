@@ -83,6 +83,13 @@ async fn main() -> Result<()> {
             let c = Config::from_env()?;
             println!("base_iri              {}", c.base_iri);
             println!("data_dir              {}", c.data_dir);
+            match &c.sparql_backend {
+                Some(b) => println!("graph store           external SPARQL endpoint — {}", b.describe()),
+                None => println!(
+                    "graph store           embedded oxigraph at {}/graph",
+                    c.data_dir.trim_end_matches('/')
+                ),
+            }
             println!("listen                {}", c.listen);
             println!("public_read           {}", c.public_read);
             println!("sparql_public         {}", c.sparql_public);

@@ -48,16 +48,29 @@ Repository *sync* is — a record can keep named fields in step with its source 
 is missing is the liveness signal the design asked for: stars, forks, last commit. The UI
 degrades by omitting those cells rather than rendering zeros.
 
-## 5. Human sign-in has no token refresh
+## 5. ~~Human sign-in has no token refresh~~ — closed
 
 Sign-in itself is verified against a live identity provider: a browser was driven through
 authorisation code + PKCE, and the `curator` and `admin` roles were confirmed to decide what a
 signed-in person may do — `POST /api/v1/software` succeeds for a curator, `/api/v1/peers` is
 `403` for a curator and `200` for an admin.
 
-What is not covered is **refresh**. The access token is used until it expires and there is no
-silent renewal, so a long editing session ends in a `401` and a re-sign-in. The refresh token is
-deliberately not stored in the browser.
+The gap was **refresh**: the access token was used until it expired with no silent renewal, so a
+long editing session ended in a `401` and a re-sign-in with the form's contents lost. The
+registry now renews twice over — from a timer set from the token's own `exp` claim, ahead of
+expiry, and reactively when a request comes back `401` for the case the timer missed (a laptop
+that slept through it). Concurrent requests that all expire together share one renewal rather
+than each spending the refresh token, which matters once a provider rotates it: the first use
+would otherwise invalidate it for the rest.
+
+The refresh token itself stays exactly where the design note said it should not go: in memory
+only, never `sessionStorage`, `localStorage`, or a cookie. A closed tab or a reload ends the
+renewable session — the access token in `sessionStorage` keeps working until it expires, then
+sign-in is needed again — which is the trade this file has always made, kept rather than
+loosened to get renewal.
+
+A registry API token has no refresh token to renew with, so nothing changes for it: a `401`
+still means sign in again, exactly as before.
 
 ## 6. Federated search is not deduplicated
 

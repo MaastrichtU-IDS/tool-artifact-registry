@@ -120,9 +120,17 @@ Setting up a provider, including the audience mapper that catches everybody out,
 
 ### Token refresh
 
-There is none. The access token is used until it expires and there is no silent renewal, so a
-long editing session ends in a `401` and a re-sign-in. The refresh token is deliberately not
-stored in the browser. See [Limitations](../limitations.md).
+The access token is renewed silently, twice over: from a timer set from its own `exp` claim,
+ahead of expiry, and reactively when a request comes back `401` — the backstop for a timer that
+did not fire on time, such as a laptop that slept through it. Several requests that expire
+together share one renewal, which matters once a provider rotates the refresh token: without
+it, the first renewal would invalidate the token the others are about to present.
+
+**The refresh token is held in memory and nowhere else** — not `sessionStorage`, not
+`localStorage`, not a cookie. It is the long-lived half of the credential, so a closed tab or a
+reload drops it with nothing left behind for the next person on a shared machine to find. The
+access token in `sessionStorage` keeps working until it expires; after that, sign-in is needed
+again. A pasted registry API token has no refresh token, so nothing changes for it.
 
 ## The bootstrap token
 

@@ -121,6 +121,6 @@ software](../api/software.md#credentials-for-a-private-repository).
 
 ## What is not covered
 
-**Token refresh.** The access token is used until it expires and there is no silent renewal, so
-a long editing session ends in a `401` and a re-sign-in. The refresh token is deliberately not
-stored in the browser. See [Limitations](../limitations.md).
+Nothing on the browser sign-in side. Token refresh — once a gap — now renews silently on a
+timer and on a `401`, with the refresh token kept in memory only; see
+[Token refresh](../api/authentication.md#token-refresh).

@@ -39,12 +39,70 @@ export function getAuthToken() {
   return authToken
 }
 
+/**
+ * How to get a fresh access token when the current one has expired.
+ *
+ * Registered by the session layer, which owns the credential; this module only knows that
+ * something can be asked for a new token and that a `401` is when to ask. Returning `null`
+ * means renewal is not possible — no refresh token, a pasted API token, or the provider
+ * refused — and the `401` then stands, exactly as it did before.
+ */
+type TokenRenewer = () => Promise<string | null>
+
+let renewer: TokenRenewer | null = null
+let renewing: Promise<string | null> | null = null
+
+export function setTokenRenewer(fn: TokenRenewer | null) {
+  renewer = fn
+  renewing = null
+}
+
+/**
+ * At most one renewal in flight, whatever else is happening.
+ *
+ * A page that loads six panels at once expires all six requests at once. Without this they
+ * would each present the same refresh token, and with refresh-token rotation — which is what a
+ * provider should be configured for — the first use invalidates it and the other five are
+ * refused, taking a recoverable expiry and turning it into a forced sign-out. They share one
+ * renewal and one answer instead.
+ */
+function renewOnce(): Promise<string | null> {
+  if (!renewer) return Promise.resolve(null)
+  if (!renewing) {
+    renewing = renewer()
+      .catch(() => null)
+      .finally(() => {
+        renewing = null
+      })
+  }
+  return renewing
+}
+
+/**
+ * Send a request, and if it comes back `401`, renew once and send it again.
+ *
+ * The header is rebuilt per attempt rather than captured, so the retry carries the new token
+ * rather than the expired one it was rejected for. Only one retry: a second `401` after a
+ * successful renewal is the server saying no for a reason renewal cannot fix.
+ */
+async function sendWithRenewal(path: string, init: RequestInit, headers: Headers): Promise<Response> {
+  const attempt = () => {
+    const h = new Headers(headers)
+    if (authToken) h.set('authorization', `Bearer ${authToken}`)
+    else h.delete('authorization')
+    return fetch(path, { ...init, headers: h })
+  }
+  const resp = await attempt()
+  if (resp.status !== 401 || !authToken || !renewer) return resp
+  const fresh = await renewOnce()
+  return fresh ? attempt() : resp
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('accept', 'application/json')
   if (init.body) headers.set('content-type', 'application/json')
-  if (authToken) headers.set('authorization', `Bearer ${authToken}`)
-  const resp = await fetch(path, { ...init, headers })
+  const resp = await sendWithRenewal(path, init, headers)
   if (resp.status === 204) return undefined as T
   const text = await resp.text()
   const body = text ? JSON.parse(text) : null
@@ -68,9 +126,7 @@ export function qs(params: Record<string, string | number | boolean | undefined 
 
 /** A response that is not JSON — an API description document, fetched through the registry. */
 async function requestText(path: string): Promise<string> {
-  const headers = new Headers()
-  if (authToken) headers.set('authorization', `Bearer ${authToken}`)
-  const resp = await fetch(`/api/v1${path}`, { headers })
+  const resp = await sendWithRenewal(`/api/v1${path}`, {}, new Headers())
   const text = await resp.text()
   if (!resp.ok) {
     // The error body *is* JSON even when the success body is not.
@@ -222,8 +278,7 @@ async function sparql(query: string, signal?: AbortSignal): Promise<SparqlAnswer
     // Both answers are acceptable; the server picks according to the query form.
     accept: 'application/sparql-results+json, text/turtle;q=0.9',
   })
-  if (authToken) headers.set('authorization', `Bearer ${authToken}`)
-  const resp = await fetch('/sparql', { method: 'POST', headers, body: query, signal })
+  const resp = await sendWithRenewal('/sparql', { method: 'POST', body: query, signal }, headers)
   const text = await resp.text()
   const contentType = resp.headers.get('content-type') ?? ''
 

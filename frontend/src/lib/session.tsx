@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { api, setAuthToken } from './api'
+import { api, getAuthToken, setAuthToken, setTokenRenewer } from './api'
 import type { WellKnown, WhoAmI } from './types'
 
 /**
@@ -16,6 +16,21 @@ import type { WellKnown, WhoAmI } from './types'
  *
  * The token lives in `sessionStorage`: it disappears when the tab closes, and it is never put
  * in a cookie, so nothing here is exposed to CSRF.
+ *
+ * ## Renewal
+ *
+ * An access token is short-lived by design — minutes, at a provider's defaults — and a long
+ * editing session used to end in a `401` and a re-sign-in with the half-filled form lost. The
+ * refresh token returned by the code exchange is now kept and used to renew silently: ahead of
+ * expiry on a timer, and reactively on a `401` for the case where the timer was wrong (a laptop
+ * that slept, a clock that jumped).
+ *
+ * **The refresh token is held in memory and nowhere else.** Not `sessionStorage`, not
+ * `localStorage`, not a cookie. It is the long-lived half of the credential, and a value in a
+ * module variable dies with the tab and never survives a reload, so a closed tab leaves nothing
+ * behind for the next person on a shared machine to find. The cost is that a page reload ends
+ * the renewable session — the access token in `sessionStorage` still works until it expires,
+ * and then sign-in is needed again. That is the trade this file has always made, kept.
  */
 
 const TOKEN_KEY = 'tar.token'
@@ -24,6 +39,15 @@ const ID_TOKEN_KEY = 'tar.id_token'
 const VERIFIER_KEY = 'tar.pkce_verifier'
 const STATE_KEY = 'tar.oidc_state'
 const RETURN_KEY = 'tar.return_to'
+
+/**
+ * The refresh token, in memory only — see the note on renewal above. Deliberately not a React
+ * state value: renewal is triggered from `api.ts` on a `401`, outside any render, and a stale
+ * closure over a state variable would present a spent token.
+ */
+let refreshToken: string | null = null
+/** Cleared alongside it, so a renewal cannot outlive the session that owns it. */
+let renewalTimer: ReturnType<typeof setTimeout> | undefined
 
 /** The provider's OpenID configuration, fetched once per issuer per page load. */
 const discoveries = new Map<string, Promise<OpenIdConfiguration>>()
@@ -100,6 +124,59 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshWho])
 
+  /**
+   * Renew silently, twice over: on a timer set from the token's own expiry, and reactively
+   * from `api.ts` when a request comes back `401`.
+   *
+   * The timer is the one that matters for a person mid-form — it renews before anything
+   * fails, so nothing is interrupted. The `401` path is the backstop for when the timer did
+   * not fire on time: a sleeping laptop does not run timers, and it wakes with an expired
+   * token and a page full of stale panels.
+   */
+  useEffect(() => {
+    const oidc = registry?.auth?.oidc
+    if (!oidc?.issuer || !oidc.client_id) {
+      setTokenRenewer(null)
+      return
+    }
+    const issuer = oidc.issuer
+    const clientId = oidc.client_id
+
+    const schedule = (token: string | null) => {
+      if (renewalTimer !== undefined) clearTimeout(renewalTimer)
+      renewalTimer = undefined
+      const left = token ? secondsUntilExpiry(token) : undefined
+      if (left === undefined) return
+      // A minute of headroom, and never a negative or absurd delay: an already-expired token
+      // renews now, and setTimeout overflows past ~24.8 days.
+      const delay = Math.min(Math.max(left - 60, 0), 86_400) * 1000
+      renewalTimer = setTimeout(() => {
+        void renew()
+      }, delay)
+    }
+
+    const renew = async (): Promise<string | null> => {
+      const fresh = await renewAccessToken(issuer, clientId)
+      if (fresh) {
+        schedule(fresh)
+        return fresh
+      }
+      // Nothing left to renew with. The access token may still be valid for a moment, so the
+      // session is not torn down here; the next 401 is what ends it.
+      if (renewalTimer !== undefined) clearTimeout(renewalTimer)
+      renewalTimer = undefined
+      return null
+    }
+
+    setTokenRenewer(renew)
+    schedule(getAuthToken())
+    return () => {
+      setTokenRenewer(null)
+      if (renewalTimer !== undefined) clearTimeout(renewalTimer)
+      renewalTimer = undefined
+    }
+  }, [registry, who])
+
   const signInWithToken = useCallback(
     async (token: string) => {
       setAuthToken(token)
@@ -146,9 +223,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(() => {
     const oidc = registry?.auth?.oidc
     const idToken = sessionStorage.getItem(ID_TOKEN_KEY)
-    sessionStorage.removeItem(TOKEN_KEY)
-    sessionStorage.removeItem(ID_TOKEN_KEY)
-    setAuthToken(null)
+    forgetToken()
     setWho(undefined)
     // Dropping our copy of the token is not signing out. The provider still holds an SSO
     // session, so the next "Sign in" would come straight back — as the *previous* person,
@@ -200,6 +275,10 @@ export interface OidcTokens {
   accessToken: string
   /** Only used as `id_token_hint` when signing out. */
   idToken?: string
+  /** Kept in memory only, to renew the access token. Absent if the provider issued none. */
+  refreshToken?: string
+  /** Seconds the access token is good for, as the provider reported it. */
+  expiresIn?: number
 }
 
 /**
@@ -270,7 +349,17 @@ async function exchangeCode(
     throw new Error(json.error_description || json.error || `token endpoint returned ${resp.status}`)
   }
   if (!json.access_token) throw new Error('The token response carried no access_token.')
-  return { accessToken: json.access_token as string, idToken: json.id_token as string | undefined }
+  return tokensFrom(json)
+}
+
+/** The shape of a token response, read the same way for the first grant and every renewal. */
+function tokensFrom(json: Record<string, unknown>): OidcTokens {
+  return {
+    accessToken: json.access_token as string,
+    idToken: json.id_token as string | undefined,
+    refreshToken: json.refresh_token as string | undefined,
+    expiresIn: typeof json.expires_in === 'number' ? json.expires_in : undefined,
+  }
 }
 
 export function consumeReturnTo(): string {
@@ -283,6 +372,78 @@ export function storeToken(tokens: OidcTokens) {
   sessionStorage.setItem(TOKEN_KEY, tokens.accessToken)
   if (tokens.idToken) sessionStorage.setItem(ID_TOKEN_KEY, tokens.idToken)
   setAuthToken(tokens.accessToken)
+  // Memory only. A rotating provider returns a new one on every renewal; keeping whatever
+  // came back is what makes the next renewal work.
+  if (tokens.refreshToken !== undefined) refreshToken = tokens.refreshToken
+}
+
+/** Drop every trace of the credential. Called by sign-out and by a renewal that failed. */
+export function forgetToken() {
+  refreshToken = null
+  if (renewalTimer !== undefined) clearTimeout(renewalTimer)
+  renewalTimer = undefined
+  sessionStorage.removeItem(TOKEN_KEY)
+  sessionStorage.removeItem(ID_TOKEN_KEY)
+  setAuthToken(null)
+}
+
+/**
+ * Seconds until the access token expires, read from its own `exp` claim.
+ *
+ * The claim rather than `expires_in`, because `expires_in` is relative to a moment that has
+ * already passed by the time it is read and says nothing after a reload. The payload is only
+ * *read* here, never trusted: the registry verifies the signature, and the worst a wrong answer
+ * does is schedule a renewal at the wrong time, which the `401` path then covers.
+ */
+export function secondsUntilExpiry(accessToken: string): number | undefined {
+  const payload = accessToken.split('.')[1]
+  if (!payload) return undefined
+  try {
+    const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')))
+    if (typeof json.exp !== 'number') return undefined
+    return json.exp - Math.floor(Date.now() / 1000)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Exchange the refresh token for a new access token.
+ *
+ * Returns the new access token, or `null` when renewal is not possible or was refused — a
+ * pasted API token (no refresh token was ever issued), a provider that does not return one, an
+ * expired session. `null` leaves the caller's `401` standing, which is the old behaviour.
+ */
+export async function renewAccessToken(issuer: string, clientId: string): Promise<string | null> {
+  if (!refreshToken) return null
+  let conf: OpenIdConfiguration
+  try {
+    conf = await discover(issuer)
+  } catch {
+    return null
+  }
+  const resp = await fetch(conf.token_endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: clientId,
+      refresh_token: refreshToken,
+    }),
+  }).catch(() => null)
+  if (!resp?.ok) {
+    // The refresh token is spent, revoked or expired. Holding on to it would make every
+    // later renewal a request the provider has already refused.
+    refreshToken = null
+    return null
+  }
+  const json = (await resp.json().catch(() => ({}))) as Record<string, unknown>
+  if (typeof json.access_token !== 'string') {
+    refreshToken = null
+    return null
+  }
+  storeToken(tokensFrom(json))
+  return json.access_token
 }
 
 function randomString(len: number): string {

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { completeOidcSignIn } from './session'
+import {
+  completeOidcSignIn,
+  forgetToken,
+  renewAccessToken,
+  secondsUntilExpiry,
+  storeToken,
+} from './session'
 
 /**
  * The authorisation-code half of sign-in, unit-tested against a stub token endpoint.
@@ -97,5 +103,78 @@ describe('completeOidcSignIn', () => {
     await expect(completeOidcSignIn(ISSUER, 'tar-ui', 'code-5', 'state-abc')).rejects.toThrow(
       'Code not valid',
     )
+  })
+})
+
+/**
+ * Renewal. The property that matters most here is a negative one — the refresh token must not
+ * reach any persistent store — so it is asserted directly rather than inferred.
+ */
+describe('silent renewal', () => {
+  const jwtWithExp = (exp: number) =>
+    `header.${btoa(JSON.stringify({ exp })).replace(/=+$/, '')}.signature`
+
+  it('reads the expiry from the access token rather than trusting a relative number', () => {
+    const now = Math.floor(Date.now() / 1000)
+    expect(secondsUntilExpiry(jwtWithExp(now + 300))).toBeGreaterThan(290)
+    expect(secondsUntilExpiry(jwtWithExp(now + 300))).toBeLessThanOrEqual(300)
+    // An already-expired token reports a negative number rather than nothing, so the caller
+    // can tell "expired" from "cannot tell" and renew immediately.
+    expect(secondsUntilExpiry(jwtWithExp(now - 60))).toBeLessThan(0)
+  })
+
+  it('says nothing rather than guessing when the token carries no readable expiry', () => {
+    // A registry API token is not a JWT at all, and must not throw on the way past.
+    expect(secondsUntilExpiry('tar_abcdef0123456789')).toBeUndefined()
+    expect(secondsUntilExpiry('header.!!!not-base64!!!.sig')).toBeUndefined()
+    expect(secondsUntilExpiry(`header.${btoa('{"sub":"u"}')}.sig`)).toBeUndefined()
+  })
+
+  it('keeps the refresh token out of every persistent store', () => {
+    storeToken({ accessToken: 'at-9', idToken: 'it-9', refreshToken: 'rt-secret', expiresIn: 300 })
+    // The access token and id token are kept, as before.
+    expect(sessionStorage.getItem('tar.token')).toBe('at-9')
+    expect(sessionStorage.getItem('tar.id_token')).toBe('it-9')
+    // The refresh token is the long-lived half, and it is nowhere a later tab could find it.
+    const everywhere = [
+      ...Object.values(sessionStorage),
+      ...Object.values(localStorage),
+      document.cookie,
+    ].join(' ')
+    expect(everywhere).not.toContain('rt-secret')
+  })
+
+  it('renews with the refresh token and keeps the rotated one', async () => {
+    storeToken({ accessToken: 'at-1', refreshToken: 'rt-1' })
+    tokenResponse = { ok: true, status: 200, body: { access_token: 'at-2', refresh_token: 'rt-2' } }
+
+    expect(await renewAccessToken(ISSUER, 'tar-ui')).toBe('at-2')
+    expect(tokenCalls).toHaveLength(1)
+    expect(tokenCalls[0].get('grant_type')).toBe('refresh_token')
+    expect(tokenCalls[0].get('refresh_token')).toBe('rt-1')
+    expect(sessionStorage.getItem('tar.token')).toBe('at-2')
+
+    // The next renewal must present the *rotated* token, or a provider with rotation on
+    // refuses it and the session dies one renewal early.
+    tokenResponse = { ok: true, status: 200, body: { access_token: 'at-3' } }
+    expect(await renewAccessToken(ISSUER, 'tar-ui')).toBe('at-3')
+    expect(tokenCalls[1].get('refresh_token')).toBe('rt-2')
+  })
+
+  it('gives up and forgets a refresh token the provider has refused', async () => {
+    storeToken({ accessToken: 'at-1', refreshToken: 'rt-dead' })
+    tokenResponse = { ok: false, status: 400, body: { error: 'invalid_grant' } }
+
+    expect(await renewAccessToken(ISSUER, 'tar-ui')).toBeNull()
+    expect(tokenCalls).toHaveLength(1)
+    // And does not ask again with the token it already knows is spent.
+    expect(await renewAccessToken(ISSUER, 'tar-ui')).toBeNull()
+    expect(tokenCalls).toHaveLength(1)
+  })
+
+  it('cannot renew a pasted API token, and does not try', async () => {
+    forgetToken()
+    expect(await renewAccessToken(ISSUER, 'tar-ui')).toBeNull()
+    expect(tokenCalls).toHaveLength(0)
   })
 })

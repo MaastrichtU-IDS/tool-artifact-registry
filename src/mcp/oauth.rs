@@ -93,12 +93,8 @@ pub async fn protected_resource_metadata(
     State(state): State<Arc<AppState>>,
     uri: axum::http::Uri,
 ) -> impl IntoResponse {
-    let resource =
-        if uri.path().ends_with("/mcp") { resource_uri(&state) } else { state.base().to_string() };
-    (
-        [(axum::http::header::CACHE_CONTROL, "public, max-age=3600")],
-        Json(metadata_for(&state, &resource)),
-    )
+    let resource = if uri.path().ends_with("/mcp") { resource_uri(&state) } else { state.base().to_string() };
+    ([(axum::http::header::CACHE_CONTROL, "public, max-age=3600")], Json(metadata_for(&state, &resource)))
 }
 
 /// The `WWW-Authenticate` value for a 401 on the MCP endpoint.

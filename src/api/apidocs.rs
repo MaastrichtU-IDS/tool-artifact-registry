@@ -48,9 +48,7 @@ pub struct CachedDoc {
 pub type DocCache = std::sync::Mutex<std::collections::HashMap<String, CachedDoc>>;
 
 fn allow_private() -> bool {
-    std::env::var("TAR_APIDOC_ALLOW_PRIVATE")
-        .map(|v| v == "1" || v == "true")
-        .unwrap_or(true)
+    std::env::var("TAR_APIDOC_ALLOW_PRIVATE").map(|v| v == "1" || v == "true").unwrap_or(true)
 }
 
 pub async fn fetch(
@@ -76,9 +74,7 @@ pub async fn fetch(
         )));
     }
     if !allow_private() && parsed.host_str().is_some_and(crate::health::is_private_host) {
-        return Err(AppError::forbidden(format!(
-            "{url} is on a private address and TAR_APIDOC_ALLOW_PRIVATE is off"
-        )));
+        return Err(AppError::forbidden(format!("{url} is on a private address and TAR_APIDOC_ALLOW_PRIVATE is off")));
     }
 
     if !q.refresh {
@@ -94,7 +90,10 @@ pub async fn fetch(
         .get(&url)
         // Ask for the machine-readable forms first. A server that content-negotiates its API
         // description will otherwise hand back the human documentation page.
-        .header(axum::http::header::ACCEPT, "application/json, application/yaml, text/yaml, application/ld+json, text/turtle, */*;q=0.5")
+        .header(
+            axum::http::header::ACCEPT,
+            "application/json, application/yaml, text/yaml, application/ld+json, text/turtle, */*;q=0.5",
+        )
         .timeout(TIMEOUT)
         .send()
         .await

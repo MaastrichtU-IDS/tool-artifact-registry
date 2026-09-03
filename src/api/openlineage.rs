@@ -98,7 +98,14 @@ pub async fn ingest(
     state.store.apply(tx).map_err(AppError::from)?;
     let _ = state
         .ops
-        .audit(Some(&principal.subject), principal.actor_kind(), "openlineage.ingest", Some(&run_iri), Some(&event_type), None)
+        .audit(
+            Some(&principal.subject),
+            principal.actor_kind(),
+            "openlineage.ingest",
+            Some(&run_iri),
+            Some(&event_type),
+            None,
+        )
         .await;
 
     Ok((
@@ -129,7 +136,9 @@ async fn map_dataset(
     if let Some(links) = facets.get("symlinks").and_then(|s| s.get("identifiers")).and_then(|v| v.as_array()) {
         for l in links {
             if let Some(n) = l.get("name").and_then(|v| v.as_str()) {
-                if n.starts_with("http") && (ids::is_local(state.base(), n) || state.store.exists(n).map_err(AppError::from)?) {
+                if n.starts_with("http")
+                    && (ids::is_local(state.base(), n) || state.store.exists(n).map_err(AppError::from)?)
+                {
                     return Ok(n.to_string());
                 }
             }
@@ -141,11 +150,8 @@ async fn map_dataset(
         return Ok(iri);
     }
 
-    let media_type = facets
-        .get("storage")
-        .and_then(|s| s.get("fileFormat"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
+    let media_type =
+        facets.get("storage").and_then(|s| s.get("fileFormat")).and_then(|v| v.as_str()).map(str::to_string);
     let access_url = facets
         .get("dataSource")
         .and_then(|s| s.get("uri"))
@@ -170,9 +176,7 @@ async fn map_dataset(
     let input = ArtifactIn {
         title: Some(if name.is_empty() { external_key.clone() } else { name.to_string() }),
         description: Some(format!("Ingested from an OpenLineage {role} dataset in namespace {namespace}")),
-        conforms_to: facets
-            .get("schema")
-            .and_then(|_| Some("https://w3id.org/tar/ns#TabularDataset".to_string())),
+        conforms_to: facets.get("schema").and_then(|_| Some("https://w3id.org/tar/ns#TabularDataset".to_string())),
         external_key: Some(external_key.clone()),
         distributions: if has_access { vec![distribution] } else { Vec::new() },
         ..Default::default()

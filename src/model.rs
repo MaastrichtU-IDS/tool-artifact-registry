@@ -86,7 +86,6 @@ pub struct TypeRef {
     pub source: String,
 }
 
-
 /// A machine-readable description of a software's API.
 ///
 /// Modelled as `dcat:endpointDescription` — DCAT defines that property as exactly this, "a
@@ -306,10 +305,8 @@ pub struct SyncStatus {
 }
 
 /// Fields a forge can supply. Anything outside this list is always the curator's.
-pub const SYNCABLE_FIELDS: [&str; 9] = [
-    "tagline", "description", "readme", "homepage", "license", "keywords", "maturity",
-    "releases", "image",
-];
+pub const SYNCABLE_FIELDS: [&str; 9] =
+    ["tagline", "description", "readme", "homepage", "license", "keywords", "maturity", "releases", "image"];
 
 impl SoftwareIn {
     /// The declared kinds, accepting either the set or the older single value, de-duplicated

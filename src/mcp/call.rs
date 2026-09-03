@@ -126,9 +126,7 @@ fn problem_to_message(status: StatusCode, body: &Value) -> String {
              the arguments. Do not retry with different arguments; report it, or ask for the role or \
              scope you are missing."
         ),
-        StatusCode::UNAUTHORIZED => format!(
-            "The credential on this request was rejected by the registry: {detail}"
-        ),
+        StatusCode::UNAUTHORIZED => format!("The credential on this request was rejected by the registry: {detail}"),
         StatusCode::NOT_FOUND => format!(
             "Not found: {detail}\n\nCheck the id with `search_registry` or `list_records` — it may \
              belong to another registry, or be an id you assumed rather than read."
@@ -260,11 +258,7 @@ fn bool_arg(args: &Value, key: &str) -> Option<bool> {
 
 /// A record id for a path position: accept either a bare local id or a full IRI.
 fn path_id(arg: &str) -> String {
-    let id = if arg.starts_with("http://") || arg.starts_with("https://") {
-        crate::ids::iri_tail(arg)
-    } else {
-        arg
-    };
+    let id = if arg.starts_with("http://") || arg.starts_with("https://") { crate::ids::iri_tail(arg) } else { arg };
     enc(id)
 }
 
@@ -327,15 +321,17 @@ pub async fn call(
         "vocab_search" => vocab_search(state, auth, args).await,
         "vocab_resolve" => vocab_resolve(state, auth, args).await,
         "list_enumerations" => list_enumerations(),
-        "register_artifact_type" => simple_write(
-            state,
-            auth,
-            "POST",
-            "/api/v1/types".into(),
-            body_from(args, &["label", "definition", "default_media_type", "slug", "iri", "scheme", "aliases"]),
-            "Artifact type registered. Use its `iri` for conforms_to, produces and consumes.",
-        )
-        .await,
+        "register_artifact_type" => {
+            simple_write(
+                state,
+                auth,
+                "POST",
+                "/api/v1/types".into(),
+                body_from(args, &["label", "definition", "default_media_type", "slug", "iri", "scheme", "aliases"]),
+                "Artifact type registered. Use its `iri` for conforms_to, produces and consumes.",
+            )
+            .await
+        }
         "search_registry" => search_registry(state, auth, args).await,
         "list_records" => list_records(state, auth, args).await,
         "get_record" => get_record(state, auth, args).await,
@@ -346,40 +342,56 @@ pub async fn call(
         "update_software" => update_software(state, auth, args).await,
         "add_release" => add_release(state, auth, args).await,
         "declare_capability" => declare_capability(state, auth, args).await,
-        "register_instance" => simple_write(
-            state,
-            auth,
-            "POST",
-            "/api/v1/instances".into(),
-            body_from(
-                args,
-                &[
-                    "label", "software", "release", "endpoint_url", "endpoint_description", "description",
-                    "operator", "availability", "jurisdiction", "oidc_client_id", "oidc_issuer",
-                    "allowed_scopes", "capability",
-                ],
-            ),
-            "Deployment registered.",
-        )
-        .await,
-        "advertise_produced" => simple_write(
-            state,
-            auth,
-            "POST",
-            "/api/v1/advertise/produced".into(),
-            body_from(args, &["run", "artifacts"]),
-            "Advertised. The run and its outputs are now in the lineage graph.",
-        )
-        .await,
-        "advertise_consumed" => simple_write(
-            state,
-            auth,
-            "POST",
-            "/api/v1/advertise/consumed".into(),
-            body_from(args, &["run", "artifacts"]),
-            "Advertised. The run's inputs are now in the lineage graph.",
-        )
-        .await,
+        "register_instance" => {
+            simple_write(
+                state,
+                auth,
+                "POST",
+                "/api/v1/instances".into(),
+                body_from(
+                    args,
+                    &[
+                        "label",
+                        "software",
+                        "release",
+                        "endpoint_url",
+                        "endpoint_description",
+                        "description",
+                        "operator",
+                        "availability",
+                        "jurisdiction",
+                        "oidc_client_id",
+                        "oidc_issuer",
+                        "allowed_scopes",
+                        "capability",
+                    ],
+                ),
+                "Deployment registered.",
+            )
+            .await
+        }
+        "advertise_produced" => {
+            simple_write(
+                state,
+                auth,
+                "POST",
+                "/api/v1/advertise/produced".into(),
+                body_from(args, &["run", "artifacts"]),
+                "Advertised. The run and its outputs are now in the lineage graph.",
+            )
+            .await
+        }
+        "advertise_consumed" => {
+            simple_write(
+                state,
+                auth,
+                "POST",
+                "/api/v1/advertise/consumed".into(),
+                body_from(args, &["run", "artifacts"]),
+                "Advertised. The run's inputs are now in the lineage graph.",
+            )
+            .await
+        }
         other => Outcome::err(format!("tool `{other}` is listed but not wired up — this is a bug in the registry")),
     };
 
@@ -390,12 +402,7 @@ pub async fn call(
     outcome
 }
 
-async fn registry_info(
-    state: &Arc<AppState>,
-    principal: &Principal,
-    auth: Option<&str>,
-    read_only: bool,
-) -> Outcome {
+async fn registry_info(state: &Arc<AppState>, principal: &Principal, auth: Option<&str>, read_only: bool) -> Outcome {
     let (_, registry) = rest(state, auth, "GET", "/api/v1/registry", None).await;
     let (_, well_known) = rest(state, auth, "GET", "/.well-known/tar-registry", None).await;
     let (_, whoami) = rest(state, auth, "GET", "/api/v1/whoami", None).await;
@@ -411,11 +418,7 @@ async fn registry_info(
         serde_json::to_string(&counts).unwrap_or_default(),
         principal.subject,
         principal.actor_kind(),
-        principal
-            .instance_iri
-            .as_deref()
-            .map(|i| format!(", acting as the deployment {i}"))
-            .unwrap_or_default(),
+        principal.instance_iri.as_deref().map(|i| format!(", acting as the deployment {i}")).unwrap_or_default(),
         if principal.roles.is_empty() { "none".into() } else { format!("{:?}", principal.roles) },
         if principal.scopes.is_empty() {
             "none".to_string()
@@ -809,22 +812,52 @@ fn summarise(kind: &str, item: &Value) -> Value {
     let mut out = match kind {
         "software" => pick(
             item,
-            &["iri", "id", "name", "kinds", "deployable", "license", "maturity",
-              "instance_count", "release_count", "runs_30d", "keywords"],
+            &[
+                "iri",
+                "id",
+                "name",
+                "kinds",
+                "deployable",
+                "license",
+                "maturity",
+                "instance_count",
+                "release_count",
+                "runs_30d",
+                "keywords",
+            ],
         ),
         "instance" => pick(
             item,
-            &["iri", "id", "label", "software", "software_name", "release_version", "outdated",
-              "endpoint_url", "health", "availability", "runs_30d", "artifact_count"],
+            &[
+                "iri",
+                "id",
+                "label",
+                "software",
+                "software_name",
+                "release_version",
+                "outdated",
+                "endpoint_url",
+                "health",
+                "availability",
+                "runs_30d",
+                "artifact_count",
+            ],
         ),
-        "artifact" => pick(
-            item,
-            &["iri", "id", "title", "availability", "issued", "version", "keywords", "license"],
-        ),
+        "artifact" => pick(item, &["iri", "id", "title", "availability", "issued", "version", "keywords", "license"]),
         "run" => pick(
             item,
-            &["iri", "id", "label", "status", "started_at", "ended_at", "software_name",
-              "instance_label", "used_count", "generated_count"],
+            &[
+                "iri",
+                "id",
+                "label",
+                "status",
+                "started_at",
+                "ended_at",
+                "software_name",
+                "instance_label",
+                "used_count",
+                "generated_count",
+            ],
         ),
         "release" => pick(item, &["iri", "id", "version", "date_published", "container_image"]),
         // Types are already small, and a picker wants their definitions.
@@ -837,19 +870,13 @@ fn summarise(kind: &str, item: &Value) -> Value {
     // Typed references keep their label so a chip renders without another call, but not their
     // definition text.
     if let Some(t) = item.get("conforms_to") {
-        out.insert(
-            "conforms_to".into(),
-            json!({"iri": t.get("iri"), "label": t.get("label")}),
-        );
+        out.insert("conforms_to".into(), json!({"iri": t.get("iri"), "label": t.get("label")}));
     }
     if let Some(topics) = item.get("topics").and_then(Value::as_array) {
         if !topics.is_empty() {
             out.insert(
                 "topics".into(),
-                json!(topics
-                    .iter()
-                    .map(|t| json!({"iri": t.get("iri"), "label": t.get("label")}))
-                    .collect::<Vec<_>>()),
+                json!(topics.iter().map(|t| json!({"iri": t.get("iri"), "label": t.get("label")})).collect::<Vec<_>>()),
             );
         }
     }
@@ -884,8 +911,7 @@ async fn find_capable(state: &Arc<AppState>, auth: Option<&str>, args: &Value) -
     let consumes = str_arg(args, "consumes").map(String::from);
     if produces.is_none() && consumes.is_none() {
         return Outcome::err(
-            "give at least one of `produces` or `consumes`, as an artifact type IRI from `vocab_search`"
-                .to_string(),
+            "give at least one of `produces` or `consumes`, as an artifact type IRI from `vocab_search`".to_string(),
         );
     }
     let path = format!("/api/v1/capabilities{}", query(vec![("produces", produces), ("consumes", consumes)]));
@@ -953,9 +979,24 @@ async fn identify_content(state: &Arc<AppState>, auth: Option<&str>, args: &Valu
 }
 
 const SOFTWARE_FIELDS: [&str; 18] = [
-    "name", "tagline", "description", "homepage", "code_repository", "documentation", "download_url",
-    "readme", "readme_base_url", "image", "license", "kinds", "maturity", "deployable", "topics",
-    "keywords", "publications", "capability",
+    "name",
+    "tagline",
+    "description",
+    "homepage",
+    "code_repository",
+    "documentation",
+    "download_url",
+    "readme",
+    "readme_base_url",
+    "image",
+    "license",
+    "kinds",
+    "maturity",
+    "deployable",
+    "topics",
+    "keywords",
+    "publications",
+    "capability",
 ];
 
 async fn register_software(state: &Arc<AppState>, auth: Option<&str>, args: &Value) -> Outcome {
@@ -987,8 +1028,7 @@ async fn update_software(state: &Arc<AppState>, auth: Option<&str>, args: &Value
             body.as_object_mut().unwrap().insert(k.into(), v.clone());
         }
     }
-    let (status, resp) =
-        rest(state, auth, "PATCH", &format!("/api/v1/software/{}", path_id(id)), Some(body)).await;
+    let (status, resp) = rest(state, auth, "PATCH", &format!("/api/v1/software/{}", path_id(id)), Some(body)).await;
     if !status.is_success() {
         return Outcome::err(problem_to_message(status, &resp));
     }
@@ -1000,8 +1040,14 @@ async fn add_release(state: &Arc<AppState>, auth: Option<&str>, args: &Value) ->
     let body = body_from(
         args,
         &[
-            "version", "date_published", "container_image", "image_digest", "changelog", "install_command",
-            "downloads", "capability",
+            "version",
+            "date_published",
+            "container_image",
+            "image_digest",
+            "changelog",
+            "install_command",
+            "downloads",
+            "capability",
         ],
     );
     let (status, resp) =
@@ -1079,10 +1125,7 @@ mod tests {
         out.sort();
         assert_eq!(
             out,
-            vec![
-                ("https://a.example/t".to_string(), Slot::Topic),
-                ("https://b.example/x".to_string(), Slot::Type),
-            ]
+            vec![("https://a.example/t".to_string(), Slot::Topic), ("https://b.example/x".to_string(), Slot::Type),]
         );
     }
 

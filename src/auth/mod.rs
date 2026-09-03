@@ -153,7 +153,11 @@ impl Principal {
         }
         Err(AppError::forbidden(format!(
             "credential lacks the {scope} scope (has: {})",
-            if self.scopes.is_empty() { "none".to_string() } else { self.scopes.iter().cloned().collect::<Vec<_>>().join(" ") }
+            if self.scopes.is_empty() {
+                "none".to_string()
+            } else {
+                self.scopes.iter().cloned().collect::<Vec<_>>().join(" ")
+            }
         )))
     }
 
@@ -229,10 +233,7 @@ pub async fn authenticate(state: &Arc<AppState>, raw: &str) -> AppResult<Princip
             software_iri: rec.software_iri.clone(),
             // A software-bound token has no instance to be, so its subject is the token
             // itself until the deployment it registers exists.
-            subject: rec
-                .instance_iri
-                .clone()
-                .unwrap_or_else(|| format!("urn:tar:token:{}", rec.id)),
+            subject: rec.instance_iri.clone().unwrap_or_else(|| format!("urn:tar:token:{}", rec.id)),
             display_name: rec.label.clone(),
             scopes: rec.scopes.iter().cloned().collect(),
             roles: BTreeSet::new(),

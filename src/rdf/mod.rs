@@ -5,8 +5,8 @@
 //! lets the same record serialise as Turtle, JSON-LD, developer JSON or an HTML page without
 //! three different code paths (spec §4.4).
 
-pub mod props;
 pub mod build;
+pub mod props;
 
 pub use build::*;
 pub use props::Props;

@@ -181,12 +181,9 @@ pub fn matches(filter: &Filter, owner_instance: &str, c: &Candidate) -> bool {
     }
     if let Some(q) = filter.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
         let needle = q.to_lowercase();
-        let hay = format!(
-            "{} {}",
-            c.title.as_deref().unwrap_or_default(),
-            c.description.as_deref().unwrap_or_default()
-        )
-        .to_lowercase();
+        let hay =
+            format!("{} {}", c.title.as_deref().unwrap_or_default(), c.description.as_deref().unwrap_or_default())
+                .to_lowercase();
         if !hay.contains(&needle) {
             return false;
         }
@@ -437,10 +434,18 @@ pub async fn update(ops: &Ops, id: &str, p: &Patch) -> Result<()> {
             .await?;
     }
     if let Some(url) = &p.webhook_url {
-        sqlx::query("UPDATE subscriptions SET webhook_url = ? WHERE id = ?").bind(url).bind(id).execute(ops.pool()).await?;
+        sqlx::query("UPDATE subscriptions SET webhook_url = ? WHERE id = ?")
+            .bind(url)
+            .bind(id)
+            .execute(ops.pool())
+            .await?;
     }
     if let Some(secret) = &p.webhook_secret {
-        sqlx::query("UPDATE subscriptions SET webhook_secret = ? WHERE id = ?").bind(secret).bind(id).execute(ops.pool()).await?;
+        sqlx::query("UPDATE subscriptions SET webhook_secret = ? WHERE id = ?")
+            .bind(secret)
+            .bind(id)
+            .execute(ops.pool())
+            .await?;
     }
     if let Some(e) = p.enabled {
         sqlx::query("UPDATE subscriptions SET enabled = ? WHERE id = ?")
@@ -526,8 +531,13 @@ pub async fn enqueue(
     if r.rows_affected() == 0 {
         return Ok(None);
     }
-    sqlx::query("UPDATE subscriptions SET last_match_at = ? WHERE id = ?").bind(&now).bind(subscription_id).execute(ops.pool()).await?;
-    let row = sqlx::query("SELECT seq FROM subscription_deliveries WHERE id = ?").bind(&id).fetch_one(ops.pool()).await?;
+    sqlx::query("UPDATE subscriptions SET last_match_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(subscription_id)
+        .execute(ops.pool())
+        .await?;
+    let row =
+        sqlx::query("SELECT seq FROM subscription_deliveries WHERE id = ?").bind(&id).fetch_one(ops.pool()).await?;
     Ok(Some(row.try_get::<i64, _>("seq")?))
 }
 
@@ -565,7 +575,13 @@ pub async fn due_deliveries(ops: &Ops, limit: i64) -> Result<Vec<DueDelivery>> {
         .collect()
 }
 
-pub async fn mark_delivered(ops: &Ops, delivery_id: &str, subscription_id: &str, status_code: u16, attempts: i64) -> Result<()> {
+pub async fn mark_delivered(
+    ops: &Ops,
+    delivery_id: &str,
+    subscription_id: &str,
+    status_code: u16,
+    attempts: i64,
+) -> Result<()> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "UPDATE subscription_deliveries
@@ -652,10 +668,12 @@ pub async fn mark_failed(
         .unwrap_or(0);
     let mut suspended = false;
     if failures >= policy.suspend_after {
-        let r = sqlx::query("UPDATE subscriptions SET delivery_state = 'suspended' WHERE id = ? AND delivery_state != 'suspended'")
-            .bind(subscription_id)
-            .execute(ops.pool())
-            .await?;
+        let r = sqlx::query(
+            "UPDATE subscriptions SET delivery_state = 'suspended' WHERE id = ? AND delivery_state != 'suspended'",
+        )
+        .bind(subscription_id)
+        .execute(ops.pool())
+        .await?;
         suspended = r.rows_affected() > 0;
     }
     Ok(FailureOutcome {
@@ -846,11 +864,7 @@ mod tests {
         assert!(!matches(&f, OWNER, &candidate()));
 
         // Across fields it is AND: the right type but the wrong availability is not a match.
-        let f = Filter {
-            conforms_to: vec![REPORT.into()],
-            availability: vec!["public".into()],
-            ..Default::default()
-        };
+        let f = Filter { conforms_to: vec![REPORT.into()], availability: vec!["public".into()], ..Default::default() };
         assert!(!matches(&f, OWNER, &candidate()));
     }
 
@@ -945,12 +959,18 @@ mod tests {
         .await
         .unwrap();
         let payload = serde_json::json!({"type": "artifact.advertised"});
-        let first = enqueue(&ops, &sub.id, "https://reg.test/artifact/1", Some("run/1"), ROLE_PRODUCED, &payload).await.unwrap();
+        let first = enqueue(&ops, &sub.id, "https://reg.test/artifact/1", Some("run/1"), ROLE_PRODUCED, &payload)
+            .await
+            .unwrap();
         assert!(first.is_some());
-        let again = enqueue(&ops, &sub.id, "https://reg.test/artifact/1", Some("run/1"), ROLE_PRODUCED, &payload).await.unwrap();
+        let again = enqueue(&ops, &sub.id, "https://reg.test/artifact/1", Some("run/1"), ROLE_PRODUCED, &payload)
+            .await
+            .unwrap();
         assert!(again.is_none(), "a retried advertisement must not notify twice");
         // The same artifact in the other role is a different event.
-        let consumed = enqueue(&ops, &sub.id, "https://reg.test/artifact/1", Some("run/2"), ROLE_CONSUMED, &payload).await.unwrap();
+        let consumed = enqueue(&ops, &sub.id, "https://reg.test/artifact/1", Some("run/2"), ROLE_CONSUMED, &payload)
+            .await
+            .unwrap();
         assert!(consumed.is_some());
 
         let items = deliveries_since(&ops, &sub.id, 0, 10).await.unwrap();
@@ -1028,9 +1048,16 @@ mod tests {
         .await
         .unwrap();
         for i in 0..3 {
-            enqueue(&ops, &sub.id, &format!("https://reg.test/artifact/{i}"), None, ROLE_PRODUCED, &serde_json::json!({}))
-                .await
-                .unwrap();
+            enqueue(
+                &ops,
+                &sub.id,
+                &format!("https://reg.test/artifact/{i}"),
+                None,
+                ROLE_PRODUCED,
+                &serde_json::json!({}),
+            )
+            .await
+            .unwrap();
         }
         let all = deliveries_since(&ops, &sub.id, 0, 10).await.unwrap();
         assert_eq!(all.len(), 3);

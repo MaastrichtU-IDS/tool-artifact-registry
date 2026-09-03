@@ -66,10 +66,7 @@ pub struct McpConfig {
 
 impl McpConfig {
     pub fn from_env() -> Self {
-        Self {
-            enabled: env_bool("TAR_MCP_ENABLED", true),
-            read_only: env_bool("TAR_MCP_READ_ONLY", false),
-        }
+        Self { enabled: env_bool("TAR_MCP_ENABLED", true), read_only: env_bool("TAR_MCP_READ_ONLY", false) }
     }
 }
 

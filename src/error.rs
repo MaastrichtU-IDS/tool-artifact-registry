@@ -94,13 +94,9 @@ impl IntoResponse for AppError {
             obj.insert(k, v);
         }
         let mut resp = (self.status, axum::Json(body)).into_response();
-        resp.headers_mut().insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/problem+json"),
-        );
+        resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/problem+json"));
         if self.status == StatusCode::UNAUTHORIZED {
-            resp.headers_mut()
-                .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+            resp.headers_mut().insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
         }
         resp
     }

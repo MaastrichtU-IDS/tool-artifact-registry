@@ -56,7 +56,6 @@ pub fn peer_graph(id: &str) -> String {
     format!("{G_PEER_PREFIX}{id}")
 }
 
-
 /// Build a `NamedNode` from a namespace + local name.
 pub fn t(ns: &str, local: &str) -> oxigraph::model::NamedNode {
     oxigraph::model::NamedNode::new_unchecked(format!("{ns}{local}"))

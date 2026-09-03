@@ -87,10 +87,7 @@ impl RpcRequest {
     /// `params._meta["io.modelcontextprotocol/protocolVersion"]`, the body's source of truth
     /// for the version a modern request declares.
     pub fn meta_version(&self) -> Option<&str> {
-        self.params
-            .get("_meta")
-            .and_then(|m| m.get("io.modelcontextprotocol/protocolVersion"))
-            .and_then(Value::as_str)
+        self.params.get("_meta").and_then(|m| m.get("io.modelcontextprotocol/protocolVersion")).and_then(Value::as_str)
     }
 }
 

@@ -203,9 +203,7 @@ pub fn capability_from(ctx: &Ctx, cap_iri: &str, declared_at: &str) -> Option<Ca
 
 pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
     let id = ids::local_id(ctx.base(), iri).map(|(_, i)| i).unwrap_or_else(|| ids::iri_tail(iri).to_string());
-    let capability = p
-        .iri(ns::TAR, "hasCapability")
-        .and_then(|c| capability_from(ctx, &c, "software"));
+    let capability = p.iri(ns::TAR, "hasCapability").and_then(|c| capability_from(ctx, &c, "software"));
     let mut kinds = p.strs(ns::SCHEMA, "applicationCategory");
     if kinds.is_empty() {
         kinds = p.strs(ns::TAR, "kind");
@@ -236,11 +234,13 @@ pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
                     url: k.trim_start_matches('<').trim_end_matches('>').to_string(),
                     // The literal is authoritative; conformsTo is the fallback for records a
                     // peer wrote without it.
-                    format: dp.str(ns::TAR, "apiFormat").or_else(|| {
-                        dp.iri(ns::DCT, "conformsTo")
-                            .and_then(|i| crate::model::api_format_from_iri(&i).map(str::to_string))
-                    })
-                    .unwrap_or_else(|| "other".into()),
+                    format: dp
+                        .str(ns::TAR, "apiFormat")
+                        .or_else(|| {
+                            dp.iri(ns::DCT, "conformsTo")
+                                .and_then(|i| crate::model::api_format_from_iri(&i).map(str::to_string))
+                        })
+                        .unwrap_or_else(|| "other".into()),
                     title: dp.str(ns::DCT, "title"),
                     description: dp.str(ns::DCT, "description"),
                 })

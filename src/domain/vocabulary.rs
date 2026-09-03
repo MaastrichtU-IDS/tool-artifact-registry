@@ -123,9 +123,7 @@ impl Verdict {
     /// will follow, so a message that named one would be wrong the moment another is added.
     pub fn describe(&self, iri: &str, slot: Slot) -> String {
         match (self, slot) {
-            (Verdict::Unknown, Slot::Type) => format!(
-                "{iri} is not an artifact type this registry knows"
-            ),
+            (Verdict::Unknown, Slot::Type) => format!("{iri} is not an artifact type this registry knows"),
             (Verdict::Unknown, Slot::Topic) => format!("{iri} is not a topic this registry knows"),
             // The one the failure that motivated this rule actually produced: a term that
             // resolves, on a record it has nothing to do with.
@@ -160,10 +158,7 @@ impl Verdict {
                  names this thing.",
                 self.describe(iri, slot)
             ),
-            Slot::Topic => format!(
-                "{}. Either {search}, or leave the field out.",
-                self.describe(iri, slot)
-            ),
+            Slot::Topic => format!("{}. Either {search}, or leave the field out.", self.describe(iri, slot)),
         }
     }
 }
@@ -196,10 +191,7 @@ pub fn terms_in(quads: &[Quad]) -> Vec<Term> {
     };
     let artifacts: HashSet<String> = quads
         .iter()
-        .filter(|q| {
-            q.predicate == rdf_type
-                && named(&q.object).as_deref() == Some(super::artifact::TYPE_DATASET)
-        })
+        .filter(|q| q.predicate == rdf_type && named(&q.object).as_deref() == Some(super::artifact::TYPE_DATASET))
         .map(|q| q.subject.to_string())
         .collect();
 
@@ -468,11 +460,7 @@ mod tests {
             "urn:test",
             None,
         );
-        assert!(
-            terms_in(&quads).is_empty(),
-            "only an artifact's own conformsTo is a type: {:?}",
-            terms_in(&quads)
-        );
+        assert!(terms_in(&quads).is_empty(), "only an artifact's own conformsTo is a type: {:?}", terms_in(&quads));
     }
 
     #[test]

@@ -76,8 +76,10 @@ pub async fn create(
     }
     let ttl = match input.expires_in.as_deref() {
         Some(v) => Some(
-            chrono::Duration::from_std(crate::config::parse_duration(v).map_err(|e| AppError::bad_request(e.to_string()))?)
-                .map_err(|e| AppError::bad_request(e.to_string()))?,
+            chrono::Duration::from_std(
+                crate::config::parse_duration(v).map_err(|e| AppError::bad_request(e.to_string()))?,
+            )
+            .map_err(|e| AppError::bad_request(e.to_string()))?,
         ),
         None => None,
     };
@@ -125,9 +127,7 @@ fn may_manage_software(principal: &Principal) -> AppResult<()> {
     if principal.is_admin() || principal.is_curator() {
         return Ok(());
     }
-    Err(AppError::forbidden(
-        "only a curator or an admin may issue an auto-registration key for a piece of software",
-    ))
+    Err(AppError::forbidden("only a curator or an admin may issue an auto-registration key for a piece of software"))
 }
 
 pub async fn list_for_software(
@@ -161,11 +161,7 @@ pub async fn create_for_software(
     // scopes come with it because a deployment that registers itself and then cannot say what
     // it produced would have to be issued a second key immediately.
     let scopes: Vec<String> = if input.scopes.is_empty() {
-        vec![
-            "register:instance".into(),
-            "advertise:produce".into(),
-            "advertise:consume".into(),
-        ]
+        vec!["register:instance".into(), "advertise:produce".into(), "advertise:consume".into()]
     } else {
         input.scopes.clone()
     };
@@ -179,8 +175,10 @@ pub async fn create_for_software(
     }
     let ttl = match input.expires_in.as_deref() {
         Some(v) => Some(
-            chrono::Duration::from_std(crate::config::parse_duration(v).map_err(|e| AppError::bad_request(e.to_string()))?)
-                .map_err(|e| AppError::bad_request(e.to_string()))?,
+            chrono::Duration::from_std(
+                crate::config::parse_duration(v).map_err(|e| AppError::bad_request(e.to_string()))?,
+            )
+            .map_err(|e| AppError::bad_request(e.to_string()))?,
         ),
         None => None,
     };

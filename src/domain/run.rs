@@ -101,11 +101,7 @@ fn generated_iris(ctx: &Ctx, run_iri: &str) -> Vec<String> {
 SELECT ?a WHERE {{ GRAPH ?g {{ ?a prov:wasGeneratedBy <{run_iri}> }} }}"#,
         p = ns::PREFIXES
     );
-    ctx.state
-        .store
-        .select(&q)
-        .map(|b| b.rows.iter().filter_map(|r| r.iri("a")).collect())
-        .unwrap_or_default()
+    ctx.state.store.select(&q).map(|b| b.rows.iter().filter_map(|r| r.iri("a")).collect()).unwrap_or_default()
 }
 
 pub fn load_run_summary(ctx: &Ctx, iri: &str) -> AppResult<RunSummary> {
@@ -129,7 +125,8 @@ pub fn load_run(ctx: &Ctx, iri: &str) -> AppResult<Run> {
     }
     let p = Props::from_quads(iri, &quads);
     let mut summary = run_summary_from_props(ctx, iri, &p);
-    let used: Vec<ArtifactRef> = p.iris(ns::PROV, "used").iter().map(|a| super::artifact::artifact_ref(ctx, a)).collect();
+    let used: Vec<ArtifactRef> =
+        p.iris(ns::PROV, "used").iter().map(|a| super::artifact::artifact_ref(ctx, a)).collect();
     let generated: Vec<ArtifactRef> =
         generated_iris(ctx, iri).iter().map(|a| super::artifact::artifact_ref(ctx, a)).collect();
     summary.used_count = used.len() as i64;

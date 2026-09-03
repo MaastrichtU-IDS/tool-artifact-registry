@@ -32,7 +32,9 @@
 //! sitting in a repository actually needs, and a smaller catalogue is a better one: each entry
 //! costs context on every request, and near-duplicates make the model choose badly.
 
-use crate::auth::{Principal, SCOPE_ADVERTISE_CONSUME, SCOPE_ADVERTISE_PRODUCE, SCOPE_REGISTER_INSTANCE, SCOPE_REGISTER_SOFTWARE};
+use crate::auth::{
+    Principal, SCOPE_ADVERTISE_CONSUME, SCOPE_ADVERTISE_PRODUCE, SCOPE_REGISTER_INSTANCE, SCOPE_REGISTER_SOFTWARE,
+};
 use serde_json::{json, Value};
 
 /// Repeated into every write tool's description. Clients are not obliged to show the
@@ -105,9 +107,9 @@ impl Gate {
                 "this tool needs the curator role or the {SCOPE_REGISTER_SOFTWARE} scope; your credential has {held}. \
                  Ask a registry curator to make the change, or to grant the scope."
             ),
-            Gate::CuratorOrScope(s) => format!(
-                "this tool needs the curator role or the {s} scope; your credential has {held}."
-            ),
+            Gate::CuratorOrScope(s) => {
+                format!("this tool needs the curator role or the {s} scope; your credential has {held}.")
+            }
             Gate::InstanceScope(s) => {
                 if p.instance_iri.is_none() {
                     format!(
@@ -899,11 +901,7 @@ mod tests {
         for t in catalogue() {
             assert_eq!(t.schema["type"], "object", "{} schema must be an object", t.name);
             assert!(t.schema.get("properties").is_some(), "{} needs properties", t.name);
-            assert!(
-                t.description.len() > 120,
-                "{} description is too thin to be a contract with the model",
-                t.name
-            );
+            assert!(t.description.len() > 120, "{} description is too thin to be a contract with the model", t.name);
             assert!(t.name.len() <= 128 && t.name.chars().all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c)));
         }
     }
@@ -932,8 +930,7 @@ mod tests {
     fn anonymous_sees_the_read_tools_where_anyone_may_already_read() {
         // The same records are served to the same caller over REST and SPARQL. Hiding the
         // tools that reach them protects nothing and turns a working read into a sign-in.
-        let names: Vec<_> =
-            visible(&Principal::anonymous(), false, true).into_iter().map(|t| t.name).collect();
+        let names: Vec<_> = visible(&Principal::anonymous(), false, true).into_iter().map(|t| t.name).collect();
         assert!(names.contains(&"search_registry"), "{names:?}");
         assert!(names.contains(&"vocab_search"), "{names:?}");
         // Writes are a matter of authority, not of the read policy, and stay shut.

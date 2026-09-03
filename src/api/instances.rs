@@ -65,10 +65,7 @@ fn where_body(base: &str, f: &InstanceFilter) -> String {
     w
 }
 
-pub async fn list(
-    State(state): State<Arc<AppState>>,
-    Query(f): Query<InstanceFilter>,
-) -> AppResult<impl IntoResponse> {
+pub async fn list(State(state): State<Arc<AppState>>, Query(f): Query<InstanceFilter>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let body = where_body(state.base(), &f);
     let (iris, next) = page_iris(&state, &body, &f.paging)?;
@@ -102,7 +99,12 @@ pub async fn get(
     let mut inst = dom::load_instance(&ctx, &iri)?;
     // Token count is operational state; only someone who could manage them needs it.
     if principal.is_curator() || principal.instance_iri.as_deref() == Some(iri.as_str()) {
-        inst.token_count = state.ops.list_tokens(&iri).await.map(|t| t.iter().filter(|x| x.revoked_at.is_none()).count() as i64).unwrap_or(0);
+        inst.token_count = state
+            .ops
+            .list_tokens(&iri)
+            .await
+            .map(|t| t.iter().filter(|x| x.revoked_at.is_none()).count() as i64)
+            .unwrap_or(0);
     }
     let mut sp = Signposting::new(&iri).collection(&format!("{}/api/v1/instances", state.base()));
     if let Some(e) = &inst.endpoint_url {
@@ -120,8 +122,7 @@ pub async fn get(
 /// validated against the candidate record alone (README "Known gaps" 1). So it is checked here,
 /// where the Software is already being looked up anyway.
 fn check_deployable(state: &AppState, software: Option<&str>, input: &InstanceIn) -> AppResult<()> {
-    let (Some(sw), Some(endpoint)) = (software, input.endpoint_url.as_deref().filter(|e| !e.is_empty()))
-    else {
+    let (Some(sw), Some(endpoint)) = (software, input.endpoint_url.as_deref().filter(|e| !e.is_empty())) else {
         return Ok(());
     };
     let quads = state.store.describe(sw).map_err(AppError::from)?;
@@ -203,7 +204,14 @@ pub async fn create(
     state.store.apply(tx).map_err(AppError::from)?;
     let _ = state
         .ops
-        .audit(Some(&principal.subject), principal.actor_kind(), "instance.create", Some(&iri), Some(&input.label), None)
+        .audit(
+            Some(&principal.subject),
+            principal.actor_kind(),
+            "instance.create",
+            Some(&iri),
+            Some(&input.label),
+            None,
+        )
         .await;
     let ctx = Ctx::new(&state).await?;
     Ok((StatusCode::CREATED, Json(dom::load_instance(&ctx, &iri)?)))
@@ -424,10 +432,7 @@ pub async fn announce_self(
         find_self_registered(&state, &principal.subject, &self_key)
             .or_else(|| principal.instance_iri.clone().filter(|_| input.instance_key.is_none()))
     } else {
-        principal
-            .instance_iri
-            .clone()
-            .or_else(|| find_self_registered(&state, &principal.subject, &self_key))
+        principal.instance_iri.clone().or_else(|| find_self_registered(&state, &principal.subject, &self_key))
     };
 
     if let Some(iri) = existing {
@@ -536,7 +541,14 @@ pub async fn announce_self(
     state.store.apply(tx).map_err(AppError::from)?;
     let _ = state
         .ops
-        .audit(Some(&principal.subject), principal.actor_kind(), "instance.self-register", Some(&iri), Some(&client_id), None)
+        .audit(
+            Some(&principal.subject),
+            principal.actor_kind(),
+            "instance.self-register",
+            Some(&iri),
+            Some(&client_id),
+            None,
+        )
         .await;
     let ctx = Ctx::new(&state).await?;
     Ok((StatusCode::CREATED, Json(dom::load_instance(&ctx, &iri)?)))
@@ -616,10 +628,8 @@ pub async fn artifacts(
     );
     let (iris, next) = page_iris(&state, &body, &paging)?;
     let total = count(&state, &body)?;
-    let items: Vec<Artifact> = iris
-        .iter()
-        .filter_map(|a| crate::domain::artifact::load_artifact(&ctx, a).ok())
-        .collect();
+    let items: Vec<Artifact> =
+        iris.iter().filter_map(|a| crate::domain::artifact::load_artifact(&ctx, a).ok()).collect();
     Ok(Json(Page::new(items, total, next)))
 }
 

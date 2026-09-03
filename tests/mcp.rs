@@ -59,8 +59,8 @@ impl Harness {
         let status = resp.status();
         let headers = resp.headers().clone();
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-        let value = serde_json::from_slice(&bytes)
-            .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()));
+        let value =
+            serde_json::from_slice(&bytes).unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()));
         (status, value, headers)
     }
 
@@ -101,9 +101,8 @@ impl Harness {
     async fn instance_token(&self, label: &str, scopes: Value) -> String {
         let sw = self.call(ROOT, "register_software", json!({ "name": label })).await;
         let sw_id = sw["structuredContent"]["id"].as_str().unwrap().to_string();
-        let inst = self
-            .call(ROOT, "register_instance", json!({ "label": format!("{label} prod"), "software": sw_id }))
-            .await;
+        let inst =
+            self.call(ROOT, "register_instance", json!({ "label": format!("{label} prod"), "software": sw_id })).await;
         let inst_id = inst["structuredContent"]["id"].as_str().unwrap().to_string();
         let req = Request::builder()
             .method("POST")
@@ -333,20 +332,14 @@ async fn a_public_registry_lets_an_anonymous_agent_read_without_an_oauth_dance()
     assert!(!names.contains(&"advertise_produced"), "{names:?}");
 
     // And a read tool actually works.
-    let (status, body) = h
-        .modern(None, json!(2), "tools/call", json!({ "name": "registry_info", "arguments": {} }))
-        .await;
+    let (status, body) =
+        h.modern(None, json!(2), "tools/call", json!({ "name": "registry_info", "arguments": {} })).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_ne!(body["result"]["isError"], serde_json::Value::Bool(true), "{body}");
 
     // Naming a write tool anyway is refused, not quietly executed.
     let (status, body) = h
-        .modern(
-            None,
-            json!(3),
-            "tools/call",
-            json!({ "name": "register_software", "arguments": { "name": "sneaky" } }),
-        )
+        .modern(None, json!(3), "tools/call", json!({ "name": "register_software", "arguments": { "name": "sneaky" } }))
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["result"]["isError"], serde_json::Value::Bool(true), "{body}");
@@ -403,9 +396,21 @@ async fn tools_are_listed_with_the_caching_metadata_this_revision_requires() {
 
     let names: Vec<&str> = r["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
     for expected in [
-        "registry_info", "vocab_search", "vocab_resolve", "list_enumerations", "register_artifact_type",
-        "search_registry", "list_records", "get_record", "find_capable_software", "get_artifact_lineage",
-        "register_software", "update_software", "add_release", "declare_capability", "register_instance",
+        "registry_info",
+        "vocab_search",
+        "vocab_resolve",
+        "list_enumerations",
+        "register_artifact_type",
+        "search_registry",
+        "list_records",
+        "get_record",
+        "find_capable_software",
+        "get_artifact_lineage",
+        "register_software",
+        "update_software",
+        "add_release",
+        "declare_capability",
+        "register_instance",
     ] {
         assert!(names.contains(&expected), "{expected} missing from {names:?}");
     }
@@ -426,19 +431,12 @@ async fn tools_are_listed_with_the_caching_metadata_this_revision_requires() {
 async fn no_tool_exposes_credential_minting_deletion_peering_or_raw_sparql() {
     let h = harness().await;
     let (_, body) = h.modern(Some(ROOT), json!(1), "tools/list", json!({})).await;
-    let names: Vec<&str> = body["result"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| t["name"].as_str().unwrap())
-        .collect();
+    let names: Vec<&str> =
+        body["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
     // These are person-operations, or too sharp for an agent with a network-reachable endpoint.
     // The check is on the whole catalogue rather than on one name, so adding one later trips it.
     for forbidden in ["token", "delete", "peer", "sparql", "revoke", "tombstone", "subscription", "openlineage"] {
-        assert!(
-            !names.iter().any(|n| n.contains(forbidden)),
-            "the catalogue must not expose `{forbidden}`: {names:?}"
-        );
+        assert!(!names.iter().any(|n| n.contains(forbidden)), "the catalogue must not expose `{forbidden}`: {names:?}");
     }
 }
 
@@ -576,9 +574,8 @@ async fn a_topic_used_as_an_artifact_type_is_refused_too() {
     let topic = topics["structuredContent"]["items"][0]["iri"].as_str().unwrap().to_string();
 
     // A real EuroSciVoc topic is a real term — but it is not a thing an artifact can be.
-    let r = h
-        .call(ROOT, "register_software", json!({ "name": "swapped", "capability": { "produces": [topic] } }))
-        .await;
+    let r =
+        h.call(ROOT, "register_software", json!({ "name": "swapped", "capability": { "produces": [topic] } })).await;
     assert!(is_error(&r), "{}", text_of(&r));
     assert!(
         text_of(&r).contains("cannot be what an artifact is"),
@@ -667,10 +664,7 @@ async fn the_enumerations_match_the_shapes_the_registry_validates_against() {
     let e = &r["structuredContent"];
     assert!(e["software_kinds"]["values"]["workflow"].is_string());
     assert_eq!(e["run_status"]["values"], json!(["success", "failed", "running", "aborted"]));
-    assert_eq!(
-        e["availability"]["values"]["metadata-only"].as_str().unwrap().contains("not obtainable"),
-        true
-    );
+    assert_eq!(e["availability"]["values"]["metadata-only"].as_str().unwrap().contains("not obtainable"), true);
     assert!(e["scopes"]["values"]["advertise:produce"].is_string());
     // These are the values SHACL will actually accept — proven by using one and by the
     // rejection test below.
@@ -745,9 +739,7 @@ async fn a_full_curation_flow_works_end_to_end() {
 #[tokio::test]
 async fn a_shacl_rejection_comes_back_as_an_actionable_correction() {
     let h = harness().await;
-    let r = h
-        .call(ROOT, "register_software", json!({ "name": "bad-kind-tool", "kinds": ["banana"] }))
-        .await;
+    let r = h.call(ROOT, "register_software", json!({ "name": "bad-kind-tool", "kinds": ["banana"] })).await;
     assert!(is_error(&r));
     let text = text_of(&r);
     // The registry names the offending JSON field via `tar:jsonField`; that has to survive
@@ -825,9 +817,7 @@ async fn a_tool_can_do_no_more_than_the_same_credential_could_over_rest() {
     assert_eq!(list["items"].as_array().unwrap().len(), 0, "nothing may be written by a refused call");
 
     // Not even `advertise:consume`, which it does not hold.
-    let r = h
-        .call(&token, "advertise_consumed", json!({ "run": { "external_key": "k" }, "artifacts": [] }))
-        .await;
+    let r = h.call(&token, "advertise_consumed", json!({ "run": { "external_key": "k" }, "artifacts": [] })).await;
     assert!(is_error(&r));
     assert!(text_of(&r).contains("advertise:consume"), "{}", text_of(&r));
 }
@@ -837,9 +827,7 @@ async fn a_credential_that_is_not_a_deployment_cannot_advertise() {
     let h = harness().await;
     // The root token is an admin, so it passes every scope check — but it does not *act as* an
     // Instance, and spec §8.3 says the Instance comes from the credential, never the body.
-    let r = h
-        .call(ROOT, "advertise_produced", json!({ "run": { "external_key": "k" }, "artifacts": [] }))
-        .await;
+    let r = h.call(ROOT, "advertise_produced", json!({ "run": { "external_key": "k" }, "artifacts": [] })).await;
     assert!(is_error(&r), "{}", text_of(&r));
     assert!(text_of(&r).contains("Instance"), "{}", text_of(&r));
 }
@@ -937,9 +925,7 @@ async fn a_listing_summarises_rather_than_returning_whole_records() {
 async fn a_listing_clips_a_long_description_instead_of_dropping_it() {
     let h = harness().await;
     let long = "x".repeat(900);
-    let r = h
-        .call(ROOT, "register_software", json!({ "name": "wordy", "description": long }))
-        .await;
+    let r = h.call(ROOT, "register_software", json!({ "name": "wordy", "description": long })).await;
     assert_ne!(r["isError"], json!(true), "{r}");
     let listing = h.call(ROOT, "list_records", json!({ "kind": "software" })).await;
     let tagline = listing["structuredContent"]["items"][0]["tagline"].as_str().unwrap();

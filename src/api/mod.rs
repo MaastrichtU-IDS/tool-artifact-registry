@@ -204,10 +204,8 @@ async fn require_read_access(
         .and_then(|v| v.to_str().ok())
         .is_none_or(|v| v.trim().is_empty());
     if anonymous {
-        return AppError::unauthorized(
-            "this registry does not serve anonymous reads; present a credential",
-        )
-        .into_response();
+        return AppError::unauthorized("this registry does not serve anonymous reads; present a credential")
+            .into_response();
     }
     next.run(req).await
 }
@@ -228,11 +226,7 @@ pub struct Paging {
 
 impl Paging {
     pub fn limit(&self) -> usize {
-        self.limit
-            .as_deref()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(DEFAULT_LIMIT)
-            .clamp(1, MAX_LIMIT)
+        self.limit.as_deref().and_then(|v| v.parse::<usize>().ok()).unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
     }
     /// Keyset filter. UUIDv7 IRIs sort by mint time, so descending IRI order is
     /// newest-first without a sort column.
@@ -284,15 +278,7 @@ pub fn text_filter(q: &str, vars: &[&str]) -> String {
 }
 
 fn regex_escape(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| {
-            if "\\.+*?()|[]{}^$".contains(c) {
-                vec!['\\', c]
-            } else {
-                vec![c]
-            }
-        })
-        .collect()
+    s.chars().flat_map(|c| if "\\.+*?()|[]{}^$".contains(c) { vec!['\\', c] } else { vec![c] }).collect()
 }
 
 /// Count matching subjects for a where-clause body.

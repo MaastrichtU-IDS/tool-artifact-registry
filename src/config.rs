@@ -233,9 +233,8 @@ fn env_duration(key: &str, default: &str) -> Result<Duration> {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let base_iri = env("TAR_BASE_IRI").context(
-            "TAR_BASE_IRI is required — the registry cannot mint dereferenceable IRIs without it",
-        )?;
+        let base_iri = env("TAR_BASE_IRI")
+            .context("TAR_BASE_IRI is required — the registry cannot mint dereferenceable IRIs without it")?;
         let base_iri = base_iri.trim_end_matches('/').to_string();
         if !(base_iri.starts_with("http://") || base_iri.starts_with("https://")) {
             bail!("TAR_BASE_IRI must be an http(s) URL, got {base_iri:?}");
@@ -274,9 +273,7 @@ impl Config {
             sparql_public: env_bool("TAR_SPARQL_PUBLIC", true),
             root_token,
             shacl_validate_writes: env_bool("TAR_SHACL_VALIDATE_WRITES", true),
-            max_payload_bytes: env("TAR_MAX_PAYLOAD_BYTES")
-                .and_then(|v| parse_bytes(&v))
-                .unwrap_or(2 * 1024 * 1024),
+            max_payload_bytes: env("TAR_MAX_PAYLOAD_BYTES").and_then(|v| parse_bytes(&v)).unwrap_or(2 * 1024 * 1024),
             static_dir: env("TAR_STATIC_DIR").or_else(|| {
                 let d = "frontend/dist";
                 std::path::Path::new(d).is_dir().then(|| d.to_string())
@@ -314,7 +311,13 @@ impl Config {
             peer_resolve_timeout: Duration::from_secs(5),
             federated_search_timeout: Duration::from_secs(3),
             sparql_backend: None,
-            oidc: OidcConfig { client_claim: "azp".into(), roles_claim: "realm_access.roles".into(), scope_claim: "scope".into(), require_audience: true, ..Default::default() },
+            oidc: OidcConfig {
+                client_claim: "azp".into(),
+                roles_claim: "realm_access.roles".into(),
+                scope_claim: "scope".into(),
+                require_audience: true,
+                ..Default::default()
+            },
         }
     }
 }
@@ -362,10 +365,7 @@ mod binding_issuer_tests {
         assert_eq!(cfg(None, &[ci, "https://partner.example/realms/theirs"]).default_binding_issuer(), None);
 
         // A trailing slash is not a different issuer.
-        assert_eq!(
-            cfg(Some(&format!("{primary}/")), &[]).default_binding_issuer().as_deref(),
-            Some(primary)
-        );
+        assert_eq!(cfg(Some(&format!("{primary}/")), &[]).default_binding_issuer().as_deref(), Some(primary));
     }
 
     #[test]

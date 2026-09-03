@@ -69,16 +69,14 @@ struct PeerStub {
 
 async fn fetch_well_known(state: &AppState, base_url: &str) -> AppResult<WellKnown> {
     let url = format!("{}/.well-known/tar-registry", base_url.trim_end_matches('/'));
-    let resp = state
-        .http
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| AppError::bad_request(format!("cannot reach {url}: {e}")))?;
+    let resp =
+        state.http.get(&url).send().await.map_err(|e| AppError::bad_request(format!("cannot reach {url}: {e}")))?;
     if !resp.status().is_success() {
         return Err(AppError::bad_request(format!("{url} returned {}", resp.status())));
     }
-    resp.json::<WellKnown>().await.map_err(|e| AppError::bad_request(format!("{url} is not a registry self-description: {e}")))
+    resp.json::<WellKnown>()
+        .await
+        .map_err(|e| AppError::bad_request(format!("{url} is not a registry self-description: {e}")))
 }
 
 pub async fn add(
@@ -181,10 +179,7 @@ pub struct Announce {
 
 /// Inbound mutual discovery. Produces a suggestion for admin review — never a peer
 /// (spec §8.4). Deliberately unauthenticated: it grants nothing.
-pub async fn announce(
-    State(state): State<Arc<AppState>>,
-    Json(input): Json<Announce>,
-) -> AppResult<impl IntoResponse> {
+pub async fn announce(State(state): State<Arc<AppState>>, Json(input): Json<Announce>) -> AppResult<impl IntoResponse> {
     let base = input.base_url.trim_end_matches('/').to_string();
     if base == state.config.base_iri {
         return Ok(Json(json!({"accepted": false, "reason": "that is this registry"})));
@@ -261,12 +256,7 @@ pub async fn resolve(
 /// graph, and record success or backoff.
 pub async fn fetch_stub(state: &Arc<AppState>, iri: &str) -> AppResult<serde_json::Value> {
     let peer = owning_peer(state, iri).await;
-    let resp = state
-        .http
-        .get(iri)
-        .header(axum::http::header::ACCEPT, "text/turtle")
-        .send()
-        .await;
+    let resp = state.http.get(iri).header(axum::http::header::ACCEPT, "text/turtle").send().await;
     let body = match resp {
         Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
         Ok(r) => {

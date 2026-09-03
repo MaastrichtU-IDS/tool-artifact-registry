@@ -209,12 +209,8 @@ pub fn software(s: &Software, releases: &[Release], instances: &[Instance]) -> S
                 out.push_str(&format!("  - Install: `{cmd}`\n"));
             }
             for d in &r.downloads {
-                let what = [d.label.as_deref(), d.platform.as_deref()]
-                    .iter()
-                    .flatten()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("/");
+                let what =
+                    [d.label.as_deref(), d.platform.as_deref()].iter().flatten().cloned().collect::<Vec<_>>().join("/");
                 let what = if what.is_empty() { "download".to_string() } else { what };
                 out.push_str(&format!("  - Download ({what}): <{}>\n", d.url));
             }
@@ -242,9 +238,7 @@ pub fn software(s: &Software, releases: &[Release], instances: &[Instance]) -> S
     if let Some(readme) = &s.readme {
         out.push_str("\n## README\n\n");
         if let Some(base) = &s.readme_base_url {
-            out.push_str(&format!(
-                "*Relative links and images below resolve against <{base}>.*\n\n"
-            ));
+            out.push_str(&format!("*Relative links and images below resolve against <{base}>.*\n\n"));
         }
         out.push_str(readme.trim());
         out.push('\n');
@@ -473,11 +467,7 @@ pub fn run(r: &Run) -> String {
                 .as_ref()
                 .map(|t| format!(" — {}", t.label.clone().unwrap_or_else(|| t.iri.clone())))
                 .unwrap_or_default();
-            let note = if a.unresolved {
-                " *(a record held by another registry, not yet resolved)*"
-            } else {
-                ""
-            };
+            let note = if a.unresolved { " *(a record held by another registry, not yet resolved)*" } else { "" };
             out.push_str(&format!("- **{t}**{ty} — <{}>{note}\n", a.iri));
         }
     }
@@ -509,12 +499,8 @@ pub fn release(r: &Release) -> String {
     if !r.downloads.is_empty() {
         out.push_str("\n## Downloads\n\n");
         for d in &r.downloads {
-            let what = [d.label.as_deref(), d.platform.as_deref()]
-                .iter()
-                .flatten()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("/");
+            let what =
+                [d.label.as_deref(), d.platform.as_deref()].iter().flatten().cloned().collect::<Vec<_>>().join("/");
             let what = if what.is_empty() { "any platform".to_string() } else { what };
             out.push_str(&format!("- **{what}:** <{}>\n", d.url));
         }
@@ -627,13 +613,22 @@ pub fn site_index(ix: &SiteIndex<'_>) -> String {
     );
 
     out.push_str("## Entry points\n\n");
-    out.push_str(&format!("- [Registry description]({}/api/v1/registry): what this registry is, its counts, and its capabilities.\n", ix.base));
+    out.push_str(&format!(
+        "- [Registry description]({}/api/v1/registry): what this registry is, its counts, and its capabilities.\n",
+        ix.base
+    ));
     out.push_str(&format!("- [Search]({}/api/v1/search?q=): free-text search across every record type. Add `&federated=true` to ask this registry's peers too.\n", ix.base));
     out.push_str(&format!("- [Software]({}/api/v1/software): the catalogue. Filter by `?kind=`, `?topic=`, `?keyword=`, `?license=`, `?produces=`, `?consumes=`.\n", ix.base));
-    out.push_str(&format!("- [Deployments]({}/api/v1/instances): where the software actually runs, with health.\n", ix.base));
+    out.push_str(&format!(
+        "- [Deployments]({}/api/v1/instances): where the software actually runs, with health.\n",
+        ix.base
+    ));
     out.push_str(&format!("- [Artifacts]({}/api/v1/artifacts): the data. Filter by `?conforms_to=`, `?availability=`, `?keyword=` and `?content=`.\n", ix.base));
     out.push_str(&format!("- [Name a set of bytes]({}/api/v1/artifacts/identify?algorithm=sha256&value=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855): turn a digest into the content identifier this registry derives from it. `GET` with `?algorithm=&value=`, or `POST` `{{\"algorithm\":\"sha256\",\"value\":\"…\"}}`. It writes nothing and needs no more credential than a read; the section on naming bytes, at the end of this file, has how to compute the same string without calling it at all.\n", ix.base));
-    out.push_str(&format!("- [Runs]({}/api/v1/runs): executions, each linking the artifacts it used and generated.\n", ix.base));
+    out.push_str(&format!(
+        "- [Runs]({}/api/v1/runs): executions, each linking the artifacts it used and generated.\n",
+        ix.base
+    ));
     out.push_str(&format!("- [Capability matchmaking]({}/api/v1/capabilities?produces=): which software can produce or consume a given type of artifact.\n", ix.base));
     out.push_str(&format!("- [Vocabulary search]({}/api/v1/vocab/search?q=&branch=topic): look up a controlled term before citing it. `branch=topic` for research topics, `branch=data` for artifact types. Never guess a term IRI — a write naming one this registry cannot resolve is refused, and the refusal says how to recover.\n", ix.base));
     out.push_str(&format!("- [Artifact types]({}/api/v1/types): what an artifact may say it is. When the search has nothing, POST here — with an `iri` to adopt a term that already has one elsewhere, without to have this registry name it.\n", ix.base));

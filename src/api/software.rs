@@ -76,10 +76,7 @@ fn where_body(f: &SoftwareFilter) -> String {
     w
 }
 
-pub async fn list(
-    State(state): State<Arc<AppState>>,
-    Query(f): Query<SoftwareFilter>,
-) -> AppResult<impl IntoResponse> {
+pub async fn list(State(state): State<Arc<AppState>>, Query(f): Query<SoftwareFilter>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let body = where_body(&f);
     let (iris, next) = page_iris(&state, &body, &f.paging)?;
@@ -270,17 +267,11 @@ pub async fn tombstone(state: &AppState, iri: &str, principal: &Principal) -> Ap
     let mut tx = GraphTx::new();
     tx.extend(n.finish());
     state.store.apply(tx).map_err(AppError::from)?;
-    let _ = state
-        .ops
-        .audit(Some(&principal.subject), principal.actor_kind(), "tombstone", Some(iri), None, None)
-        .await;
+    let _ = state.ops.audit(Some(&principal.subject), principal.actor_kind(), "tombstone", Some(iri), None, None).await;
     Ok(())
 }
 
-pub async fn list_releases(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> AppResult<impl IntoResponse> {
+pub async fn list_releases(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Software, &id);
     let releases = dom::list_releases(&ctx, &iri)?;
@@ -307,7 +298,14 @@ pub async fn create_release(
     state.store.apply(tx).map_err(AppError::from)?;
     let _ = state
         .ops
-        .audit(Some(&principal.subject), principal.actor_kind(), "release.create", Some(&iri), Some(&input.version), None)
+        .audit(
+            Some(&principal.subject),
+            principal.actor_kind(),
+            "release.create",
+            Some(&iri),
+            Some(&input.version),
+            None,
+        )
         .await;
     let ctx = Ctx::new(&state).await?;
     let quads = state.store.describe(&iri).map_err(AppError::from)?;
@@ -333,9 +331,7 @@ pub async fn sync(
     let ctx = Ctx::new(&state).await?;
     let existing = dom::load_software(&ctx, &iri)?;
     let Some(cfg) = existing.sync.clone() else {
-        return Err(AppError::bad_request(
-            "this record is not connected to a repository — set `sync` on it first",
-        ));
+        return Err(AppError::bad_request("this record is not connected to a repository — set `sync` on it first"));
     };
     if !cfg.enabled {
         return Err(AppError::bad_request("sync is disabled for this record"));

@@ -57,7 +57,8 @@ impl Harness {
         let resp = self.app.clone().oneshot(req).await.unwrap();
         let status = resp.status();
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-        let value = serde_json::from_slice(&bytes).unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()));
+        let value =
+            serde_json::from_slice(&bytes).unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()));
         (status, value)
     }
 
@@ -89,9 +90,8 @@ impl Harness {
     /// A deployment plus a token that acts as it — the credential a subscription is managed
     /// with, exactly as for API tokens (spec §8.3).
     async fn deployment(&self, software_id: &str, label: &str) -> Deployment {
-        let (status, inst) = self
-            .post("/api/v1/instances", ROOT, json!({"label": label, "software": software_id}))
-            .await;
+        let (status, inst) =
+            self.post("/api/v1/instances", ROOT, json!({"label": label, "software": software_id})).await;
         assert_eq!(status, StatusCode::CREATED, "{inst}");
         let id = inst["id"].as_str().unwrap().to_string();
         let (status, tok) = self
@@ -102,7 +102,11 @@ impl Harness {
             )
             .await;
         assert_eq!(status, StatusCode::CREATED, "{tok}");
-        Deployment { id, iri: inst["iri"].as_str().unwrap().to_string(), token: tok["token"].as_str().unwrap().to_string() }
+        Deployment {
+            id,
+            iri: inst["iri"].as_str().unwrap().to_string(),
+            token: tok["token"].as_str().unwrap().to_string(),
+        }
     }
 
     async fn subscribe(&self, d: &Deployment, body: Value) -> Value {
@@ -149,7 +153,8 @@ struct Deployment {
 
 /// Everything queued for a subscription, from the beginning, without acknowledging it.
 async fn all_deliveries(h: &Harness, d: &Deployment, sid: &str) -> Vec<Value> {
-    let (status, page) = h.get(&format!("/api/v1/subscriptions/{sid}/deliveries?cursor=0&limit=100"), Some(&d.token)).await;
+    let (status, page) =
+        h.get(&format!("/api/v1/subscriptions/{sid}/deliveries?cursor=0&limit=100"), Some(&d.token)).await;
     assert_eq!(status, StatusCode::OK, "{page}");
     page["items"].as_array().cloned().unwrap_or_default()
 }
@@ -244,9 +249,8 @@ async fn the_pull_path_returns_the_right_artifacts_from_a_cursor() {
     let a3 = h.advertise(&producer, "ci/4", "report three", REPORT, "public").await;
 
     // First page: oldest first, so a subscriber processes in the order things happened.
-    let (status, page) = h
-        .get(&format!("/api/v1/subscriptions/{sid}/deliveries?limit=2"), Some(&subscriber.token))
-        .await;
+    let (status, page) =
+        h.get(&format!("/api/v1/subscriptions/{sid}/deliveries?limit=2"), Some(&subscriber.token)).await;
     assert_eq!(status, StatusCode::OK, "{page}");
     let items = page["items"].as_array().unwrap();
     assert_eq!(items.len(), 2);
@@ -256,9 +260,8 @@ async fn the_pull_path_returns_the_right_artifacts_from_a_cursor() {
     let cursor = page["next_cursor"].as_i64().unwrap();
 
     // Second page, from the cursor.
-    let (_, page2) = h
-        .get(&format!("/api/v1/subscriptions/{sid}/deliveries?cursor={cursor}"), Some(&subscriber.token))
-        .await;
+    let (_, page2) =
+        h.get(&format!("/api/v1/subscriptions/{sid}/deliveries?cursor={cursor}"), Some(&subscriber.token)).await;
     let items2 = page2["items"].as_array().unwrap();
     assert_eq!(items2.len(), 1);
     assert_eq!(items2[0]["artifact_iri"], a3);
@@ -279,9 +282,8 @@ async fn the_pull_path_returns_the_right_artifacts_from_a_cursor() {
     assert_eq!(after["items"].as_array().unwrap().len(), 1);
     assert_eq!(after["items"][0]["artifact_iri"], a3);
 
-    let (_, rewound) = h
-        .post(&format!("/api/v1/subscriptions/{sid}/deliveries/ack"), &subscriber.token, json!({"cursor": 0}))
-        .await;
+    let (_, rewound) =
+        h.post(&format!("/api/v1/subscriptions/{sid}/deliveries/ack"), &subscriber.token, json!({"cursor": 0})).await;
     assert_eq!(rewound["cursor"], cursor, "a stale acknowledgement must not replay what was handled");
 }
 
@@ -326,7 +328,11 @@ async fn a_failing_webhook_backs_off_rather_than_retrying_forever() {
     assert!(items[0]["next_attempt_at"].is_string(), "a retry must be scheduled, not immediate");
 
     // The point of the backoff: a second pass right away does nothing at all.
-    assert_eq!(tar::api::subscriptions::deliver_due(&h.state).await, 0, "a failed delivery must not be retried at once");
+    assert_eq!(
+        tar::api::subscriptions::deliver_due(&h.state).await,
+        0,
+        "a failed delivery must not be retried at once"
+    );
     let (_, detail) = h.get(&format!("/api/v1/subscriptions/{sid}"), Some(&subscriber.token)).await;
     assert_eq!(detail["subscription"]["consecutive_failures"], 1);
     assert!(detail["subscription"]["last_error"].is_string());
@@ -383,9 +389,8 @@ async fn a_deployment_cannot_manage_another_deployments_subscriptions() {
     assert_eq!(body["type"], "https://w3id.org/tar/problem/forbidden");
 
     // Creating one on their behalf — the Instance comes from the credential, never the path.
-    let (status, _) = h
-        .post(&format!("/api/v1/instances/{}/subscriptions", theirs.id), &mine.token, json!({"filter": {}}))
-        .await;
+    let (status, _) =
+        h.post(&format!("/api/v1/instances/{}/subscriptions", theirs.id), &mine.token, json!({"filter": {}})).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     // Reading, editing, acknowledging or deleting one by id.
@@ -419,18 +424,17 @@ async fn a_webhook_cannot_be_pointed_at_the_registrys_own_network() {
     let d = h.deployment(&sw, "mine.example.org").await;
 
     for bad in [
-        "http://hooks.example.org/plain",              // unencrypted
-        "https://user:pw@hooks.example.org/hook",      // credentials in the URL
-        "https://127.0.0.1/hook",                      // loopback
-        "https://169.254.169.254/latest/meta-data/",   // cloud metadata, the classic SSRF target
-        "https://10.1.2.3/hook",                       // RFC1918
-        "https://[::ffff:127.0.0.1]/hook",             // IPv4-mapped loopback
+        "http://hooks.example.org/plain",            // unencrypted
+        "https://user:pw@hooks.example.org/hook",    // credentials in the URL
+        "https://127.0.0.1/hook",                    // loopback
+        "https://169.254.169.254/latest/meta-data/", // cloud metadata, the classic SSRF target
+        "https://10.1.2.3/hook",                     // RFC1918
+        "https://[::ffff:127.0.0.1]/hook",           // IPv4-mapped loopback
         "https://localhost/hook",
         "file:///etc/passwd",
     ] {
-        let (status, body) = h
-            .post(&format!("/api/v1/instances/{}/subscriptions", d.id), &d.token, json!({"webhook_url": bad}))
-            .await;
+        let (status, body) =
+            h.post(&format!("/api/v1/instances/{}/subscriptions", d.id), &d.token, json!({"webhook_url": bad})).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} must be refused, got {body}");
         assert_eq!(body["type"], "https://w3id.org/tar/problem/bad-request");
     }

@@ -85,10 +85,7 @@ async fn run(
     }
 
     let wants_json = format.as_deref() == Some("json")
-        || headers
-            .get(axum::http::header::ACCEPT)
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|a| a.contains("json"));
+        || headers.get(axum::http::header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|a| a.contains("json"));
 
     // ASK and CONSTRUCT are answered too — a peer registry uses CONSTRUCT for stubs.
     // The form is read after the prologue: `PREFIX … ASK { … }` is the normal way to write an
@@ -106,7 +103,9 @@ async fn run(
         let triples = state.store.construct(&q).map_err(AppError::from)?;
         let quads: Vec<oxigraph::model::Quad> = triples
             .into_iter()
-            .map(|t| oxigraph::model::Quad::new(t.subject, t.predicate, t.object, oxigraph::model::GraphName::DefaultGraph))
+            .map(|t| {
+                oxigraph::model::Quad::new(t.subject, t.predicate, t.object, oxigraph::model::GraphName::DefaultGraph)
+            })
             .collect();
         let body = crate::negotiate::serialize(&quads, crate::negotiate::Repr::Turtle, state.base())?;
         return Ok(([(axum::http::header::CONTENT_TYPE, "text/turtle; charset=utf-8")], body));

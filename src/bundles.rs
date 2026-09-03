@@ -110,12 +110,7 @@ pub struct Bundle {
 /// Every bundle, in load order. Adding one here is the whole of adding a bundle: it is loaded
 /// into both stores, hash-guarded, dumped, restored and described without another edit.
 pub const BUNDLES: &[Bundle] = &[
-    Bundle {
-        name: "vocab",
-        source: "shapes/vocab.ttl",
-        graph: "urn:tar:bundle:vocab",
-        body: Body::Turtle(VOCAB_TTL),
-    },
+    Bundle { name: "vocab", source: "shapes/vocab.ttl", graph: "urn:tar:bundle:vocab", body: Body::Turtle(VOCAB_TTL) },
     Bundle {
         name: "shapes",
         source: "shapes/tar-shapes.ttl",
@@ -124,12 +119,7 @@ pub const BUNDLES: &[Bundle] = &[
         graph: ns::G_SHAPES,
         body: Body::Turtle(SHAPES_TTL),
     },
-    Bundle {
-        name: "edam",
-        source: "shapes/edam.ttl",
-        graph: "urn:tar:bundle:edam",
-        body: Body::Turtle(EDAM_TTL),
-    },
+    Bundle { name: "edam", source: "shapes/edam.ttl", graph: "urn:tar:bundle:edam", body: Body::Turtle(EDAM_TTL) },
     Bundle {
         name: "euroscivoc",
         source: "shapes/euroscivoc.ttl",
@@ -175,8 +165,7 @@ impl Bundle {
             // No file to hash, so hash what it produces. Sorted, because quad order is not
             // something the table promises and a reordering is not a change.
             Body::Keywords => {
-                let mut lines: Vec<String> =
-                    keyword_quads(base).iter().map(|q| q.to_string()).collect();
+                let mut lines: Vec<String> = keyword_quads(base).iter().map(|q| q.to_string()).collect();
                 lines.sort();
                 h.update(lines.join("\n").as_bytes());
             }
@@ -191,9 +180,9 @@ impl Bundle {
     fn load_into(&self, store: &dyn GraphStore, base: &str) -> Result<usize> {
         store.drop_graph(self.graph).with_context(|| format!("dropping {}", self.graph))?;
         match &self.body {
-            Body::Turtle(text) => store
-                .load_turtle(text, self.graph, Some(base))
-                .with_context(|| format!("loading {}", self.source)),
+            Body::Turtle(text) => {
+                store.load_turtle(text, self.graph, Some(base)).with_context(|| format!("loading {}", self.source))
+            }
             Body::Keywords => {
                 let quads = keyword_quads(base);
                 let n = quads.len();

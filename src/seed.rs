@@ -78,15 +78,13 @@ SELECT DISTINCT ?s WHERE {{
     let mut tx = GraphTx::new();
     if !rescue.is_empty() {
         let values = rescue.iter().map(|i| format!("<{i}>")).collect::<Vec<_>>().join(" ");
-        let statements = format!(
-            "SELECT ?s ?p ?o WHERE {{ VALUES ?s {{ {values} }} GRAPH <{legacy}> {{ ?s ?p ?o }} }}"
-        );
+        let statements =
+            format!("SELECT ?s ?p ?o WHERE {{ VALUES ?s {{ {values} }} GRAPH <{legacy}> {{ ?s ?p ?o }} }}");
         for row in &state.store.select(&statements)?.rows {
             let (Some(s), Some(p), Some(o)) = (row.term("s"), row.term("p"), row.term("o")) else {
                 continue;
             };
-            let (oxigraph::model::Term::NamedNode(s), oxigraph::model::Term::NamedNode(p)) = (s, p)
-            else {
+            let (oxigraph::model::Term::NamedNode(s), oxigraph::model::Term::NamedNode(p)) = (s, p) else {
                 continue;
             };
             tx.insert(oxigraph::model::Quad::new(
@@ -139,9 +137,7 @@ SELECT DISTINCT ?s WHERE {{
 ///
 /// Idempotent: a concept that already carries any of the concept classes is not selected.
 fn class_existing_types(state: &AppState) -> Result<usize> {
-    let classes = crate::domain::vocabulary::CONCEPT_CLASSES
-        .map(|c| format!("<{c}>"))
-        .join(", ");
+    let classes = crate::domain::vocabulary::CONCEPT_CLASSES.map(|c| format!("<{c}>")).join(", ");
     let q = format!(
         r#"{p}
 SELECT DISTINCT ?c ?g WHERE {{
@@ -215,16 +211,13 @@ SELECT ?s ?t WHERE {{
         peer = ns::G_PEER_PREFIX
     );
     let Ok(rows) = state.store.select(&q) else { return };
-    let pairs: Vec<(String, String)> =
-        rows.rows.iter().filter_map(|r| Some((r.iri("s")?, r.iri("t")?))).collect();
+    let pairs: Vec<(String, String)> = rows.rows.iter().filter_map(|r| Some((r.iri("s")?, r.iri("t")?))).collect();
     let terms: Vec<&str> = pairs.iter().map(|(_, t)| t.as_str()).collect();
     let Some(held) = crate::domain::vocabulary::held(state, &terms) else { return };
 
     let mut stuck: Vec<&(String, String)> = pairs
         .iter()
-        .filter(|(_, t)| {
-            held.get(t).is_none_or(|h| !h.usable_as(crate::domain::vocabulary::Slot::Topic))
-        })
+        .filter(|(_, t)| held.get(t).is_none_or(|h| !h.usable_as(crate::domain::vocabulary::Slot::Topic)))
         .collect();
     stuck.sort();
     stuck.dedup();
@@ -332,22 +325,92 @@ fn local_type(base: &str, slug: &str) -> String {
 /// hash-chained patch logs (D11).
 fn local_types(base: &str) -> Vec<(String, &'static str, &'static str, &'static str)> {
     vec![
-        (local_type(base, "rdf-graph"), "RDF graph", "An RDF graph in any serialisation. EDAM has no general term for this, so the registry defines one (D11).", "text/turtle"),
-        (local_type(base, "shacl-shapes-graph"), "SHACL shapes graph", "An RDF graph of SHACL shapes used to validate other graphs.", "text/turtle"),
-        (local_type(base, "shacl-validation-report"), "SHACL validation report", "An RDF validation report produced by a SHACL processor.", "text/turtle"),
-        (local_type(base, "conformance-summary"), "Conformance summary", "A human-readable summary of a validation run.", "application/json"),
-        (local_type(base, "schema-model"), "Schema model", "A structural description of a dataset schema.", "application/json"),
-        (local_type(base, "sulo-ontology"), "SULO ontology", "The SULO upper ontology, or a module of it.", "text/turtle"),
+        (
+            local_type(base, "rdf-graph"),
+            "RDF graph",
+            "An RDF graph in any serialisation. EDAM has no general term for this, so the registry defines one (D11).",
+            "text/turtle",
+        ),
+        (
+            local_type(base, "shacl-shapes-graph"),
+            "SHACL shapes graph",
+            "An RDF graph of SHACL shapes used to validate other graphs.",
+            "text/turtle",
+        ),
+        (
+            local_type(base, "shacl-validation-report"),
+            "SHACL validation report",
+            "An RDF validation report produced by a SHACL processor.",
+            "text/turtle",
+        ),
+        (
+            local_type(base, "conformance-summary"),
+            "Conformance summary",
+            "A human-readable summary of a validation run.",
+            "application/json",
+        ),
+        (
+            local_type(base, "schema-model"),
+            "Schema model",
+            "A structural description of a dataset schema.",
+            "application/json",
+        ),
+        (
+            local_type(base, "sulo-ontology"),
+            "SULO ontology",
+            "The SULO upper ontology, or a module of it.",
+            "text/turtle",
+        ),
         (local_type(base, "owl-ontology"), "OWL ontology", "An OWL ontology serialised as RDF.", "text/turtle"),
-        (local_type(base, "mermaid-uml"), "Mermaid UML diagram", "A class diagram in Mermaid syntax.", "text/vnd.mermaid"),
-        (local_type(base, "sparql-update"), "SPARQL update", "A SPARQL 1.1 Update request.", "application/sparql-update"),
+        (
+            local_type(base, "mermaid-uml"),
+            "Mermaid UML diagram",
+            "A class diagram in Mermaid syntax.",
+            "text/vnd.mermaid",
+        ),
+        (
+            local_type(base, "sparql-update"),
+            "SPARQL update",
+            "A SPARQL 1.1 Update request.",
+            "application/sparql-update",
+        ),
         (local_type(base, "rdf-quads"), "RDF quads", "A named-graph RDF dataset.", "application/n-quads"),
-        (local_type(base, "patch-log"), "Hash-chained patch log", "An append-only log of RDF patches, each linked to its predecessor by hash.", "application/n-quads"),
-        (local_type(base, "masked-replica"), "Masked RDF replica", "A privacy-masked copy of an RDF dataset.", "application/n-quads"),
-        (local_type(base, "relational-source"), "Relational source", "A relational database exposed for virtualisation.", "application/sql"),
-        (local_type(base, "r2rml-mapping"), "R2RML/RML mapping", "A declarative mapping from relational or heterogeneous data to RDF.", "text/turtle"),
-        (local_type(base, "materialised-view"), "Materialised RDF view", "RDF materialised from a virtual mapping.", "application/n-quads"),
-        (local_type(base, "mapping-coverage-report"), "Mapping coverage report", "Which parts of a source a mapping covers.", "application/json"),
+        (
+            local_type(base, "patch-log"),
+            "Hash-chained patch log",
+            "An append-only log of RDF patches, each linked to its predecessor by hash.",
+            "application/n-quads",
+        ),
+        (
+            local_type(base, "masked-replica"),
+            "Masked RDF replica",
+            "A privacy-masked copy of an RDF dataset.",
+            "application/n-quads",
+        ),
+        (
+            local_type(base, "relational-source"),
+            "Relational source",
+            "A relational database exposed for virtualisation.",
+            "application/sql",
+        ),
+        (
+            local_type(base, "r2rml-mapping"),
+            "R2RML/RML mapping",
+            "A declarative mapping from relational or heterogeneous data to RDF.",
+            "text/turtle",
+        ),
+        (
+            local_type(base, "materialised-view"),
+            "Materialised RDF view",
+            "RDF materialised from a virtual mapping.",
+            "application/n-quads",
+        ),
+        (
+            local_type(base, "mapping-coverage-report"),
+            "Mapping coverage report",
+            "Which parts of a source a mapping covers.",
+            "application/json",
+        ),
     ]
 }
 
@@ -673,7 +736,9 @@ fn seed_runs(state: &Arc<AppState>, instances: &[String], base: &str, actor: &st
                                 algorithm: "sha256".into(),
                                 value: {
                                     use sha2::{Digest, Sha256};
-                                    hex::encode(Sha256::digest(format!("https://shacl.ids.unimaas.nl/reports/{n}{i}.ttl").as_bytes()))
+                                    hex::encode(Sha256::digest(
+                                        format!("https://shacl.ids.unimaas.nl/reports/{n}{i}.ttl").as_bytes(),
+                                    ))
                                 },
                             }),
                             access_protocol: Some("https".into()),

@@ -22,12 +22,7 @@ fn split_extension(id: &str) -> (String, Option<Repr>) {
     (id.to_string(), None)
 }
 
-async fn deref(
-    state: Arc<AppState>,
-    headers: HeaderMap,
-    kind: Kind,
-    id: String,
-) -> AppResult<Response> {
+async fn deref(state: Arc<AppState>, headers: HeaderMap, kind: Kind, id: String) -> AppResult<Response> {
     let (id, pinned) = split_extension(&id);
     let iri = ids::iri_for(state.base(), kind, &id);
     let repr = pinned.unwrap_or_else(|| negotiate(&headers, Repr::Html));
@@ -128,16 +123,32 @@ fn signposting_for(ctx: &Ctx, kind: Kind, iri: &str, state: &AppState) -> Signpo
     sp
 }
 
-pub async fn deref_software(State(s): State<Arc<AppState>>, h: HeaderMap, Path(id): Path<String>) -> AppResult<Response> {
+pub async fn deref_software(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
     deref(s, h, Kind::Software, id).await
 }
-pub async fn deref_release(State(s): State<Arc<AppState>>, h: HeaderMap, Path(id): Path<String>) -> AppResult<Response> {
+pub async fn deref_release(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
     deref(s, h, Kind::Release, id).await
 }
-pub async fn deref_instance(State(s): State<Arc<AppState>>, h: HeaderMap, Path(id): Path<String>) -> AppResult<Response> {
+pub async fn deref_instance(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
     deref(s, h, Kind::Instance, id).await
 }
-pub async fn deref_artifact(State(s): State<Arc<AppState>>, h: HeaderMap, Path(id): Path<String>) -> AppResult<Response> {
+pub async fn deref_artifact(
+    State(s): State<Arc<AppState>>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
     deref(s, h, Kind::Artifact, id).await
 }
 pub async fn deref_series(State(s): State<Arc<AppState>>, h: HeaderMap, Path(id): Path<String>) -> AppResult<Response> {
@@ -177,11 +188,6 @@ pub async fn deref_generic(
     } else {
         serialize(&quads, if repr == Repr::Json { Repr::Turtle } else { repr }, state.base())?
     };
-    Ok(Negotiated {
-        repr,
-        body,
-        signposting: Some(Signposting::new(&iri)),
-        status: axum::http::StatusCode::OK,
-    }
-    .into_response())
+    Ok(Negotiated { repr, body, signposting: Some(Signposting::new(&iri)), status: axum::http::StatusCode::OK }
+        .into_response())
 }

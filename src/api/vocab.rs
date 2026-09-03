@@ -59,10 +59,7 @@ pub struct VocabHit {
     pub score: f32,
 }
 
-pub async fn search(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<VocabQuery>,
-) -> AppResult<impl IntoResponse> {
+pub async fn search(State(state): State<Arc<AppState>>, Query(q): Query<VocabQuery>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let needle = q.q.clone().unwrap_or_default();
     let limit = q.limit.unwrap_or(20).clamp(1, 100);
@@ -128,7 +125,10 @@ SELECT DISTINCT ?c ?label ?def ?class ?broader WHERE {{
         });
     }
     items.sort_by(|a, b| {
-        b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.label.len().cmp(&b.label.len()))
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.label.len().cmp(&b.label.len()))
     });
     let total = items.len();
     items.truncate(limit);
@@ -163,11 +163,7 @@ const BRANCHES: [(&str, &str); 4] = [
 const BRANCH_ALIASES: [(&str, &str); 1] = [("topic-edam", "topic-retired")];
 
 fn class_for_branch(branch: &str) -> Option<&'static str> {
-    let branch = BRANCH_ALIASES
-        .iter()
-        .find(|(old, _)| *old == branch)
-        .map(|(_, now)| *now)
-        .unwrap_or(branch);
+    let branch = BRANCH_ALIASES.iter().find(|(old, _)| *old == branch).map(|(_, now)| *now).unwrap_or(branch);
     BRANCHES.iter().find(|(b, _)| *b == branch).map(|(_, c)| *c)
 }
 
@@ -213,7 +209,8 @@ pub async fn resolve(
     Query(q): Query<ResolveQuery>,
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let iris: Vec<String> = q.iris.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).take(100).collect();
+    let iris: Vec<String> =
+        q.iris.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).take(100).collect();
     Ok(Json(ctx.type_refs(&iris)))
 }
 

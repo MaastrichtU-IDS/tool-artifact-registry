@@ -251,10 +251,11 @@ pub async fn create(
         None => None,
     };
     // A secret only means anything if there is somewhere to send it.
-    let secret = webhook_url.as_ref().map(|_| match input.webhook_secret.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => s.to_string(),
-        None => new_secret(),
-    });
+    let secret =
+        webhook_url.as_ref().map(|_| match input.webhook_secret.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(s) => s.to_string(),
+            None => new_secret(),
+        });
 
     let sub = subs::create(
         &state.ops,
@@ -282,10 +283,7 @@ pub async fn create(
         .await;
     // Shown exactly once, like a token: the registry keeps it because HMAC needs the key
     // itself, but it is never handed back a second time.
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({ "subscription": out(&state, sub), "secret": secret, "shown_once": true })),
-    ))
+    Ok((StatusCode::CREATED, Json(json!({ "subscription": out(&state, sub), "secret": secret, "shown_once": true }))))
 }
 
 pub async fn get(
@@ -350,7 +348,10 @@ pub async fn patch(
             None,
         )
         .await;
-    let updated = subs::get(&state.ops, &sub.id).await.map_err(AppError::from)?.ok_or_else(|| AppError::not_found("no such subscription"))?;
+    let updated = subs::get(&state.ops, &sub.id)
+        .await
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::not_found("no such subscription"))?;
     Ok(Json(json!({ "subscription": out(&state, updated), "secret": rotated, "shown_once": rotated.is_some() })))
 }
 
@@ -504,7 +505,11 @@ pub fn validate_webhook_url(raw: &str, settings: &WebhookSettings) -> AppResult<
             }
         }
         let lower = host.to_ascii_lowercase();
-        if lower == "localhost" || lower.ends_with(".localhost") || lower.ends_with(".local") || lower.ends_with(".internal") {
+        if lower == "localhost"
+            || lower.ends_with(".localhost")
+            || lower.ends_with(".local")
+            || lower.ends_with(".internal")
+        {
             return Err(AppError::bad_request(format!(
                 "webhook_url host {host:?} is a private name; the registry only delivers to public addresses"
             )));
@@ -662,7 +667,9 @@ pub async fn notify_advertised(
                 "artifact": loaded,
             });
             match subs::enqueue(&state.ops, &sub.id, artifact_iri, run_iri, role, &payload).await {
-                Ok(Some(seq)) => tracing::debug!(subscription = %sub.id, seq, artifact = %artifact_iri, "subscription matched"),
+                Ok(Some(seq)) => {
+                    tracing::debug!(subscription = %sub.id, seq, artifact = %artifact_iri, "subscription matched")
+                }
                 Ok(None) => {}
                 Err(e) => tracing::warn!(subscription = %sub.id, error = %e, "could not queue a subscription delivery"),
             }
@@ -704,12 +711,14 @@ pub async fn deliver_due(state: &Arc<AppState>) -> usize {
         attempted += 1;
         match post_webhook(&d, &settings).await {
             Ok(code) => {
-                if let Err(e) = subs::mark_delivered(&state.ops, &d.id, &d.subscription_id, code, d.attempts + 1).await {
+                if let Err(e) = subs::mark_delivered(&state.ops, &d.id, &d.subscription_id, code, d.attempts + 1).await
+                {
                     tracing::warn!(error = %e, "could not record a successful delivery");
                 }
             }
             Err(err) => {
-                let outcome = subs::mark_failed(&state.ops, &d.id, &d.subscription_id, &err.message, err.status, &policy).await;
+                let outcome =
+                    subs::mark_failed(&state.ops, &d.id, &d.subscription_id, &err.message, err.status, &policy).await;
                 match outcome {
                     Ok(o) => {
                         if o.suspended {
@@ -757,9 +766,7 @@ struct DeliveryError {
 async fn post_webhook(d: &subs::DueDelivery, settings: &WebhookSettings) -> Result<u16, DeliveryError> {
     let url = url::Url::parse(&d.webhook_url)
         .map_err(|e| DeliveryError { message: format!("webhook URL is no longer valid: {e}"), status: None })?;
-    resolved_targets_are_public(&url, settings)
-        .await
-        .map_err(|m| DeliveryError { message: m, status: None })?;
+    resolved_targets_are_public(&url, settings).await.map_err(|m| DeliveryError { message: m, status: None })?;
 
     let timestamp = chrono::Utc::now().timestamp().to_string();
     let mut req = WEBHOOK_CLIENT
@@ -914,8 +921,11 @@ mod tests {
     #[test]
     fn registry_minted_kinds_accept_a_bare_id_the_way_every_path_does() {
         let base = "https://reg.test";
-        let f = normalise_filter(base, Filter { software: vec!["01a".into()], instance: vec!["01b".into()], ..Default::default() })
-            .unwrap();
+        let f = normalise_filter(
+            base,
+            Filter { software: vec!["01a".into()], instance: vec!["01b".into()], ..Default::default() },
+        )
+        .unwrap();
         assert_eq!(f.software, vec!["https://reg.test/software/01a"]);
         assert_eq!(f.instance, vec!["https://reg.test/instance/01b"]);
     }

@@ -256,11 +256,7 @@ pub fn parse_query(value: &str) -> Option<String> {
         // the `ni:` form, or leaves base64 padding on, still finds the record.
         return identify(alg, digest).ok().map(|c| c.iri);
     }
-    ALGORITHMS
-        .iter()
-        .filter(|a| a.derives)
-        .find_map(|a| identify(a.name, v).ok())
-        .map(|c| c.iri)
+    ALGORITHMS.iter().filter(|a| a.derives).find_map(|a| identify(a.name, v).ok()).map(|c| c.iri)
 }
 
 // ------------------------------------------------------------------ write validation
@@ -362,10 +358,8 @@ fn checksums_in(quads: &[Quad]) -> Vec<(String, String, String)> {
             }
         }
     }
-    let mut out: Vec<(String, String, String)> = values
-        .into_iter()
-        .filter_map(|(s, v)| algorithms.get(&s).map(|a| (s, a.clone(), v)))
-        .collect();
+    let mut out: Vec<(String, String, String)> =
+        values.into_iter().filter_map(|(s, v)| algorithms.get(&s).map(|a| (s, a.clone(), v))).collect();
     // Blank node ids are not stable across runs, so a report built from an unordered map would
     // list the same two problems in a different order each time and no test could pin it.
     out.sort();

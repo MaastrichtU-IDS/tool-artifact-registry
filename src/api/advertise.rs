@@ -79,12 +79,8 @@ async fn advertise(
     // goes, and a rejection after that would leave a claim recorded for a run that never
     // existed.
     {
-        let mut candidate = rundom::run_quads(
-            &ids::mint(state.base(), Kind::Run),
-            &input.run,
-            &instance_iri,
-            &principal.subject,
-        );
+        let mut candidate =
+            rundom::run_quads(&ids::mint(state.base(), Kind::Run), &input.run, &instance_iri, &principal.subject);
         for a in input.artifacts.iter().filter(|a| a.iri.is_none()) {
             candidate.extend(artdom::artifact_quads(
                 state.base(),
@@ -160,7 +156,9 @@ async fn advertise(
                         let generated_by = (role == Role::Produced).then_some(run_iri.as_str());
                         tx.extend(artdom::artifact_quads(state.base(), &iri, a, &principal.subject, generated_by));
                         for parent in &a.was_derived_from {
-                            if !ids::is_local(state.base(), parent) && !state.store.exists(parent).map_err(AppError::from)? {
+                            if !ids::is_local(state.base(), parent)
+                                && !state.store.exists(parent).map_err(AppError::from)?
+                            {
                                 state.ops.queue_resolve(parent, None).await.map_err(AppError::from)?;
                                 queued.push(parent.clone());
                             }
@@ -175,11 +173,8 @@ async fn advertise(
             }
         };
 
-        let fresh = state
-            .ops
-            .claim_advertisement(&run_iri, &artifact_iri, role.as_str())
-            .await
-            .map_err(AppError::from)?;
+        let fresh =
+            state.ops.claim_advertisement(&run_iri, &artifact_iri, role.as_str()).await.map_err(AppError::from)?;
         if fresh {
             created_any = true;
             match role {
@@ -232,7 +227,12 @@ async fn advertise(
     let status = if created_any { StatusCode::CREATED } else { StatusCode::OK };
     Ok((
         status,
-        Json(AdvertiseOut { run: run_iri, artifacts: artifact_iris, created: created_any, queued_for_resolution: queued }),
+        Json(AdvertiseOut {
+            run: run_iri,
+            artifacts: artifact_iris,
+            created: created_any,
+            queued_for_resolution: queued,
+        }),
     ))
 }
 

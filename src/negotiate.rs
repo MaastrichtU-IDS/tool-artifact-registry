@@ -209,14 +209,17 @@ impl Negotiated {
 impl IntoResponse for Negotiated {
     fn into_response(self) -> Response {
         let mut headers = HeaderMap::new();
-        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(match self.repr {
-            Repr::Json => "application/json",
-            Repr::Turtle => "text/turtle; charset=utf-8",
-            Repr::JsonLd => "application/ld+json",
-            Repr::NQuads => "application/n-quads",
-            Repr::Html => "text/html; charset=utf-8",
-            Repr::Markdown => "text/markdown; charset=utf-8",
-        }));
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(match self.repr {
+                Repr::Json => "application/json",
+                Repr::Turtle => "text/turtle; charset=utf-8",
+                Repr::JsonLd => "application/ld+json",
+                Repr::NQuads => "application/n-quads",
+                Repr::Html => "text/html; charset=utf-8",
+                Repr::Markdown => "text/markdown; charset=utf-8",
+            }),
+        );
         headers.insert(header::VARY, HeaderValue::from_static("Accept"));
         if let Some(v) = self.signposting.as_ref().and_then(|s| s.header_value()) {
             headers.insert(header::LINK, v);

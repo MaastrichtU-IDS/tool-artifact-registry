@@ -129,10 +129,8 @@ async fn get<T: serde::de::DeserializeOwned>(
     url: &str,
     token: Option<&str>,
 ) -> Result<Option<T>, String> {
-    let mut req = http
-        .get(url)
-        .header("accept", "application/vnd.github+json")
-        .header("user-agent", "tool-artifact-registry");
+    let mut req =
+        http.get(url).header("accept", "application/vnd.github+json").header("user-agent", "tool-artifact-registry");
     if let Some(t) = token {
         req = req.header("authorization", format!("Bearer {t}"));
     }
@@ -234,8 +232,8 @@ pub async fn sync_into(
                         // Relative images in a README only resolve against the raw root, and a
                         // private repository has no anonymous one — so do not set a base that
                         // would render every image broken for readers.
-                        let base = (!meta.private)
-                            .then(|| format!("https://raw.githubusercontent.com/{repo}/{branch}/"));
+                        let base =
+                            (!meta.private).then(|| format!("https://raw.githubusercontent.com/{repo}/{branch}/"));
                         if base.is_some() && input.readme_base_url != base {
                             input.readme_base_url = base;
                             out.changed.push("readme_base_url".into());
@@ -250,7 +248,9 @@ pub async fn sync_into(
         }
     }
     if managed(fields, "releases") {
-        if let Some(releases) = get::<Vec<GhRelease>>(http, &format!("{API}/repos/{repo}/releases?per_page=20"), token).await? {
+        if let Some(releases) =
+            get::<Vec<GhRelease>>(http, &format!("{API}/repos/{repo}/releases?per_page=20"), token).await?
+        {
             let mut seen: HashSet<String> = HashSet::new();
             for r in releases.into_iter().filter(|r| !r.draft) {
                 let Some(tag) = r.tag_name.clone().filter(|t| !t.is_empty()) else { continue };

@@ -63,9 +63,8 @@ impl Harness {
         assert_eq!(status, StatusCode::CREATED, "{sw}");
         let software_id = sw["id"].as_str().unwrap().to_string();
 
-        let (status, minted) = self
-            .req("POST", &format!("/api/v1/software/{software_id}/tokens"), Some(ROOT), Some(json!({})))
-            .await;
+        let (status, minted) =
+            self.req("POST", &format!("/api/v1/software/{software_id}/tokens"), Some(ROOT), Some(json!({}))).await;
         assert_eq!(status, StatusCode::CREATED, "{minted}");
         let key = minted["token"].as_str().unwrap().to_string();
 
@@ -89,9 +88,8 @@ async fn a_curator_cannot_edit_a_record_the_deployment_maintains() {
     let (_, _, inst) = h.self_registered().await;
     let id = inst["id"].as_str().unwrap();
 
-    let (status, body) = h
-        .req("PATCH", &format!("/api/v1/instances/{id}"), Some(ROOT), Some(json!({"label": "renamed by hand"})))
-        .await;
+    let (status, body) =
+        h.req("PATCH", &format!("/api/v1/instances/{id}"), Some(ROOT), Some(json!({"label": "renamed by hand"}))).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 
     // The refusal has to say what to do instead, or it reads as a bug.
@@ -143,9 +141,8 @@ async fn a_curator_can_still_withdraw_it_and_that_is_the_remedy() {
 async fn a_curator_created_record_stays_editable() {
     // The rule is about who maintains the record, not about deployments in general.
     let h = harness().await;
-    let (status, sw) = h
-        .req("POST", "/api/v1/software", Some(ROOT), Some(json!({"name": "a-service", "kinds": ["service"]})))
-        .await;
+    let (status, sw) =
+        h.req("POST", "/api/v1/software", Some(ROOT), Some(json!({"name": "a-service", "kinds": ["service"]}))).await;
     assert_eq!(status, StatusCode::CREATED, "{sw}");
 
     let (status, inst) = h
@@ -278,13 +275,11 @@ async fn a_claim_about_who_produced_something_cannot_displace_the_evidence() {
     // A caller may say anything about who produced an artifact. What it must never be able to
     // do is overwrite what the registry knows: which credential presented the record.
     let h = harness().await;
-    let (status, sw) = h
-        .req("POST", "/api/v1/software", Some(ROOT), Some(json!({"name": "a-service", "kinds": ["service"]})))
-        .await;
+    let (status, sw) =
+        h.req("POST", "/api/v1/software", Some(ROOT), Some(json!({"name": "a-service", "kinds": ["service"]}))).await;
     assert_eq!(status, StatusCode::CREATED, "{sw}");
-    let (status, inst) = h
-        .req("POST", "/api/v1/instances", Some(ROOT), Some(json!({"label": "d", "software": sw["id"]})))
-        .await;
+    let (status, inst) =
+        h.req("POST", "/api/v1/instances", Some(ROOT), Some(json!({"label": "d", "software": sw["id"]}))).await;
     assert_eq!(status, StatusCode::CREATED, "{inst}");
     let (status, minted) = h
         .req("POST", &format!("/api/v1/instances/{}/tokens", inst["id"].as_str().unwrap()), Some(ROOT), Some(json!({})))
@@ -349,9 +344,7 @@ async fn a_supplied_modification_date_replaces_the_stamp_rather_than_joining_it(
     assert!(dates[0].starts_with("2024-03-01"), "and it is the one the caller gave: {dates:?}");
 
     // Saying nothing still gets a stamp — the registry did modify the record.
-    let (status, other) = h
-        .req("POST", "/api/v1/artifacts", Some(ROOT), Some(json!({"title": "Says nothing"})))
-        .await;
+    let (status, other) = h.req("POST", "/api/v1/artifacts", Some(ROOT), Some(json!({"title": "Says nothing"}))).await;
     assert_eq!(status, StatusCode::CREATED, "{other}");
     assert!(other["modified"].as_str().is_some_and(|m| m.starts_with("20")), "{other}");
 }
@@ -379,9 +372,7 @@ async fn an_artifacts_contact_uses_the_standard_term_and_still_reads_the_retired
     let count = |predicate: &str| {
         h.state
             .store
-            .select(&format!(
-                "SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH ?g {{ <{iri}> <{predicate}> ?o }} }}"
-            ))
+            .select(&format!("SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH ?g {{ <{iri}> <{predicate}> ?o }} }}"))
             .unwrap()
             .rows
             .first()
@@ -405,9 +396,8 @@ async fn an_artifacts_contact_uses_the_standard_term_and_still_reads_the_retired
     tx.extend(a.finish());
     h.state.store.apply(tx).unwrap();
 
-    let (status, old) = h
-        .req("GET", &format!("/api/v1/artifacts/{}", legacy.rsplit('/').next().unwrap()), None, None)
-        .await;
+    let (status, old) =
+        h.req("GET", &format!("/api/v1/artifacts/{}", legacy.rsplit('/').next().unwrap()), None, None).await;
     assert_eq!(status, StatusCode::OK, "{old}");
     assert_eq!(old["contact"]["name"], "Written Before The Change", "{old}");
 }
@@ -489,9 +479,8 @@ async fn a_registration_client_is_not_spendable_from_another_issuer() {
 
     // The partner mints a client of the same name and announces a deployment.
     let theirs = workload_token(PARTNER_ISSUER, "ontoexplorer-prod");
-    let (status, body) = h
-        .req("PUT", "/api/v1/instances/self", Some(&theirs), Some(json!({"instance_key": "theirs"})))
-        .await;
+    let (status, body) =
+        h.req("PUT", "/api/v1/instances/self", Some(&theirs), Some(json!({"instance_key": "theirs"}))).await;
     assert_eq!(
         status,
         StatusCode::FORBIDDEN,
@@ -530,8 +519,7 @@ async fn an_unpinned_registration_client_does_not_match_a_secondary_issuer() {
 
     // The estate's own issuer is the default, so it still resolves.
     let ours = workload_token(ISSUER, "legacy-prod");
-    let (status, body) =
-        h.req("PUT", "/api/v1/instances/self", Some(&ours), Some(json!({"instance_key": "a"}))).await;
+    let (status, body) = h.req("PUT", "/api/v1/instances/self", Some(&ours), Some(json!({"instance_key": "a"}))).await;
     assert_eq!(status, StatusCode::CREATED, "an unpinned record still means the primary issuer: {body}");
 
     // The partner's does not.
@@ -556,8 +544,7 @@ async fn a_single_workload_issuer_needs_no_pin() {
     assert_eq!(status, StatusCode::CREATED, "a lone issuer is not ambiguous: {sw}");
 
     let t = workload_token(PARTNER_ISSUER, "solo-prod");
-    let (status, body) =
-        h.req("PUT", "/api/v1/instances/self", Some(&t), Some(json!({"instance_key": "a"}))).await;
+    let (status, body) = h.req("PUT", "/api/v1/instances/self", Some(&t), Some(json!({"instance_key": "a"}))).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 }
 
@@ -582,9 +569,8 @@ async fn a_registration_client_without_an_issuer_is_refused_where_it_is_ambiguou
     assert!(detail.contains(PARTNER_ISSUER), "and the issuers it has to choose between: {detail}");
 
     // Naming no clients at all is not affected: there is nothing to disambiguate.
-    let (status, body) = h
-        .req("POST", "/api/v1/software", Some(ROOT), Some(json!({"name": "no-clients", "kinds": ["service"]})))
-        .await;
+    let (status, body) =
+        h.req("POST", "/api/v1/software", Some(ROOT), Some(json!({"name": "no-clients", "kinds": ["service"]}))).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 }
 
@@ -605,8 +591,9 @@ async fn the_registration_issuer_survives_a_partial_update() {
     assert_eq!(sw["registration_issuer"], ISSUER, "{sw}");
     let id = sw["id"].as_str().unwrap().to_string();
 
-    let (status, after) =
-        h.req("PATCH", &format!("/api/v1/software/{id}"), Some(ROOT), Some(json!({"tagline": "now with a tagline"}))).await;
+    let (status, after) = h
+        .req("PATCH", &format!("/api/v1/software/{id}"), Some(ROOT), Some(json!({"tagline": "now with a tagline"})))
+        .await;
     assert_eq!(status, StatusCode::OK, "{after}");
     assert_eq!(after["registration_issuer"], ISSUER, "a PATCH that never mentioned it must not drop it: {after}");
     assert_eq!(after["registration_clients"][0], "patched-prod", "{after}");

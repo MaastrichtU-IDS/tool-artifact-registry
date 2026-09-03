@@ -118,14 +118,7 @@ fn entity_counts(state: &AppState) -> AppResult<serde_json::Value> {
                FILTER NOT EXISTS {{ GRAPH ?tg {{ ?s tar:tombstoned true }} }} }}",
             p = ns::PREFIXES
         );
-        let n = state
-            .store
-            .select(&q)
-            .map_err(AppError::from)?
-            .rows
-            .first()
-            .and_then(|r| r.i64("n"))
-            .unwrap_or(0);
+        let n = state.store.select(&q).map_err(AppError::from)?.rows.first().and_then(|r| r.i64("n")).unwrap_or(0);
         out.insert(name.to_string(), json!(n));
     }
     Ok(serde_json::Value::Object(out))

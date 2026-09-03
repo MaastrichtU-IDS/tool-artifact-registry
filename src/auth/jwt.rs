@@ -183,8 +183,7 @@ pub async fn authenticate_jwt(state: &Arc<AppState>, token: &str) -> AppResult<P
              (set TAR_OIDC_ISSUER / TAR_WORKLOAD_ISSUERS to accept Keycloak or Kubernetes tokens)",
         ));
     }
-    let issuer = unverified_issuer(token)
-        .ok_or_else(|| AppError::unauthorized("token is not a readable JWT"))?;
+    let issuer = unverified_issuer(token).ok_or_else(|| AppError::unauthorized("token is not a readable JWT"))?;
     let accepted = cfg.accepted_issuers();
     if !accepted.iter().any(|i| i == &issuer) {
         return Err(AppError::unauthorized(format!(
@@ -206,9 +205,8 @@ pub async fn authenticate_jwt(state: &Arc<AppState>, token: &str) -> AppResult<P
                 .keys_for(&issuer, force)
                 .await
                 .map_err(|e| AppError::unauthorized(format!("cannot fetch JWKS for {issuer}: {e}")))?;
-            if let Some(jwk) = keys
-                .iter()
-                .find(|k| k.kid.as_deref() == Some(kid.as_str()) || (kid.is_empty() && keys.len() == 1))
+            if let Some(jwk) =
+                keys.iter().find(|k| k.kid.as_deref() == Some(kid.as_str()) || (kid.is_empty() && keys.len() == 1))
             {
                 found = Some(decoding_key(jwk).map_err(|e| AppError::unauthorized(e.to_string()))?);
                 break;
@@ -234,19 +232,15 @@ pub async fn authenticate_jwt(state: &Arc<AppState>, token: &str) -> AppResult<P
         // about `aud` rather than half-checking it.
         _ => validation.validate_aud = false,
     }
-    let data = decode::<Value>(token, &key, &validation)
-        .map_err(|e| AppError::unauthorized(format!("JWT rejected: {e}")))?;
+    let data =
+        decode::<Value>(token, &key, &validation).map_err(|e| AppError::unauthorized(format!("JWT rejected: {e}")))?;
     let claims = data.claims;
 
     principal_from_claims(state, &issuer, &claims).await
 }
 
 /// Map a *verified* claim set onto a registry principal.
-pub async fn principal_from_claims(
-    state: &Arc<AppState>,
-    issuer: &str,
-    claims: &Value,
-) -> AppResult<Principal> {
+pub async fn principal_from_claims(state: &Arc<AppState>, issuer: &str, claims: &Value) -> AppResult<Principal> {
     let cfg = &state.config.oidc;
     let sub = claims.get("sub").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let name = claims
@@ -346,10 +340,7 @@ pub async fn principal_from_claims(
         } else if !binding.allowed_scopes.is_empty() {
             binding.allowed_scopes.iter().cloned().collect()
         } else {
-            [super::SCOPE_ADVERTISE_PRODUCE, super::SCOPE_ADVERTISE_CONSUME]
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
+            [super::SCOPE_ADVERTISE_PRODUCE, super::SCOPE_ADVERTISE_CONSUME].iter().map(|s| s.to_string()).collect()
         };
         return Ok(Principal {
             credential: CredentialKind::OidcWorkload,
@@ -371,25 +362,24 @@ pub async fn principal_from_claims(
     // when what they actually need is a role. Two signals say "person": the token was issued
     // to the browser sign-in client, or it carries a user session id (`sid`), which Keycloak
     // puts on interactive logins and never on a `client_credentials` token.
-    let is_person =
-        !roles.is_empty() || (home_issuer && (is_ui_client || claims.get("sid").is_some()));
+    let is_person = !roles.is_empty() || (home_issuer && (is_ui_client || claims.get("sid").is_some()));
 
     // Nothing is bound to this client at the deployment level. Before concluding it has no
     // authority, ask whether some *software* names it as a registration client — the
     // auto-registration mode, where one credential belongs to the application and each of its
     // deployments registers itself.
-    let software_iri = if is_person {
-        None
-    } else {
-        find_software_for_client(state, issuer, &candidates).await?
-    };
+    let software_iri = if is_person { None } else { find_software_for_client(state, issuer, &candidates).await? };
 
     // A person is their `sub`. An unbound workload is its *client id*: that is the string an
     // admin has to copy into `tar:oidcClientId` to make it work, and addendum §3.2 promises
     // `whoami` is the first thing you curl when a CI job gets a 403. Reporting Keycloak's
     // service-account UUID there sent people looking for the wrong value.
     let subject = if is_person {
-        if sub.is_empty() { candidates.first().cloned().unwrap_or_default() } else { sub }
+        if sub.is_empty() {
+            candidates.first().cloned().unwrap_or_default()
+        } else {
+            sub
+        }
     } else {
         candidates.first().cloned().filter(|c| !c.is_empty()).unwrap_or(sub)
     };
@@ -513,8 +503,7 @@ mod tests {
     #[test]
     fn reads_issuer_without_verifying() {
         // header.payload.signature, payload = {"iss":"https://kc/realms/ids"}
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(br#"{"iss":"https://kc/realms/ids/"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"iss":"https://kc/realms/ids/"}"#);
         let token = format!("aaa.{payload}.bbb");
         assert_eq!(unverified_issuer(&token).as_deref(), Some("https://kc/realms/ids"));
     }
@@ -607,11 +596,8 @@ SELECT ?i ?label ?sw ?iss (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scop
     // subject here is a client id, and this path was the way past a pinned software: once any
     // deployment existed under the name, a token from any other accepted issuer that spelled
     // its client the same way bound to it and inherited its scopes.
-    let rows: Vec<_> = rows
-        .rows
-        .iter()
-        .filter(|r| issuer_admits(&state.config.oidc, r.str("iss").as_deref(), issuer))
-        .collect();
+    let rows: Vec<_> =
+        rows.rows.iter().filter(|r| issuer_admits(&state.config.oidc, r.str("iss").as_deref(), issuer)).collect();
     // More than one is the ambiguous case: bind to nothing rather than to an arbitrary one.
     if rows.len() != 1 {
         return Ok(None);

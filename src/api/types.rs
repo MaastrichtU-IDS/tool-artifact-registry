@@ -118,11 +118,7 @@ fn adoptable(state: &AppState, given: &str) -> AppResult<String> {
 }
 
 fn slugify(s: &str) -> String {
-    let out: String = s
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
+    let out: String = s.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
     out.split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-")
 }
 
@@ -182,10 +178,7 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(load(&ctx, &iri)?)))
 }
 
-pub async fn list(
-    State(state): State<Arc<AppState>>,
-    Query(paging): Query<Paging>,
-) -> AppResult<impl IntoResponse> {
+pub async fn list(State(state): State<Arc<AppState>>, Query(paging): Query<Paging>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     // Types this registry *knows as types*: the ones it minted or adopted, plus any IRI
     // something actually declares itself as or claims to produce or consume.
@@ -215,15 +208,11 @@ SELECT DISTINCT ?s WHERE {{
     let rows = state.store.select(&q).map_err(AppError::from)?;
     let iris: Vec<String> = rows.rows.iter().filter_map(|r| r.iri("s")).collect();
     let total = iris.len() as i64;
-    let items: Vec<ArtifactTypeOut> =
-        iris.iter().take(paging.limit()).filter_map(|i| load(&ctx, i).ok()).collect();
+    let items: Vec<ArtifactTypeOut> = iris.iter().take(paging.limit()).filter_map(|i| load(&ctx, i).ok()).collect();
     Ok(Json(crate::model::Page::new(items, total, None)))
 }
 
-pub async fn get(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> AppResult<impl IntoResponse> {
+pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Type, &id);
     Ok(Json(load(&ctx, &iri)?))

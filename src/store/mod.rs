@@ -169,8 +169,7 @@ fn describe_via_sparql<S: GraphStore + ?Sized>(store: &S, subject: &str) -> Resu
         let mut seen: std::collections::HashSet<Quad> = std::collections::HashSet::new();
         let mut levels: Vec<(usize, String)> = Vec::with_capacity(bindings.rows.len());
         for row in &bindings.rows {
-            let (Some(g), Some(s), Some(p), Some(o)) =
-                (row.term("g"), row.term("s"), row.term("p"), row.term("o"))
+            let (Some(g), Some(s), Some(p), Some(o)) = (row.term("g"), row.term("s"), row.term("p"), row.term("o"))
             else {
                 continue;
             };
@@ -182,8 +181,7 @@ fn describe_via_sparql<S: GraphStore + ?Sized>(store: &S, subject: &str) -> Resu
                 Term::Literal(_) => continue,
             };
             levels.push((row.i64("d").unwrap_or(0) as usize, crate::rdf::props::subject_key(&subj)));
-            let quad =
-                Quad::new(subj, p.clone(), o.clone(), GraphName::NamedNode(g.clone()));
+            let quad = Quad::new(subj, p.clone(), o.clone(), GraphName::NamedNode(g.clone()));
             // One node can be reached at more than one level; the record must not say
             // anything twice or a multi-valued property gains a duplicate.
             if seen.insert(quad.clone()) {
@@ -251,7 +249,12 @@ mod tests {
             q(n(D), "http://spdx.org/rdf/terms#checksum", checksum.clone(), PEER),
             q(n(D), "http://www.w3.org/ns/dcat#mediaType", Literal::new_simple_literal("text/turtle"), PEER),
             // Blank nodes are followed whatever the predicate, transitively.
-            q(checksum.clone(), "http://spdx.org/rdf/terms#checksumValue", Literal::new_simple_literal("deadbeef"), PEER),
+            q(
+                checksum.clone(),
+                "http://spdx.org/rdf/terms#checksumValue",
+                Literal::new_simple_literal("deadbeef"),
+                PEER,
+            ),
             q(checksum.clone(), "https://w3id.org/tar/ns#note", inner.clone(), PEER),
             q(inner.clone(), "http://www.w3.org/2000/01/rdf-schema#label", Literal::new_simple_literal("deep"), PEER),
         ]);
@@ -296,13 +299,17 @@ mod tests {
     #[test]
     fn a_closure_deeper_than_the_first_attempt_still_comes_back_whole() {
         let chain: Vec<BlankNode> = (0..queries::DEFAULT_DEPTH * 2).map(|_| BlankNode::default()).collect();
-        let mut quads =
-            vec![q(n(A), "http://www.w3.org/ns/prov#qualifiedAssociation", chain[0].clone(), ns::G_LOCAL)];
+        let mut quads = vec![q(n(A), "http://www.w3.org/ns/prov#qualifiedAssociation", chain[0].clone(), ns::G_LOCAL)];
         for pair in chain.windows(2) {
             quads.push(q(pair[0].clone(), "https://w3id.org/tar/ns#note", pair[1].clone(), ns::G_LOCAL));
         }
         let last = chain.last().unwrap().clone();
-        quads.push(q(last, "http://www.w3.org/2000/01/rdf-schema#label", Literal::new_simple_literal("bottom"), ns::G_LOCAL));
+        quads.push(q(
+            last,
+            "http://www.w3.org/2000/01/rdf-schema#label",
+            Literal::new_simple_literal("bottom"),
+            ns::G_LOCAL,
+        ));
         let n_quads = quads.len();
         let s = store(quads);
         let got = s.describe(A).unwrap();
@@ -320,7 +327,8 @@ mod tests {
         ]);
         assert_eq!(s.graph_of(A).unwrap().as_deref(), Some(ns::G_LOCAL));
 
-        let only_peer = store(vec![q(n(A), "http://purl.org/dc/terms/title", Literal::new_simple_literal("theirs"), PEER)]);
+        let only_peer =
+            store(vec![q(n(A), "http://purl.org/dc/terms/title", Literal::new_simple_literal("theirs"), PEER)]);
         assert_eq!(only_peer.graph_of(A).unwrap().as_deref(), Some(PEER));
         assert_eq!(only_peer.graph_of("https://reg.example/artifact/nope").unwrap(), None);
     }
@@ -348,7 +356,12 @@ mod tests {
             q(n(A), "http://purl.org/dc/terms/publisher", n(AGENT), ns::G_LOCAL),
             q(n(AGENT), "https://schema.org/name", Literal::new_simple_literal("Someone"), ns::G_LOCAL),
             q(n(D), "http://spdx.org/rdf/terms#checksum", checksum.clone(), ns::G_LOCAL),
-            q(checksum, "http://spdx.org/rdf/terms#checksumValue", Literal::new_simple_literal("deadbeef"), ns::G_LOCAL),
+            q(
+                checksum,
+                "http://spdx.org/rdf/terms#checksumValue",
+                Literal::new_simple_literal("deadbeef"),
+                ns::G_LOCAL,
+            ),
         ]);
         let mut tx = GraphTx::new();
         tx.replace_subject(A, ns::G_LOCAL);

@@ -23,9 +23,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use oxigraph::io::{RdfFormat, RdfParser};
 use oxigraph::model::{GraphName, Quad, Triple};
-use oxigraph::sparql::results::{
-    QueryResultsFormat, QueryResultsParser, ReaderQueryResultsParserOutput,
-};
+use oxigraph::sparql::results::{QueryResultsFormat, QueryResultsParser, ReaderQueryResultsParserOutput};
 use std::collections::BTreeMap;
 use std::sync::mpsc::SyncSender;
 
@@ -282,8 +280,7 @@ impl GraphStore for HttpSparqlStore {
         // Parsed here rather than shipped as Turtle so that the base IRI and the target graph
         // are resolved exactly as the embedded backend resolves them, and so a syntax error is
         // a local error naming the file rather than a 400 from somebody else's server.
-        let mut parser =
-            RdfParser::from_format(RdfFormat::Turtle).without_named_graphs().with_default_graph(g);
+        let mut parser = RdfParser::from_format(RdfFormat::Turtle).without_named_graphs().with_default_graph(g);
         if let Some(b) = base {
             parser = parser.with_base_iri(b).map_err(|e| anyhow!("bad base IRI: {e}"))?;
         }
@@ -378,7 +375,10 @@ mod tests {
     fn language_tags_and_datatypes_survive() {
         let body = insert_data(&[
             quad(Literal::new_language_tagged_literal("bonjour", "fr").unwrap().into()),
-            quad(Literal::new_typed_literal("3", NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer")).into()),
+            quad(
+                Literal::new_typed_literal("3", NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"))
+                    .into(),
+            ),
         ]);
         assert!(body.contains("\"bonjour\"@fr"), "{body}");
         assert!(body.contains("\"3\"^^<http://www.w3.org/2001/XMLSchema#integer>"), "{body}");

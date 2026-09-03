@@ -154,10 +154,8 @@ impl Shapes {
     /// `sh:class` on a referenced node, say — are therefore not evaluated here, which is the
     /// price of validating before committing rather than after.
     pub fn validate_quads<'q>(&self, quads: impl IntoIterator<Item = &'q Quad>) -> Report {
-        let data: Vec<Triple> = quads
-            .into_iter()
-            .map(|q| Triple::new(q.subject.clone(), q.predicate.clone(), q.object.clone()))
-            .collect();
+        let data: Vec<Triple> =
+            quads.into_iter().map(|q| Triple::new(q.subject.clone(), q.predicate.clone(), q.object.clone())).collect();
         self.validate_triples(data)
     }
 
@@ -434,23 +432,16 @@ mod tests {
         let input = SoftwareIn { name: "x".into(), kind: Some("cli".into()), ..Default::default() };
         assert_eq!(input.resolved_kinds(), vec!["cli"]);
         // And it does not duplicate when both are given.
-        let input = SoftwareIn {
-            name: "x".into(),
-            kinds: vec!["cli".into()],
-            kind: Some("cli".into()),
-            ..Default::default()
-        };
+        let input =
+            SoftwareIn { name: "x".into(), kinds: vec!["cli".into()], kind: Some("cli".into()), ..Default::default() };
         assert_eq!(input.resolved_kinds(), vec!["cli"]);
     }
 
     #[test]
     fn a_shapes_own_message_is_what_the_caller_sees() {
         // Not the engine's "Value does not have node kind: IRI".
-        let r = software(SoftwareIn {
-            name: "x".into(),
-            code_repository: Some("not-an-iri".into()),
-            ..Default::default()
-        });
+        let r =
+            software(SoftwareIn { name: "x".into(), code_repository: Some("not-an-iri".into()), ..Default::default() });
         let f = r.violations().find(|f| f.field == "code_repository").expect("repo violation");
         assert_eq!(f.message, "code_repository must be an absolute IRI", "{:?}", r.findings);
     }
@@ -496,11 +487,7 @@ mod tests {
         dist.link(ns::DCAT, "downloadURL", "https://example.org/leaked.ttl");
         let r = shapes().validate_quads(&dist.finish());
         assert!(!r.conforms(), "a metadata-only distribution with bytes must be rejected");
-        assert!(
-            r.violations().any(|f| f.message.contains("carries no downloadURL")),
-            "{:?}",
-            r.findings
-        );
+        assert!(r.violations().any(|f| f.message.contains("carries no downloadURL")), "{:?}", r.findings);
     }
 
     #[test]

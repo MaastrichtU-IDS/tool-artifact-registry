@@ -93,9 +93,7 @@ pub fn lookup(text: &str) -> Option<&'static Keyword> {
     if key.is_empty() {
         return None;
     }
-    KEYWORDS.iter().find(|k| {
-        fold(k.label) == key || fold(k.slug) == key || k.aliases.iter().any(|a| fold(a) == key)
-    })
+    KEYWORDS.iter().find(|k| fold(k.label) == key || fold(k.slug) == key || k.aliases.iter().any(|a| fold(a) == key))
 }
 
 /// Rewrite a caller's keywords: the ones on the list become their preferred label and yield a
@@ -138,10 +136,8 @@ mod tests {
 
     #[test]
     fn spellings_of_one_keyword_become_one_keyword() {
-        let input: Vec<String> = ["shacl", "SHACL", "SHACL Shapes", "shacl-shapes"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let input: Vec<String> =
+            ["shacl", "SHACL", "SHACL Shapes", "shacl-shapes"].iter().map(|s| s.to_string()).collect();
         let (labels, themes) = normalise(BASE, &input);
         assert_eq!(labels, vec!["SHACL"], "four spellings, one keyword");
         assert_eq!(themes, vec!["https://reg.test/keyword/shacl"]);
@@ -154,10 +150,7 @@ mod tests {
         let input: Vec<String> = ["rdf", "pizza-ontology", "OWL"].iter().map(|s| s.to_string()).collect();
         let (labels, themes) = normalise(BASE, &input);
         assert_eq!(labels, vec!["RDF Graphs", "pizza-ontology", "OWL"]);
-        assert_eq!(
-            themes,
-            vec!["https://reg.test/keyword/rdf-graphs", "https://reg.test/keyword/owl"]
-        );
+        assert_eq!(themes, vec!["https://reg.test/keyword/rdf-graphs", "https://reg.test/keyword/owl"]);
     }
 
     #[test]

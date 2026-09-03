@@ -88,7 +88,8 @@ impl<'a> Ctx<'a> {
             return Vec::new();
         }
         let mut labels: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
-        let values = iris.iter().filter(|i| i.starts_with("http")).map(|i| format!("<{i}>")).collect::<Vec<_>>().join(" ");
+        let values =
+            iris.iter().filter(|i| i.starts_with("http")).map(|i| format!("<{i}>")).collect::<Vec<_>>().join(" ");
         if !values.is_empty() {
             let q = format!(
                 r#"{p}
@@ -140,13 +141,7 @@ SELECT ?t ?label ?def WHERE {{
 
     /// Resolve an Agent IRI to a renderable reference.
     pub fn agent_ref(&self, iri: &str) -> AgentRef {
-        let props = self
-            .state
-            .store
-            .describe(iri)
-            .ok()
-            .map(|q| Props::from_quads(iri, &q))
-            .unwrap_or_default();
+        let props = self.state.store.describe(iri).ok().map(|q| Props::from_quads(iri, &q)).unwrap_or_default();
         let kind = if props.has_type(&format!("{}Person", ns::SCHEMA)) {
             Some("person".to_string())
         } else if props.has_type(&format!("{}Organization", ns::SCHEMA)) {
@@ -174,7 +169,8 @@ SELECT ?t ?label ?def WHERE {{
     /// Labels for a batch of subjects (`schema:name`, `dct:title` or `rdfs:label`).
     pub fn labels(&self, iris: &[String]) -> HashMap<String, String> {
         let mut out = HashMap::new();
-        let values = iris.iter().filter(|i| i.starts_with("http")).map(|i| format!("<{i}>")).collect::<Vec<_>>().join(" ");
+        let values =
+            iris.iter().filter(|i| i.starts_with("http")).map(|i| format!("<{i}>")).collect::<Vec<_>>().join(" ");
         if values.is_empty() {
             return out;
         }
@@ -207,9 +203,7 @@ SELECT ?s ?l WHERE {{
 /// IRI — see `vocabularyOf` in `frontend/src/components/chips.tsx` — where it stays truthful as
 /// vocabularies are added and needs no change here.
 pub fn type_source(base: &str, iri: &str) -> String {
-    if iri.starts_with("http://edamontology.org/")
-        || iri.starts_with("http://data.europa.eu/8mn/euroscivoc/")
-    {
+    if iri.starts_with("http://edamontology.org/") || iri.starts_with("http://data.europa.eu/8mn/euroscivoc/") {
         "bundled".into()
     } else if crate::ids::is_local(base, iri) {
         "local".into()

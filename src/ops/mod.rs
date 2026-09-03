@@ -148,10 +148,8 @@ impl Ops {
     pub async fn verify_token(&self, presented: &str) -> Result<Option<TokenRecord>> {
         let Some(rest) = presented.strip_prefix("tar_") else { return Ok(None) };
         let Some((prefix, _)) = rest.split_once('_') else { return Ok(None) };
-        let row = sqlx::query("SELECT * FROM api_tokens WHERE prefix = ?")
-            .bind(prefix)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row =
+            sqlx::query("SELECT * FROM api_tokens WHERE prefix = ?").bind(prefix).fetch_optional(&self.pool).await?;
         let Some(row) = row else { return Ok(None) };
         let hash: String = row.try_get("hash")?;
         if !verify_secret(presented, &hash) {
@@ -182,9 +180,9 @@ impl Ops {
         let rows = sqlx::query(
             "SELECT * FROM api_tokens WHERE instance_iri = ?1 OR software_iri = ?1 ORDER BY created_at DESC",
         )
-            .bind(subject_iri)
-            .fetch_all(&self.pool)
-            .await?;
+        .bind(subject_iri)
+        .fetch_all(&self.pool)
+        .await?;
         rows.iter().map(token_from_row).collect()
     }
 
@@ -223,7 +221,10 @@ impl Ops {
     pub async fn list_peers(&self, state: Option<&str>) -> Result<Vec<PeerRecord>> {
         let rows = match state {
             Some(s) => {
-                sqlx::query("SELECT * FROM peers WHERE state = ? ORDER BY added_at DESC").bind(s).fetch_all(&self.pool).await?
+                sqlx::query("SELECT * FROM peers WHERE state = ? ORDER BY added_at DESC")
+                    .bind(s)
+                    .fetch_all(&self.pool)
+                    .await?
             }
             None => sqlx::query("SELECT * FROM peers ORDER BY added_at DESC").fetch_all(&self.pool).await?,
         };
@@ -232,8 +233,10 @@ impl Ops {
 
     pub async fn get_peer(&self, id: &str) -> Result<Option<PeerRecord>> {
         let row = sqlx::query("SELECT * FROM peers WHERE id = ? OR base_iri = ?")
-            .bind(id).bind(id)
-            .fetch_optional(&self.pool).await?;
+            .bind(id)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
         row.as_ref().map(peer_from_row).transpose()
     }
 
@@ -290,7 +293,9 @@ impl Ops {
     pub async fn mark_resolve_failed(&self, iri: &str, err: &str) -> Result<()> {
         let now = Utc::now();
         let row = sqlx::query("SELECT attempts FROM resolve_queue WHERE iri = ?")
-            .bind(iri).fetch_optional(&self.pool).await?;
+            .bind(iri)
+            .fetch_optional(&self.pool)
+            .await?;
         let attempts: i64 = row.and_then(|r| r.try_get("attempts").ok()).unwrap_or(0) + 1;
         let backoff_secs = 60i64.saturating_mul(1 << attempts.min(10));
         sqlx::query(
@@ -305,9 +310,14 @@ impl Ops {
 
     pub async fn resolve_status(&self, iri: &str) -> Result<Option<(String, Option<String>)>> {
         let row = sqlx::query("SELECT status, last_error FROM resolve_queue WHERE iri = ?")
-            .bind(iri).fetch_optional(&self.pool).await?;
+            .bind(iri)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row.map(|r| {
-            (r.try_get::<String, _>("status").unwrap_or_default(), r.try_get::<Option<String>, _>("last_error").ok().flatten())
+            (
+                r.try_get::<String, _>("status").unwrap_or_default(),
+                r.try_get::<Option<String>, _>("last_error").ok().flatten(),
+            )
         }))
     }
 
@@ -315,27 +325,41 @@ impl Ops {
 
     pub async fn run_for_key(&self, external_key: &str, instance_iri: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT run_iri FROM run_keys WHERE external_key = ? AND instance_iri = ?")
-            .bind(external_key).bind(instance_iri).fetch_optional(&self.pool).await?;
+            .bind(external_key)
+            .bind(instance_iri)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row.and_then(|r| r.try_get("run_iri").ok()))
     }
 
     pub async fn remember_run(&self, external_key: &str, instance_iri: &str, run_iri: &str) -> Result<()> {
-        sqlx::query("INSERT OR IGNORE INTO run_keys (external_key, instance_iri, run_iri, created_at) VALUES (?,?,?,?)")
-            .bind(external_key).bind(instance_iri).bind(run_iri).bind(Utc::now().to_rfc3339())
-            .execute(&self.pool).await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO run_keys (external_key, instance_iri, run_iri, created_at) VALUES (?,?,?,?)",
+        )
+        .bind(external_key)
+        .bind(instance_iri)
+        .bind(run_iri)
+        .bind(Utc::now().to_rfc3339())
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
     pub async fn artifact_for_key(&self, external_key: &str) -> Result<Option<String>> {
         let row = sqlx::query("SELECT artifact_iri FROM artifact_keys WHERE external_key = ?")
-            .bind(external_key).fetch_optional(&self.pool).await?;
+            .bind(external_key)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row.and_then(|r| r.try_get("artifact_iri").ok()))
     }
 
     pub async fn remember_artifact(&self, external_key: &str, artifact_iri: &str) -> Result<()> {
         sqlx::query("INSERT OR IGNORE INTO artifact_keys (external_key, artifact_iri, created_at) VALUES (?,?,?)")
-            .bind(external_key).bind(artifact_iri).bind(Utc::now().to_rfc3339())
-            .execute(&self.pool).await?;
+            .bind(external_key)
+            .bind(artifact_iri)
+            .bind(Utc::now().to_rfc3339())
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -362,14 +386,21 @@ impl Ops {
         sqlx::query(
             "INSERT INTO audit_log (at, actor, actor_kind, action, target, detail, remote_addr) VALUES (?,?,?,?,?,?,?)",
         )
-        .bind(Utc::now().to_rfc3339()).bind(actor).bind(actor_kind).bind(action).bind(target).bind(detail).bind(remote)
-        .execute(&self.pool).await?;
+        .bind(Utc::now().to_rfc3339())
+        .bind(actor)
+        .bind(actor_kind)
+        .bind(action)
+        .bind(target)
+        .bind(detail)
+        .bind(remote)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
     pub async fn recent_audit(&self, limit: i64) -> Result<Vec<serde_json::Value>> {
-        let rows = sqlx::query("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?")
-            .bind(limit).fetch_all(&self.pool).await?;
+        let rows =
+            sqlx::query("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?").bind(limit).fetch_all(&self.pool).await?;
         Ok(rows
             .iter()
             .map(|r| {
@@ -443,7 +474,15 @@ mod tests {
     async fn mints_and_verifies_a_token_once() {
         let ops = Ops::open(":memory:").await.unwrap();
         let (rec, plaintext) = ops
-            .mint_token(Some("https://r/instance/1"), None, "instance", &["advertise:produce".into()], Some("ci"), None, None)
+            .mint_token(
+                Some("https://r/instance/1"),
+                None,
+                "instance",
+                &["advertise:produce".into()],
+                Some("ci"),
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert!(plaintext.starts_with("tar_"));

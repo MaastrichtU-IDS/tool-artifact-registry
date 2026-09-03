@@ -38,9 +38,8 @@ fn env(key: &str) -> Option<String> {
 impl Settings {
     pub fn from_env() -> Self {
         let dur = |k: &str, d: &str| {
-            crate::config::parse_duration(&env(k).unwrap_or_else(|| d.into())).unwrap_or_else(|_| {
-                crate::config::parse_duration(d).expect("built-in default parses")
-            })
+            crate::config::parse_duration(&env(k).unwrap_or_else(|| d.into()))
+                .unwrap_or_else(|_| crate::config::parse_duration(d).expect("built-in default parses"))
         };
         Self {
             enabled: env("TAR_HEALTH_CHECK_ENABLED").map(|v| v == "1" || v == "true").unwrap_or(true),
@@ -164,7 +163,10 @@ async fn probe(state: &Arc<AppState>, url: &str, target: ProbeTarget, s: &Settin
     if !s.allow_private {
         if let Some(host) = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string)) {
             if is_private_host(&host) {
-                return Verdict { health: "unknown", detail: format!("{host} is not a public address and probing private targets is off") };
+                return Verdict {
+                    health: "unknown",
+                    detail: format!("{host} is not a public address and probing private targets is off"),
+                };
             }
         }
     }
@@ -243,10 +245,7 @@ mod tests {
     fn a_deployment_that_does_not_answer_is_down_either_way() {
         for t in [Declared, EndpointRoot] {
             assert_eq!(verdict_for(None, Some("could not connect"), t).health, "down");
-            assert_eq!(
-                verdict_for(None, Some("did not answer in time"), t).detail,
-                "did not answer in time"
-            );
+            assert_eq!(verdict_for(None, Some("did not answer in time"), t).detail, "did not answer in time");
         }
     }
 

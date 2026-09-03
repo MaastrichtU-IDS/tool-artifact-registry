@@ -2,7 +2,7 @@
 //! graph placement stay consistent.
 
 use crate::ns;
-use oxigraph::model::{BlankNode, GraphName, Literal, NamedNode, Quad, NamedOrBlankNode, Term};
+use oxigraph::model::{BlankNode, GraphName, Literal, NamedNode, NamedOrBlankNode, Quad, Term};
 
 pub struct Node {
     pub subject: NamedOrBlankNode,
@@ -98,7 +98,10 @@ impl Node {
     pub fn int(&mut self, ns_: &str, local: &str, value: i64) -> &mut Self {
         self.push(
             ns::t(ns_, local),
-            Term::Literal(Literal::new_typed_literal(value.to_string(), NamedNode::new_unchecked(format!("{}integer", ns::XSD)))),
+            Term::Literal(Literal::new_typed_literal(
+                value.to_string(),
+                NamedNode::new_unchecked(format!("{}integer", ns::XSD)),
+            )),
         )
     }
 
@@ -112,7 +115,10 @@ impl Node {
     pub fn boolean(&mut self, ns_: &str, local: &str, value: bool) -> &mut Self {
         self.push(
             ns::t(ns_, local),
-            Term::Literal(Literal::new_typed_literal(value.to_string(), NamedNode::new_unchecked(format!("{}boolean", ns::XSD)))),
+            Term::Literal(Literal::new_typed_literal(
+                value.to_string(),
+                NamedNode::new_unchecked(format!("{}boolean", ns::XSD)),
+            )),
         )
     }
 
@@ -168,9 +174,5 @@ pub fn attribution(node: &mut Node, actor: &str) {
 /// which; the write path is the only place that knows, so it decides here.
 pub fn attribution_at(node: &mut Node, actor: &str, modified: Option<&str>) {
     node.link(ns::PROV, "wasAttributedTo", actor);
-    node.datetime(
-        ns::DCT,
-        "modified",
-        modified.unwrap_or(&chrono::Utc::now().to_rfc3339()),
-    );
+    node.datetime(ns::DCT, "modified", modified.unwrap_or(&chrono::Utc::now().to_rfc3339()));
 }

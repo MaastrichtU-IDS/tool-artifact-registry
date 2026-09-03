@@ -48,10 +48,7 @@ pub async fn test_store() -> Arc<dyn GraphStore> {
         HttpSparqlStore::connect(SparqlBackend {
             query_endpoint: format!("{base}/{name}/sparql"),
             update_endpoint: format!("{base}/{name}/update"),
-            auth: SparqlAuth::Basic {
-                username: username.to_string(),
-                password: password.to_string(),
-            },
+            auth: SparqlAuth::Basic { username: username.to_string(), password: password.to_string() },
             timeout: Duration::from_secs(120),
         })
         .unwrap(),

@@ -175,9 +175,7 @@ pub fn owned_closure_body(subject: &str, graph: &str, depth: usize) -> Result<St
                 follow(&format!("p{hop}"), &format!("x{hop}"))
             ));
         }
-        branches.push(format!(
-            "    {{\n{chain}      GRAPH {g} {{ ?x{level} ?p ?o }} BIND(?x{level} AS ?s)\n    }}"
-        ));
+        branches.push(format!("    {{\n{chain}      GRAPH {g} {{ ?x{level} ?p ?o }} BIND(?x{level} AS ?s)\n    }}"));
     }
     Ok(branches.join("\n    UNION\n"))
 }

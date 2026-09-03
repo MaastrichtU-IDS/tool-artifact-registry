@@ -94,10 +94,7 @@ pub fn artifact_quads(base: &str, iri: &str, input: &ArtifactIn, actor: &str, ru
     // produces two different nodes — which is how the delegation below first came to be written
     // onto an orphan agent that nothing referenced and no query could reach.
     let mut produced: Vec<(&str, String)> = Vec::new();
-    for (agent, role) in [
-        (&input.produced_by, ROLE_PRODUCING_SYSTEM),
-        (&input.produced_by_user, ROLE_PRODUCING_USER),
-    ] {
+    for (agent, role) in [(&input.produced_by, ROLE_PRODUCING_SYSTEM), (&input.produced_by_user, ROLE_PRODUCING_USER)] {
         let Some(a) = agent else { continue };
         let (Some(agent_iri), agent_body) = agent_quads(base, a) else { continue };
         quads.extend(agent_body);
@@ -279,19 +276,12 @@ pub fn overall_availability(dists: &[Distribution]) -> String {
         "embargoed" => 2,
         _ => 3,
     };
-    dists
-        .iter()
-        .map(|d| d.availability.clone())
-        .min_by_key(|a| rank(a))
-        .unwrap_or_else(|| "metadata-only".into())
+    dists.iter().map(|d| d.availability.clone()).min_by_key(|a| rank(a)).unwrap_or_else(|| "metadata-only".into())
 }
 
 pub fn artifact_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Artifact {
-    let distributions: Vec<Distribution> = p
-        .node_keys(ns::DCAT, "distribution")
-        .iter()
-        .filter_map(|k| distribution_from(p, k))
-        .collect();
+    let distributions: Vec<Distribution> =
+        p.node_keys(ns::DCAT, "distribution").iter().filter_map(|k| distribution_from(p, k)).collect();
     Artifact {
         iri: iri.to_string(),
         id: ids::local_id(ctx.base(), iri).map(|(_, i)| i).unwrap_or_else(|| ids::iri_tail(iri).to_string()),
@@ -306,8 +296,7 @@ pub fn artifact_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Artifact {
         contributors: p.iris(ns::DCT, "contributor").iter().map(|i| ctx.agent_ref(i)).collect(),
         // Standard term first, with the retired one as a fallback so records written before
         // this change keep resolving. Same pattern as every other term the audit replaced.
-        contact: ctx
-            .opt_agent_ref(p.iri(ns::CODEMETA, "maintainer").or_else(|| p.iri(ns::TAR, "contact"))),
+        contact: ctx.opt_agent_ref(p.iri(ns::CODEMETA, "maintainer").or_else(|| p.iri(ns::TAR, "contact"))),
         modified: p.str(ns::DCT, "modified"),
         version: p.str(ns::DCAT, "version"),
         landing_page: p.iri(ns::DCAT, "landingPage"),
@@ -367,7 +356,8 @@ pub fn artifact_ref(ctx: &Ctx, iri: &str) -> ArtifactRef {
         };
     }
     let p = Props::from_quads(iri, &quads);
-    let dists: Vec<Distribution> = p.node_keys(ns::DCAT, "distribution").iter().filter_map(|k| distribution_from(&p, k)).collect();
+    let dists: Vec<Distribution> =
+        p.node_keys(ns::DCAT, "distribution").iter().filter_map(|k| distribution_from(&p, k)).collect();
     ArtifactRef {
         iri: iri.to_string(),
         title: p.str(ns::DCT, "title").or_else(|| p.str(ns::SKOS, "prefLabel")),

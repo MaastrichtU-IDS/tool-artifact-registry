@@ -85,10 +85,9 @@ async fn main() -> Result<()> {
             println!("data_dir              {}", c.data_dir);
             match &c.sparql_backend {
                 Some(b) => println!("graph store           external SPARQL endpoint — {}", b.describe()),
-                None => println!(
-                    "graph store           embedded oxigraph at {}/graph",
-                    c.data_dir.trim_end_matches('/')
-                ),
+                None => {
+                    println!("graph store           embedded oxigraph at {}/graph", c.data_dir.trim_end_matches('/'))
+                }
             }
             println!("listen                {}", c.listen);
             println!("public_read           {}", c.public_read);
@@ -142,10 +141,7 @@ async fn serve() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(&listen).await.with_context(|| format!("binding {listen}"))?;
     let addr = listener.local_addr()?;
     tracing::info!(%addr, base_iri = %state.config.base_iri, "tool-artifact-registry listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("server error")?;
+    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await.context("server error")?;
     Ok(())
 }
 

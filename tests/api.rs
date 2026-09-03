@@ -52,7 +52,13 @@ async fn harness_at(base: &str, oidc: bool) -> Harness {
 }
 
 impl Harness {
-    async fn req(&self, method: &str, uri: &str, token: Option<&str>, body: Option<Value>) -> (StatusCode, Value, axum::http::HeaderMap) {
+    async fn req(
+        &self,
+        method: &str,
+        uri: &str,
+        token: Option<&str>,
+        body: Option<Value>,
+    ) -> (StatusCode, Value, axum::http::HeaderMap) {
         let mut b = Request::builder().method(method).uri(uri);
         if let Some(t) = token {
             b = b.header("authorization", format!("Bearer {t}"));
@@ -65,7 +71,8 @@ impl Harness {
         let status = resp.status();
         let headers = resp.headers().clone();
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-        let value = serde_json::from_slice(&bytes).unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()));
+        let value =
+            serde_json::from_slice(&bytes).unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()));
         (status, value, headers)
     }
 
@@ -172,9 +179,7 @@ async fn anonymous_read_is_the_default() {
 #[tokio::test]
 async fn writes_require_a_credential_and_say_so_in_problem_json() {
     let h = harness().await;
-    let (status, body, headers) = h
-        .req("POST", "/api/v1/software", None, Some(json!({"name": "x"})))
-        .await;
+    let (status, body, headers) = h.req("POST", "/api/v1/software", None, Some(json!({"name": "x"}))).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(headers.get("content-type").unwrap(), "application/problem+json");
     assert_eq!(body["status"], 401);
@@ -320,15 +325,8 @@ async fn a_later_advertisement_replaces_a_runs_outcome_rather_than_adding_to_it(
     assert_eq!(run["duration_seconds"], 4);
 
     // The graph must hold exactly one status, or every reader has to guess which is current.
-    let quads = h
-        .state
-        .store
-        .describe(started["run"].as_str().unwrap())
-        .expect("run quads");
-    let n = quads
-        .iter()
-        .filter(|q| q.predicate.as_str() == "https://w3id.org/tar/ns#status")
-        .count();
+    let quads = h.state.store.describe(started["run"].as_str().unwrap()).expect("run quads");
+    let n = quads.iter().filter(|q| q.predicate.as_str() == "https://w3id.org/tar/ns#status").count();
     assert_eq!(n, 1, "expected one tar:status triple, found {n}");
 }
 
@@ -369,9 +367,7 @@ async fn an_instance_cannot_advertise_as_another_deployment() {
     let f = h.fixture().await;
 
     // A token with no instance behind it (root) is not a deployment.
-    let (status, body) = h
-        .post("/api/v1/advertise/produced", ROOT, json!({"run": {}, "artifacts": []}))
-        .await;
+    let (status, body) = h.post("/api/v1/advertise/produced", ROOT, json!({"run": {}, "artifacts": []})).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert!(body["detail"].as_str().unwrap().contains("Instance"));
 
@@ -416,9 +412,8 @@ async fn a_revoked_token_stops_working() {
         (s, v)
     };
     let token_id = list["items"][0]["id"].as_str().unwrap().to_string();
-    let (status, _, _) = h
-        .req("DELETE", &format!("/api/v1/instances/{}/tokens/{token_id}", f.instance_id), Some(ROOT), None)
-        .await;
+    let (status, _, _) =
+        h.req("DELETE", &format!("/api/v1/instances/{}/tokens/{token_id}", f.instance_id), Some(ROOT), None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     let (status, _) = h.post("/api/v1/advertise/produced", &f.token, json!({"run": {}, "artifacts": []})).await;
@@ -568,13 +563,8 @@ async fn oidc_tokens_are_refused_when_no_issuer_is_configured() {
 #[tokio::test]
 async fn a_rejected_write_returns_422_with_a_shacl_report() {
     let h = harness().await;
-    let (status, body) = h
-        .post(
-            "/api/v1/software",
-            ROOT,
-            json!({"name": "", "kind": "teapot", "code_repository": "not-an-iri"}),
-        )
-        .await;
+    let (status, body) =
+        h.post("/api/v1/software", ROOT, json!({"name": "", "kind": "teapot", "code_repository": "not-an-iri"})).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     let report = body["report"].as_str().expect("turtle report");
     assert!(report.contains("a sh:ValidationReport"), "{report}");
@@ -614,7 +604,8 @@ async fn metadata_only_artifacts_carry_no_download_affordance_and_no_item_link()
     assert_eq!(a["distributions"][0]["access_request_url"], "https://ids.unimaas.nl/data-access");
 
     // Signposting omits rel="item" so a client can tell "no bytes" from "bytes behind auth".
-    let req = Request::builder().uri(format!("/artifact/{id}")).header("accept", "text/turtle").body(Body::empty()).unwrap();
+    let req =
+        Request::builder().uri(format!("/artifact/{id}")).header("accept", "text/turtle").body(Body::empty()).unwrap();
     let resp = h.app.clone().oneshot(req).await.unwrap();
     let link = resp.headers().get("link").unwrap().to_str().unwrap().to_string();
     assert!(!link.contains("rel=\"item\""), "{link}");
@@ -716,12 +707,10 @@ async fn lineage_walks_both_directions_and_marks_unresolved_cross_links() {
 async fn a_withdrawn_release_leaves_the_list_but_keeps_resolving() {
     let h = harness().await;
     let f = h.fixture().await;
-    let (_, keep) = h
-        .post(&format!("/api/v1/software/{}/releases", f.software_id), ROOT, json!({"version": "2.1.0"}))
-        .await;
-    let (_, drop_me) = h
-        .post(&format!("/api/v1/software/{}/releases", f.software_id), ROOT, json!({"version": "2.1.0"}))
-        .await;
+    let (_, keep) =
+        h.post(&format!("/api/v1/software/{}/releases", f.software_id), ROOT, json!({"version": "2.1.0"})).await;
+    let (_, drop_me) =
+        h.post(&format!("/api/v1/software/{}/releases", f.software_id), ROOT, json!({"version": "2.1.0"})).await;
     let (_, list) = h.get(&format!("/api/v1/software/{}/releases", f.software_id)).await;
     assert_eq!(list["total"], 2, "a duplicate version is allowed in; withdrawing is how you fix it");
 
@@ -787,9 +776,7 @@ async fn a_withdrawn_instance_stops_counting_against_its_software() {
     let (_, before) = h.get(&format!("/api/v1/software/{}", f.software_id)).await;
     assert_eq!(before["instance_count"], 1);
 
-    let (status, _, _) = h
-        .req("DELETE", &format!("/api/v1/instances/{}", f.instance_id), Some(ROOT), None)
-        .await;
+    let (status, _, _) = h.req("DELETE", &format!("/api/v1/instances/{}", f.instance_id), Some(ROOT), None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     let (_, after) = h.get(&format!("/api/v1/software/{}", f.software_id)).await;
@@ -874,7 +861,14 @@ async fn peer_administration_is_admin_only_and_announcements_only_suggest() {
 
     // An inbound announcement is deliberately unauthenticated: it grants nothing.
     let (status, out) = {
-        let (s, v, _) = h.req("POST", "/api/v1/peers/announce", None, Some(json!({"base_url": "https://reg.mumc.nl", "title": "MUMC"}))).await;
+        let (s, v, _) = h
+            .req(
+                "POST",
+                "/api/v1/peers/announce",
+                None,
+                Some(json!({"base_url": "https://reg.mumc.nl", "title": "MUMC"})),
+            )
+            .await;
         (s, v)
     };
     assert_eq!(status, StatusCode::OK, "{out}");
@@ -934,7 +928,8 @@ async fn sparql_is_read_only_and_answers_select_ask_and_construct() {
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body: Value = serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    let names: Vec<&str> = body["results"]["bindings"].as_array().unwrap().iter().map(|b| b["name"]["value"].as_str().unwrap()).collect();
+    let names: Vec<&str> =
+        body["results"]["bindings"].as_array().unwrap().iter().map(|b| b["name"]["value"].as_str().unwrap()).collect();
     assert!(names.contains(&"shacl-manager"), "{names:?}");
 
     let req = Request::builder()
@@ -970,10 +965,7 @@ async fn sparql_is_read_only_and_answers_select_ask_and_construct() {
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body: Value = serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
-    assert!(
-        body["detail"].as_str().unwrap().starts_with("SPARQL syntax error:"),
-        "{body}"
-    );
+    assert!(body["detail"].as_str().unwrap().starts_with("SPARQL syntax error:"), "{body}");
 }
 
 #[tokio::test]
@@ -995,11 +987,20 @@ async fn instance_signals_and_the_outdated_release_marker() {
     let f = h.fixture().await;
 
     let (status, rel) = h
-        .post(&format!("/api/v1/software/{}/releases", f.software_id), ROOT, json!({"version": "2.0.0", "date_published": "2026-01-01T00:00:00Z"}))
+        .post(
+            &format!("/api/v1/software/{}/releases", f.software_id),
+            ROOT,
+            json!({"version": "2.0.0", "date_published": "2026-01-01T00:00:00Z"}),
+        )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{rel}");
     let old_release = rel["id"].as_str().unwrap().to_string();
-    h.post(&format!("/api/v1/software/{}/releases", f.software_id), ROOT, json!({"version": "2.1.0", "date_published": "2026-06-01T00:00:00Z"})).await;
+    h.post(
+        &format!("/api/v1/software/{}/releases", f.software_id),
+        ROOT,
+        json!({"version": "2.1.0", "date_published": "2026-06-01T00:00:00Z"}),
+    )
+    .await;
 
     let (status, inst, _) = h
         .req(
@@ -1030,9 +1031,8 @@ async fn instance_signals_and_the_outdated_release_marker() {
 async fn an_instance_without_an_endpoint_is_normal_not_broken() {
     let h = harness().await;
     let f = h.fixture().await;
-    let (status, inst) = h
-        .post("/api/v1/instances", ROOT, json!({"label": "laptop-eerol", "software": f.software_id}))
-        .await;
+    let (status, inst) =
+        h.post("/api/v1/instances", ROOT, json!({"label": "laptop-eerol", "software": f.software_id})).await;
     assert_eq!(status, StatusCode::CREATED, "{inst}");
     assert!(inst["endpoint_url"].is_null());
     assert_eq!(inst["label"], "laptop-eerol");
@@ -1428,8 +1428,12 @@ async fn a_cycle_in_the_peer_graph_terminates() {
     assert!(repeats >= 1, "a triangle gives some registry two routes to the same query; one must be refused");
 
     // …and that refusal is visible in the topology report rather than looking like a failure.
-    let refused: Vec<&Value> =
-        r["peers"].as_array().unwrap().iter().filter(|p| p["status"] == "already_handled" || p["status"] == "skipped").collect();
+    let refused: Vec<&Value> = r["peers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["status"] == "already_handled" || p["status"] == "skipped")
+        .collect();
     assert!(!refused.is_empty(), "the cut edges must be reported: {r}");
     assert_eq!(r["partial"], false, "a refused repeat is a healthy answer, not a partial one: {r}");
 }
@@ -1454,12 +1458,8 @@ async fn a_peer_cannot_flood_us_with_results() {
     assert!(r["hits"].as_array().unwrap().len() <= 200, "our own response stays bounded: {}", r["total"]);
 
     // The oversized body is refused outright rather than buffered.
-    let giant_status = r["peers"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p["base_iri"] == giant)
-        .unwrap_or_else(|| panic!("{r}"));
+    let giant_status =
+        r["peers"].as_array().unwrap().iter().find(|p| p["base_iri"] == giant).unwrap_or_else(|| panic!("{r}"));
     assert_eq!(giant_status["status"], "error", "{giant_status}");
     assert!(giant_status["error"].as_str().unwrap().contains("cap"), "{giant_status}");
     assert_eq!(r["partial"], true, "a peer we could not read makes the answer partial");
@@ -1503,7 +1503,6 @@ async fn spawn_hostile_peer(hits: usize, title_len: usize) -> String {
     base
 }
 
-
 // ---------------------------------------------------------------- forge sync
 
 #[tokio::test]
@@ -1538,11 +1537,7 @@ async fn a_field_no_forge_can_supply_is_refused_when_it_is_configured() {
     let h = harness().await;
     // Better to fail here, where someone is looking, than at 3am in a scheduled sync.
     let (status, body) = h
-        .post(
-            "/api/v1/software",
-            ROOT,
-            json!({"name": "x", "sync": {"repo": "o/n", "fields": ["capability", "name"]}}),
-        )
+        .post("/api/v1/software", ROOT, json!({"name": "x", "sync": {"repo": "o/n", "fields": ["capability", "name"]}}))
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let detail = body["detail"].as_str().unwrap();
@@ -1554,13 +1549,11 @@ async fn a_field_no_forge_can_supply_is_refused_when_it_is_configured() {
 async fn syncing_a_record_with_no_repository_says_so() {
     let h = harness().await;
     let (_, sw) = h.post("/api/v1/software", ROOT, json!({"name": "unconnected"})).await;
-    let (status, body) = h
-        .post(&format!("/api/v1/software/{}/sync", sw["id"].as_str().unwrap()), ROOT, json!({}))
-        .await;
+    let (status, body) =
+        h.post(&format!("/api/v1/software/{}/sync", sw["id"].as_str().unwrap()), ROOT, json!({})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body["detail"].as_str().unwrap().contains("not connected to a repository"), "{body}");
 }
-
 
 #[tokio::test]
 async fn a_token_with_no_audience_at_all_is_rejected_when_an_audience_is_required() {
@@ -1577,7 +1570,6 @@ async fn a_token_with_no_audience_at_all_is_rejected_when_an_audience_is_require
     let (status, body, _) = h.req("GET", "/api/v1/whoami", Some(&token), None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
 }
-
 
 #[tokio::test]
 async fn the_html_representation_carries_signposting_too() {
@@ -1635,7 +1627,6 @@ async fn plain_http_is_a_nameable_access_protocol() {
         .await;
     assert_eq!(status, StatusCode::CREATED, "{out}");
 }
-
 
 #[tokio::test]
 async fn an_artifact_title_never_becomes_a_selectable_artifact_type() {
@@ -1695,9 +1686,8 @@ const UNKNOWN_TYPE: &str = "http://edamontology.org/data_9999999";
 #[tokio::test]
 async fn an_unknown_artifact_type_is_refused_with_a_way_out() {
     let h = harness().await;
-    let (status, problem) = h
-        .post("/api/v1/artifacts", ROOT, json!({ "title": "a report", "conforms_to": UNKNOWN_TYPE }))
-        .await;
+    let (status, problem) =
+        h.post("/api/v1/artifacts", ROOT, json!({ "title": "a report", "conforms_to": UNKNOWN_TYPE })).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
     let detail = problem["detail"].as_str().unwrap_or_default().to_string();
     assert!(detail.contains(UNKNOWN_TYPE), "the refusal must name the offending value: {detail}");
@@ -1752,14 +1742,22 @@ async fn every_write_path_that_can_name_a_type_is_held_to_the_same_rule() {
     );
 
     let (status, out, _) = h
-        .req("PUT", &format!("/api/v1/software/{}/capability", f.software_id), Some(ROOT),
-             Some(json!({"consumes": [UNKNOWN_TYPE]})))
+        .req(
+            "PUT",
+            &format!("/api/v1/software/{}/capability", f.software_id),
+            Some(ROOT),
+            Some(json!({"consumes": [UNKNOWN_TYPE]})),
+        )
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "software capability: {out}");
 
     let (status, out, _) = h
-        .req("PUT", &format!("/api/v1/instances/{}/capability", f.instance_id), Some(ROOT),
-             Some(json!({"produces": [UNKNOWN_TYPE]})))
+        .req(
+            "PUT",
+            &format!("/api/v1/instances/{}/capability", f.instance_id),
+            Some(ROOT),
+            Some(json!({"produces": [UNKNOWN_TYPE]})),
+        )
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "instance capability: {out}");
 
@@ -1818,9 +1816,8 @@ async fn the_registrys_own_types_are_offered_by_the_type_picker() {
 async fn a_term_from_elsewhere_is_adopted_under_its_own_iri() {
     let h = harness().await;
     let foreign = "http://purl.obolibrary.org/obo/SWO_0000001";
-    let (status, t) = h
-        .post("/api/v1/types", ROOT, json!({"label": "Software suite", "iri": foreign, "aliases": ["suite"]}))
-        .await;
+    let (status, t) =
+        h.post("/api/v1/types", ROOT, json!({"label": "Software suite", "iri": foreign, "aliases": ["suite"]})).await;
     assert_eq!(status, StatusCode::CREATED, "{t}");
     assert_eq!(t["iri"], foreign, "the adopted term keeps its own identifier");
     assert_eq!(t["adopted"], true);
@@ -1894,7 +1891,6 @@ async fn a_peers_own_type_survives_the_restriction_and_becomes_usable_once_resol
     assert_eq!(out["conforms_to"]["label"], "Cohort extract", "and it renders with the peer's label");
 }
 
-
 // ------------------------------------------------------- self-advertisement
 
 #[tokio::test]
@@ -1963,9 +1959,8 @@ async fn an_unbound_workload_cannot_conjure_a_deployment_by_default() {
         "iss": ISSUER, "aud": BASE, "exp": exp(), "sub": "service-account-newcomer",
         "azp": "newcomer", "scope": "advertise:produce"
     }));
-    let (status, body, _) = h
-        .req("PUT", "/api/v1/instances/self", Some(&token), Some(json!({"software": "whatever"})))
-        .await;
+    let (status, body, _) =
+        h.req("PUT", "/api/v1/instances/self", Some(&token), Some(json!({"software": "whatever"}))).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     let detail = body["detail"].as_str().unwrap();
     assert!(detail.contains("newcomer"), "it must name the client id an admin has to register: {detail}");
@@ -1978,9 +1973,8 @@ async fn a_person_cannot_announce_a_deployment_as_if_they_were_one() {
     h.fixture().await;
     // The root credential is an administrator, not a running service. Which Instance a caller
     // *is* comes from the credential, so a principal that is not one has nothing to announce.
-    let (status, body, _) = h
-        .req("PUT", "/api/v1/instances/self", Some(ROOT), Some(json!({"endpoint_url": "https://x.example"})))
-        .await;
+    let (status, body, _) =
+        h.req("PUT", "/api/v1/instances/self", Some(ROOT), Some(json!({"endpoint_url": "https://x.example"}))).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert!(body["detail"].as_str().unwrap().contains("only a deployment may announce itself"));
 }
@@ -1989,12 +1983,7 @@ async fn a_person_cannot_announce_a_deployment_as_if_they_were_one() {
 
 /// Fetch a URI asking for markdown, returning the body as text.
 async fn markdown(h: &Harness, uri: &str) -> (StatusCode, String, axum::http::HeaderMap) {
-    let req = Request::builder()
-        .method("GET")
-        .uri(uri)
-        .header("accept", "text/markdown")
-        .body(Body::empty())
-        .unwrap();
+    let req = Request::builder().method("GET").uri(uri).header("accept", "text/markdown").body(Body::empty()).unwrap();
     let resp = h.app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
     let headers = resp.headers().clone();
@@ -2010,10 +1999,7 @@ async fn an_agent_reads_a_software_record_as_markdown_without_a_parser() {
     // Both routes to the same representation: the `.md` extension and the Accept header.
     let (status, body, headers) = markdown(&h, &format!("/software/{}", f.software_id)).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        headers.get("content-type").unwrap().to_str().unwrap(),
-        "text/markdown; charset=utf-8"
-    );
+    assert_eq!(headers.get("content-type").unwrap().to_str().unwrap(), "text/markdown; charset=utf-8");
     let (_, by_extension, _) = markdown(&h, &format!("/software/{}.md", f.software_id)).await;
     assert_eq!(body, by_extension, "`.md` and Accept must render the same thing");
 
@@ -2031,13 +2017,8 @@ async fn an_agent_reads_a_software_record_as_markdown_without_a_parser() {
 #[tokio::test]
 async fn markdown_says_plainly_when_software_cannot_be_deployed() {
     let h = harness().await;
-    let (status, sw) = h
-        .post(
-            "/api/v1/software",
-            ROOT,
-            json!({"name": "RDFCraft", "kinds": ["desktop"], "deployable": false}),
-        )
-        .await;
+    let (status, sw) =
+        h.post("/api/v1/software", ROOT, json!({"name": "RDFCraft", "kinds": ["desktop"], "deployable": false})).await;
     assert_eq!(status, StatusCode::CREATED, "{sw}");
     let (_, body, _) = markdown(&h, &format!("/software/{}.md", sw["id"].as_str().unwrap())).await;
     // An agent that skims this must not come away thinking there is an endpoint to call.
@@ -2092,10 +2073,7 @@ async fn llms_txt_is_a_map_of_the_whole_registry_and_needs_no_credential() {
 
     let (status, body, headers) = markdown(&h, "/llms.txt").await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(
-        headers.get("content-type").unwrap().to_str().unwrap(),
-        "text/markdown; charset=utf-8"
-    );
+    assert_eq!(headers.get("content-type").unwrap().to_str().unwrap(), "text/markdown; charset=utf-8");
     // The llmstxt.org shape: an H1, then a blockquote summary.
     assert!(body.starts_with("# "), "{body}");
     assert!(body.contains("\n> "), "{body}");
@@ -2156,11 +2134,8 @@ async fn llms_txt_lists_the_catalogue_whole_but_only_recent_artifacts() {
     assert!(artifacts.contains("/api/v1/artifacts"), "{artifacts}");
 
     // The catalogue is not truncated the same way: one piece of software, listed.
-    let software = body
-        .split("## Software")
-        .nth(1)
-        .and_then(|rest| rest.split("\n## ").next())
-        .expect("a software section");
+    let software =
+        body.split("## Software").nth(1).and_then(|rest| rest.split("\n## ").next()).expect("a software section");
     assert!(software.contains("shacl-manager"), "{software}");
     assert!(!software.contains("The most recent"), "the catalogue is not a window: {software}");
 }
@@ -2216,18 +2191,13 @@ async fn api_descriptions_round_trip_as_dcat_endpoint_descriptions() {
     assert_eq!(by_url["https://onto.example.org/openapi.json"]["format"], "openapi");
     assert_eq!(by_url["https://onto.example.org/openapi.json"]["title"], "REST API");
     assert_eq!(
-        by_url["https://onto.example.org/sparql"]["format"],
-        "sparql-service-description",
+        by_url["https://onto.example.org/sparql"]["format"], "sparql-service-description",
         "not everything is OpenAPI"
     );
     assert_eq!(by_url["https://onto.example.org/v2/swagger.json"]["format"], "openapi");
 
     // The RDF uses DCAT's own term, not an invention of ours, and says which spec it follows.
-    let req = Request::builder()
-        .method("GET")
-        .uri(format!("/software/{id}.ttl"))
-        .body(Body::empty())
-        .unwrap();
+    let req = Request::builder().method("GET").uri(format!("/software/{id}.ttl")).body(Body::empty()).unwrap();
     let resp = h.app.clone().oneshot(req).await.unwrap();
     let ttl = String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes()).to_string();
     assert!(ttl.contains("endpointDescription"), "{ttl}");
@@ -2259,7 +2229,8 @@ async fn the_api_doc_proxy_only_fetches_what_the_record_itself_declares() {
 
     // There is no URL parameter to pass at all: the endpoint indexes the record's own list, so
     // it cannot be pointed at an arbitrary host.
-    let (status, _) = h.get(&format!("/api/v1/software/{id}/api-doc?url=http://169.254.169.254/latest/meta-data")).await;
+    let (status, _) =
+        h.get(&format!("/api/v1/software/{id}/api-doc?url=http://169.254.169.254/latest/meta-data")).await;
     assert_ne!(status, StatusCode::OK, "an unreachable declared doc must not 200");
 }
 
@@ -2268,16 +2239,14 @@ async fn the_api_doc_proxy_only_fetches_what_the_record_itself_declares() {
 #[tokio::test]
 async fn an_application_key_registers_a_deployment_and_then_keeps_it_updated() {
     let h = harness().await;
-    let (status, sw) = h
-        .post("/api/v1/software", ROOT, json!({"name": "sulo-schema-builder", "kinds": ["service"]}))
-        .await;
+    let (status, sw) =
+        h.post("/api/v1/software", ROOT, json!({"name": "sulo-schema-builder", "kinds": ["service"]})).await;
     assert_eq!(status, StatusCode::CREATED, "{sw}");
     let software_id = sw["id"].as_str().unwrap().to_string();
 
     // A curator issues one key for the application itself, not for a deployment.
-    let (status, minted) = h
-        .post(&format!("/api/v1/software/{software_id}/tokens"), ROOT, json!({"label": "cluster deploys"}))
-        .await;
+    let (status, minted) =
+        h.post(&format!("/api/v1/software/{software_id}/tokens"), ROOT, json!({"label": "cluster deploys"})).await;
     assert_eq!(status, StatusCode::CREATED, "{minted}");
     let key = minted["token"].as_str().unwrap().to_string();
     assert_eq!(minted["record"]["software_iri"], format!("{BASE}/software/{software_id}"));
@@ -2347,12 +2316,7 @@ async fn an_application_key_cannot_register_a_deployment_of_a_different_applicat
     let key = minted["token"].as_str().unwrap().to_string();
 
     let (status, body, _) = h
-        .req(
-            "PUT",
-            "/api/v1/instances/self",
-            Some(&key),
-            Some(json!({"label": "impostor", "software": theirs_id})),
-        )
+        .req("PUT", "/api/v1/instances/self", Some(&key), Some(json!({"label": "impostor", "software": theirs_id})))
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 
@@ -2367,9 +2331,7 @@ async fn only_a_curator_may_issue_an_application_key() {
     let f = h.fixture().await;
     // The instance's own advertise token is a perfectly good credential, and still must not be
     // able to mint a standing permission to add records.
-    let (status, body) = h
-        .post(&format!("/api/v1/software/{}/tokens", f.software_id), &f.token, json!({}))
-        .await;
+    let (status, body) = h.post(&format!("/api/v1/software/{}/tokens", f.software_id), &f.token, json!({})).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }
 
@@ -2469,12 +2431,7 @@ async fn patching_software_changes_only_what_the_body_names() {
     // Clearing is still possible, and `null` is how you say it. Without this, a merging PATCH
     // would make emptying a field impossible — which is how the edit form clears one.
     let (status, cleared, _) = h
-        .req(
-            "PATCH",
-            &format!("/api/v1/software/{id}"),
-            Some(ROOT),
-            Some(json!({"tagline": null, "license": null})),
-        )
+        .req("PATCH", &format!("/api/v1/software/{id}"), Some(ROOT), Some(json!({"tagline": null, "license": null})))
         .await;
     assert_eq!(status, StatusCode::OK, "{cleared}");
     assert!(cleared["tagline"].is_null(), "{cleared}");
@@ -2491,10 +2448,7 @@ async fn the_keyword_list_is_served_whole_and_needs_no_credential() {
     let (status, body) = h.get("/api/v1/keywords").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let labels: Vec<&str> = body["items"].as_array().unwrap().iter().map(|k| k["label"].as_str().unwrap()).collect();
-    assert_eq!(
-        labels,
-        vec!["Embeddings", "OWL", "RDF Graphs", "SHACL", "SHEX", "Mappings", "SPARQL query"],
-    );
+    assert_eq!(labels, vec!["Embeddings", "OWL", "RDF Graphs", "SHACL", "SHEX", "Mappings", "SPARQL query"],);
     assert_eq!(body["total"], 7);
     // Each carries the IRI a record will actually link to, so a picker needs no second call.
     assert_eq!(body["items"][3]["iri"], format!("{BASE}/keyword/shacl"));
@@ -2549,14 +2503,9 @@ async fn keywords_on_the_list_are_normalised_and_the_rest_are_kept() {
     let (status, art) = h.get(&format!("/api/v1/artifacts/{id}")).await;
     assert_eq!(status, StatusCode::OK);
     // Compared as a set: `dcat:keyword` is a set in RDF and comes back in no particular order.
-    let mut got: Vec<&str> =
-        art["keywords"].as_array().unwrap().iter().map(|k| k.as_str().unwrap()).collect();
+    let mut got: Vec<&str> = art["keywords"].as_array().unwrap().iter().map(|k| k.as_str().unwrap()).collect();
     got.sort_unstable();
-    assert_eq!(
-        got,
-        vec!["Mappings", "SHACL", "pizza"],
-        "one keyword per meaning, and free text survives: {art}"
-    );
+    assert_eq!(got, vec!["Mappings", "SHACL", "pizza"], "one keyword per meaning, and free text survives: {art}");
 
     // The concept link is what a filter matches on, and it is DCAT's own term.
     let req = Request::builder().method("GET").uri(format!("/artifact/{id}.ttl")).body(Body::empty()).unwrap();
@@ -2600,7 +2549,6 @@ async fn a_keyword_filter_finds_records_written_with_any_spelling() {
     assert_eq!(none["total"], 0, "{none}");
 }
 
-
 #[tokio::test]
 async fn an_application_key_cannot_sidestep_its_binding_through_the_create_route() {
     // `PUT /instances/self` is careful that the credential decides which software a deployment
@@ -2616,17 +2564,13 @@ async fn an_application_key_cannot_sidestep_its_binding_through_the_create_route
     let (_, minted) = h.post(&format!("/api/v1/software/{mine_id}/tokens"), ROOT, json!({})).await;
     let key = minted["token"].as_str().unwrap().to_string();
 
-    let (status, body) = h
-        .post("/api/v1/instances", &key, json!({"label": "impostor", "software": theirs_id}))
-        .await;
+    let (status, body) = h.post("/api/v1/instances", &key, json!({"label": "impostor", "software": theirs_id})).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     let (_, list) = h.get(&format!("/api/v1/instances?software={theirs_id}")).await;
     assert_eq!(list["total"], 0, "nothing was created: {list}");
 
     // Its own software is still fine, and it need not repeat it.
-    let (status, ok) = h
-        .post("/api/v1/instances", &key, json!({"label": "legitimate", "software": mine_id}))
-        .await;
+    let (status, ok) = h.post("/api/v1/instances", &key, json!({"label": "legitimate", "software": mine_id})).await;
     assert_eq!(status, StatusCode::CREATED, "{ok}");
     assert_eq!(ok["software"], format!("{BASE}/software/{mine_id}"));
 
@@ -2792,10 +2736,7 @@ async fn reloading_the_shapes_does_not_add_another_copy_of_them() {
     let count = |h: &Harness| {
         h.state
             .store
-            .select(&format!(
-                "SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{}> {{ ?s ?p ?o }} }}",
-                tar::ns::G_SHAPES
-            ))
+            .select(&format!("SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{}> {{ ?s ?p ?o }} }}", tar::ns::G_SHAPES))
             .unwrap()
             .rows
             .first()
@@ -2848,10 +2789,7 @@ async fn a_type_left_in_the_retired_vocabulary_graph_is_rescued_and_still_editab
     let leftovers = h
         .state
         .store
-        .select(&format!(
-            "SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{}> {{ ?s ?p ?o }} }}",
-            tar::ns::G_LEGACY_VOCAB
-        ))
+        .select(&format!("SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{}> {{ ?s ?p ?o }} }}", tar::ns::G_LEGACY_VOCAB))
         .unwrap();
     assert_eq!(leftovers.rows[0].i64("n"), Some(0), "the retired graph is emptied, not left half-migrated");
 
@@ -2859,9 +2797,8 @@ async fn a_type_left_in_the_retired_vocabulary_graph_is_rescued_and_still_editab
     let (status, out) = h.post("/api/v1/artifacts", ROOT, json!({"title": "x", "conforms_to": iri})).await;
     assert_eq!(status, StatusCode::CREATED, "{out}");
 
-    let (status, created) = h
-        .post("/api/v1/types", ROOT, json!({"slug": "rdf-graph", "label": "RDF graph (renamed)"}))
-        .await;
+    let (status, created) =
+        h.post("/api/v1/types", ROOT, json!({"slug": "rdf-graph", "label": "RDF graph (renamed)"})).await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
     assert_eq!(created["iri"], iri, "the same name, not a second one");
 
@@ -2931,11 +2868,7 @@ async fn a_version_series_stops_claiming_to_be_a_vocabulary_concept() {
 
     tar::seed::load_vocab(&h.state).unwrap();
 
-    let types = h
-        .state
-        .store
-        .select(&format!("SELECT ?t WHERE {{ GRAPH ?g {{ <{series}> a ?t }} }}"))
-        .unwrap();
+    let types = h.state.store.select(&format!("SELECT ?t WHERE {{ GRAPH ?g {{ <{series}> a ?t }} }}")).unwrap();
     let types: Vec<String> = types.rows.iter().filter_map(|r| r.iri("t")).collect();
     assert_eq!(
         types,
@@ -3054,9 +2987,8 @@ async fn an_oidc_client_no_software_vouches_for_cannot_register_itself() {
         "iss": ISSUER, "aud": BASE, "exp": exp(),
         "sub": "service-account-stranger", "azp": "stranger",
     }));
-    let (status, body, _) = h
-        .req("PUT", "/api/v1/instances/self", Some(&token), Some(json!({"label": "uninvited"})))
-        .await;
+    let (status, body, _) =
+        h.req("PUT", "/api/v1/instances/self", Some(&token), Some(json!({"label": "uninvited"}))).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     // The refusal names every way an operator could legitimately allow it.
     let detail = body["detail"].as_str().unwrap();
@@ -3160,28 +3092,39 @@ async fn two_registries_derive_one_identifier_for_one_digest_while_minting_two_i
     let a = harness_at("https://reg.a.example", false).await;
     let b = harness_at("https://reg.b.example", false).await;
 
-    let (status, first) = a.post("/api/v1/artifacts", ROOT, artifact_with_digest("the same file, over here", EMPTY_SHA256)).await;
+    let (status, first) =
+        a.post("/api/v1/artifacts", ROOT, artifact_with_digest("the same file, over here", EMPTY_SHA256)).await;
     assert_eq!(status, StatusCode::CREATED, "{first}");
     // The same bytes described differently, at the other registry: a different title, a
     // different publisher's registry, and the same digest.
-    let (status, second) = b.post("/api/v1/artifacts", ROOT, artifact_with_digest("the same file, over there", EMPTY_SHA256)).await;
+    let (status, second) =
+        b.post("/api/v1/artifacts", ROOT, artifact_with_digest("the same file, over there", EMPTY_SHA256)).await;
     assert_eq!(status, StatusCode::CREATED, "{second}");
 
     assert_ne!(first["iri"], second["iri"], "each registry still mints its own record IRI, and they must not collide");
     let (ia, ib) = (&first["content_identifiers"][0], &second["content_identifiers"][0]);
-    assert_eq!(ia, EMPTY_CONTENT_ID, "the identifier must be the derived form, not something registry-specific: {first}");
+    assert_eq!(
+        ia, EMPTY_CONTENT_ID,
+        "the identifier must be the derived form, not something registry-specific: {first}"
+    );
     assert_eq!(
         ia, ib,
         "two registries handed one digest must arrive at one identifier, or federation cannot \
          recognise the same bytes: {ia} vs {ib}"
     );
-    assert_eq!(first["distributions"][0]["content_identifier"], *ia, "the identifier belongs to the distribution that has the bytes");
+    assert_eq!(
+        first["distributions"][0]["content_identifier"], *ia,
+        "the identifier belongs to the distribution that has the bytes"
+    );
 
     // And the endpoint agrees with the record, at both registries.
     for (h, who) in [(&a, "a"), (&b, "b")] {
         let (status, out) = h.get(&format!("/api/v1/artifacts/identify?algorithm=sha256&value={EMPTY_SHA256}")).await;
         assert_eq!(status, StatusCode::OK, "{out}");
-        assert_eq!(out["content_identifier"], EMPTY_CONTENT_ID, "registry {who} derived a different name than it stored: {out}");
+        assert_eq!(
+            out["content_identifier"], EMPTY_CONTENT_ID,
+            "registry {who} derived a different name than it stored: {out}"
+        );
     }
 }
 
@@ -3190,18 +3133,26 @@ async fn the_identify_endpoint_is_a_pure_function_and_will_not_take_the_bytes() 
     let h = harness().await;
 
     // Same input, same answer, twice, with no write in between and none after.
-    let (s1, first) = h.post("/api/v1/artifacts/identify", ROOT, json!({"algorithm": "sha256", "value": EMPTY_SHA256})).await;
-    let (s2, again) = h.post("/api/v1/artifacts/identify", ROOT, json!({"algorithm": "sha256", "value": EMPTY_SHA256})).await;
+    let (s1, first) =
+        h.post("/api/v1/artifacts/identify", ROOT, json!({"algorithm": "sha256", "value": EMPTY_SHA256})).await;
+    let (s2, again) =
+        h.post("/api/v1/artifacts/identify", ROOT, json!({"algorithm": "sha256", "value": EMPTY_SHA256})).await;
     assert_eq!((s1, s2), (StatusCode::OK, StatusCode::OK), "{first} / {again}");
     assert_eq!(first, again, "a pure function cannot answer two ways");
     assert_eq!(first["content_identifier"], EMPTY_CONTENT_ID, "{first}");
 
     // The same digest written the other way names the same bytes.
-    let (_, from_b64) = h.post("/api/v1/artifacts/identify", ROOT, json!({"algorithm": "SHA-256", "value": first["digest_base64url"]})).await;
-    assert_eq!(from_b64["content_identifier"], first["content_identifier"], "hex and base64 are one digest: {from_b64}");
+    let (_, from_b64) = h
+        .post("/api/v1/artifacts/identify", ROOT, json!({"algorithm": "SHA-256", "value": first["digest_base64url"]}))
+        .await;
+    assert_eq!(
+        from_b64["content_identifier"], first["content_identifier"],
+        "hex and base64 are one digest: {from_b64}"
+    );
 
     // No credential is needed beyond what a read needs, and it works without one.
-    let (status, anon, _) = h.req("POST", "/api/v1/artifacts/identify", None, Some(json!({"value": EMPTY_SHA256}))).await;
+    let (status, anon, _) =
+        h.req("POST", "/api/v1/artifacts/identify", None, Some(json!({"value": EMPTY_SHA256}))).await;
     assert_eq!(status, StatusCode::OK, "identifying bytes is a read, not a write: {anon}");
     assert_eq!(anon["content_identifier"], EMPTY_CONTENT_ID);
 
@@ -3243,7 +3194,8 @@ async fn a_digest_that_cannot_be_a_digest_is_refused_and_the_form_is_told_which_
     );
 
     // The endpoint refuses the same value, with the same diagnosis and something to act on.
-    let (status, out) = h.post("/api/v1/artifacts/identify", ROOT, json!({"algorithm": "sha256", "value": "zzzz"})).await;
+    let (status, out) =
+        h.post("/api/v1/artifacts/identify", ROOT, json!({"algorithm": "sha256", "value": "zzzz"})).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{out}");
     assert_eq!(out["expected_hex_characters"], 64, "{out}");
 
@@ -3302,9 +3254,13 @@ async fn one_registry_finds_a_peers_record_of_the_same_bytes_without_merging_the
     peer_with(&a, &b).await;
 
     // B describes the file. A describes the same file, in its own words.
-    let (status, theirs) = b.h.post("/api/v1/artifacts", ROOT, artifact_with_digest("validation report, as B calls it", EMPTY_SHA256)).await;
+    let (status, theirs) =
+        b.h.post("/api/v1/artifacts", ROOT, artifact_with_digest("validation report, as B calls it", EMPTY_SHA256))
+            .await;
     assert_eq!(status, StatusCode::CREATED, "{theirs}");
-    let (status, mine) = a.h.post("/api/v1/artifacts", ROOT, artifact_with_digest("validation report, as A calls it", EMPTY_SHA256)).await;
+    let (status, mine) =
+        a.h.post("/api/v1/artifacts", ROOT, artifact_with_digest("validation report, as A calls it", EMPTY_SHA256))
+            .await;
     assert_eq!(status, StatusCode::CREATED, "{mine}");
 
     // A caches B's record the way it caches any foreign IRI: by dereferencing it into B's own
@@ -3321,11 +3277,15 @@ async fn one_registry_finds_a_peers_record_of_the_same_bytes_without_merging_the
     assert_eq!(status, StatusCode::OK, "{found}");
     let titles: Vec<&str> = found["items"].as_array().unwrap().iter().map(|i| i["title"].as_str().unwrap()).collect();
     assert_eq!(found["total"], 2, "the local record and the peer's must both match: {found}");
-    assert!(titles.contains(&"validation report, as A calls it") && titles.contains(&"validation report, as B calls it"), "{titles:?}");
+    assert!(
+        titles.contains(&"validation report, as A calls it") && titles.contains(&"validation report, as B calls it"),
+        "{titles:?}"
+    );
 
     // Two records, not one. Which registry is authoritative for what is a question this does
     // not answer, and must not answer as a side effect of a filter.
-    let origins: Vec<&str> = found["items"].as_array().unwrap().iter().map(|i| i["origin"]["kind"].as_str().unwrap()).collect();
+    let origins: Vec<&str> =
+        found["items"].as_array().unwrap().iter().map(|i| i["origin"]["kind"].as_str().unwrap()).collect();
     assert!(origins.contains(&"local") && origins.contains(&"peer"), "each match keeps its own origin: {origins:?}");
     assert_ne!(found["items"][0]["iri"], found["items"][1]["iri"], "nothing is merged: {found}");
 
@@ -3500,9 +3460,7 @@ async fn a_write_naming_a_bundled_type_asks_the_record_store_nothing_about_the_v
         h.post("/api/v1/types", ROOT, json!({"slug": "counted-type", "label": "Counted type"})).await;
     assert_eq!(status, StatusCode::CREATED, "{minted}");
     store.reset();
-    let (status, out) = h
-        .post("/api/v1/artifacts", ROOT, json!({"title": "b", "conforms_to": minted["iri"]}))
-        .await;
+    let (status, out) = h.post("/api/v1/artifacts", ROOT, json!({"title": "b", "conforms_to": minted["iri"]})).await;
     assert_eq!(status, StatusCode::CREATED, "{out}");
     assert!(store.calls().queried(vocabulary_query), "a minted type is not in the reference store");
 }
@@ -3521,8 +3479,7 @@ async fn a_bundled_a_minted_and_a_peer_type_all_still_validate() {
 
     // Minted here.
     let (_, minted) = h.post("/api/v1/types", ROOT, json!({"slug": "split-test", "label": "Split test"})).await;
-    let (status, out) =
-        h.post("/api/v1/artifacts", ROOT, json!({"title": "b", "conforms_to": minted["iri"]})).await;
+    let (status, out) = h.post("/api/v1/artifacts", ROOT, json!({"title": "b", "conforms_to": minted["iri"]})).await;
     assert_eq!(status, StatusCode::CREATED, "a minted type: {out}");
 
     // Adopted here, under a foreign identifier.
@@ -3569,12 +3526,7 @@ async fn a_dump_round_trips_the_bundle_graphs_and_their_digests() {
 
     restored.reset();
     tar::seed::load_vocab(&state).unwrap();
-    assert_eq!(
-        restored.calls().writes(),
-        0,
-        "a restored store is already up to date: {:?}",
-        restored.calls()
-    );
+    assert_eq!(restored.calls().writes(), 0, "a restored store is already up to date: {:?}", restored.calls());
 
     let h2 = Harness { app: tar::app(state.clone()), state };
     let (status, list) = h2.get("/api/v1/software").await;

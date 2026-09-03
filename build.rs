@@ -137,9 +137,7 @@ fn latest_release() -> Option<String> {
 
 fn fetch_csv(version: &str) -> Option<String> {
     // The tagged asset is the reproducible one; the unversioned URL follows whatever is current.
-    let tagged = format!(
-        "https://raw.githubusercontent.com/edamontology/edamontology/{version}/EDAM_dev.csv"
-    );
+    let tagged = format!("https://raw.githubusercontent.com/edamontology/edamontology/{version}/EDAM_dev.csv");
     curl(&tagged).or_else(|| curl("https://edamontology.org/EDAM.csv"))
 }
 
@@ -156,9 +154,7 @@ fn curl(url: &str) -> Option<String> {
 
 fn read_version(path: &Path) -> Option<String> {
     let head: String = fs::read_to_string(path).ok()?.lines().take(20).collect::<Vec<_>>().join("\n");
-    head.lines()
-        .find_map(|l| l.strip_prefix(VERSION_MARKER))
-        .map(|v| v.trim().to_string())
+    head.lines().find_map(|l| l.strip_prefix(VERSION_MARKER)).map(|v| v.trim().to_string())
 }
 
 fn stamp() -> PathBuf {
@@ -300,7 +296,6 @@ fn parse_csv(text: &str) -> Vec<Vec<String>> {
     rows
 }
 
-
 // ---------------------------------------------------------------- EuroSciVoc
 
 /// Refresh the bundled EU Science Vocabulary, used for the topics on a Software record.
@@ -330,9 +325,7 @@ fn update_euroscivoc(forced: bool) {
     match generate_euroscivoc(&csv) {
         Ok(turtle) => {
             let unchanged = have
-                && fs::read_to_string(&ttl)
-                    .map(|old| strip_header(&old) == strip_header(&turtle))
-                    .unwrap_or(false);
+                && fs::read_to_string(&ttl).map(|old| strip_header(&old) == strip_header(&turtle)).unwrap_or(false);
             if unchanged {
                 return;
             }
@@ -365,10 +358,17 @@ fn fetch_euroscivoc() -> Option<String> {
     );
     let out = Command::new("curl")
         .args([
-            "-sfL", "--max-time", "120", "-G", ESV_ENDPOINT,
-            "--data-urlencode", &format!("query={query}"),
-            "--data-urlencode", "format=text/csv",
-            "-H", "User-Agent: tool-artifact-registry-build",
+            "-sfL",
+            "--max-time",
+            "120",
+            "-G",
+            ESV_ENDPOINT,
+            "--data-urlencode",
+            &format!("query={query}"),
+            "--data-urlencode",
+            "format=text/csv",
+            "-H",
+            "User-Agent: tool-artifact-registry-build",
         ])
         .output()
         .ok()?;
@@ -383,7 +383,7 @@ fn generate_euroscivoc(csv_text: &str) -> Result<String, String> {
     let header = if rows.is_empty() { return Err("empty EuroSciVoc response".into()) } else { rows.remove(0) };
     let col = |name: &str| header.iter().position(|h| h == name);
     let (Some(c), Some(l)) = (col("c"), col("l")) else {
-        return Err("EuroSciVoc response is missing the ?c or ?l column".into())
+        return Err("EuroSciVoc response is missing the ?c or ?l column".into());
     };
     let (d, bl) = (col("d"), col("bl"));
 

@@ -55,25 +55,21 @@ fn where_body(base: &str, f: &ArtifactFilter) -> String {
         w.push_str(&format!("\nGRAPH ?g {{ ?s dct:license <{l}> }}"));
     }
     if let Some(a) = f.availability.as_deref().filter(|v| !v.is_empty()) {
-        w.push_str(&format!(
-            "\nGRAPH ?g {{ ?s dcat:distribution/tar:availability \"{}\" }}",
-            super::escape_literal(a)
-        ));
+        w.push_str(&format!("\nGRAPH ?g {{ ?s dcat:distribution/tar:availability \"{}\" }}", super::escape_literal(a)));
     }
     if let Some(k) = f.keyword.as_deref().filter(|v| !v.is_empty()) {
         // Accept whatever the caller has to hand: the concept IRI, the slug, the label, or any
         // alias. A filter that only understood one of those would send people back to guessing
         // spellings, which is the problem the list exists to remove.
-        match crate::domain::keywords::lookup(k.rsplit('/').next().unwrap_or(k)).or_else(|| crate::domain::keywords::lookup(k)) {
+        match crate::domain::keywords::lookup(k.rsplit('/').next().unwrap_or(k))
+            .or_else(|| crate::domain::keywords::lookup(k))
+        {
             Some(entry) => {
                 let iri = crate::domain::keywords::iri(base, entry.slug);
                 w.push_str(&format!("\nGRAPH ?g {{ ?s dcat:theme <{iri}> }}"));
             }
             // Not on the list, so it is free text and only the literal can match.
-            None => w.push_str(&format!(
-                "\nGRAPH ?g {{ ?s dcat:keyword \"{}\" }}",
-                super::escape_literal(k)
-            )),
+            None => w.push_str(&format!("\nGRAPH ?g {{ ?s dcat:keyword \"{}\" }}", super::escape_literal(k))),
         }
     }
     if let Some(i) = f.instance.as_deref().filter(|v| !v.is_empty()) {
@@ -114,10 +110,7 @@ fn where_body(base: &str, f: &ArtifactFilter) -> String {
     w
 }
 
-pub async fn list(
-    State(state): State<Arc<AppState>>,
-    Query(f): Query<ArtifactFilter>,
-) -> AppResult<impl IntoResponse> {
+pub async fn list(State(state): State<Arc<AppState>>, Query(f): Query<ArtifactFilter>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let body = where_body(state.base(), &f);
     let (iris, next) = page_iris(&state, &body, &f.paging)?;
@@ -188,7 +181,14 @@ pub async fn create(
     .await;
     let _ = state
         .ops
-        .audit(Some(&principal.subject), principal.actor_kind(), "artifact.create", Some(&iri), input.title.as_deref(), None)
+        .audit(
+            Some(&principal.subject),
+            principal.actor_kind(),
+            "artifact.create",
+            Some(&iri),
+            input.title.as_deref(),
+            None,
+        )
         .await;
     let ctx = Ctx::new(&state).await?;
     Ok((StatusCode::CREATED, Json(dom::load_artifact(&ctx, &iri)?)))
@@ -217,14 +217,13 @@ pub struct IdentifyIn {
 }
 
 fn refuse_bytes() -> AppError {
-    AppError::new(StatusCode::UNPROCESSABLE_ENTITY, "bytes-not-accepted", "Send a digest, not the data")
-        .detail(
-            "This registry never holds the bytes of an artifact, and this endpoint will not take \
+    AppError::new(StatusCode::UNPROCESSABLE_ENTITY, "bytes-not-accepted", "Send a digest, not the data").detail(
+        "This registry never holds the bytes of an artifact, and this endpoint will not take \
              them either: streaming a file here to compute a digest the caller can compute \
              locally would put a network round trip, a size limit and this registry's \
              availability between a producer and an identifier that is a pure function of the \
              file. Hash it where the file already is — `sha256sum FILE` — and send the digest.",
-        )
+    )
 }
 
 fn invalid_checksum(algorithm: &str, problem: &crate::domain::content::Problem) -> AppError {

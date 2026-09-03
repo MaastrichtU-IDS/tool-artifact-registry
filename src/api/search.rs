@@ -10,7 +10,9 @@ use crate::error::{AppError, AppResult};
 use crate::ids;
 use crate::model::*;
 use crate::ns;
-use crate::ops::federation::{self, Claim, FedPeerStatus, FedSearchHit, FedSearchResults, FedSettings, FederationTrace};
+use crate::ops::federation::{
+    self, Claim, FedPeerStatus, FedSearchHit, FedSearchResults, FedSettings, FederationTrace,
+};
 use crate::ops::PeerRecord;
 use crate::state::AppState;
 use axum::extract::{Query, State};
@@ -193,11 +195,10 @@ pub async fn search(
         // Never ask a registry that is already on this query's path, or the origin, or
         // ourselves. The id check would refuse those anyway; skipping them saves the round
         // trip, and reporting them keeps the topology honest instead of hiding an edge.
-        let (mut askable, on_path): (Vec<PeerRecord>, Vec<PeerRecord>) =
-            all_peers.into_iter().partition(|p| {
-                let b = p.base_iri.trim_end_matches('/');
-                b != me && !outgoing_path.iter().any(|e| e == b) && Some(b) != origin_iri.as_deref()
-            });
+        let (mut askable, on_path): (Vec<PeerRecord>, Vec<PeerRecord>) = all_peers.into_iter().partition(|p| {
+            let b = p.base_iri.trim_end_matches('/');
+            b != me && !outgoing_path.iter().any(|e| e == b) && Some(b) != origin_iri.as_deref()
+        });
         for p in on_path.into_iter().take(fed.max_peers) {
             peers_status.push(FedPeerStatus {
                 status: "skipped".into(),
@@ -495,10 +496,7 @@ pub struct GraphQuery {
 }
 
 /// A subgraph around an IRI for UI rendering (spec §7.7).
-pub async fn graph(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<GraphQuery>,
-) -> AppResult<impl IntoResponse> {
+pub async fn graph(State(state): State<Arc<AppState>>, Query(q): Query<GraphQuery>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let depth = q.depth.unwrap_or(1).clamp(1, 4);
     Ok(Json(crate::domain::artifact::lineage(&ctx, &q.iri, depth, "both")?))

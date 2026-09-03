@@ -1,0 +1,13 @@
+# The house style, written down so `cargo fmt` preserves it instead of fighting it.
+#
+# This codebase was written to about 120 columns with dense single-line expressions, and it
+# reads that way deliberately: a builder chain or a match arm that fits on one line is one
+# thought, and rustfmt's defaults (100 columns, conservative width heuristics) split several
+# hundred of them into vertical lists that are longer and no clearer. `use_small_heuristics`
+# set to "Max" lets every sub-expression use the full width rather than a fraction of it,
+# which is what keeps `.args([...])` and short `match` arms intact.
+#
+# Comments are left alone: `wrap_comments` stays off, so the prose in this codebase — which
+# is wrapped by hand at its own width and carries the reasoning — is never reflowed.
+max_width = 120
+use_small_heuristics = "Max"

@@ -2,9 +2,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use oxigraph::io::{RdfFormat, RdfParser, RdfSerializer};
-use oxigraph::model::{
-    GraphNameRef, NamedNode, Quad, NamedOrBlankNode, NamedOrBlankNodeRef, Term, Triple,
-};
+use oxigraph::model::{GraphNameRef, NamedNode, NamedOrBlankNode, NamedOrBlankNodeRef, Quad, Term, Triple};
 use oxigraph::sparql::{QueryResults, SparqlEvaluator};
 use oxigraph::store::Store;
 use std::collections::HashSet;
@@ -52,8 +50,7 @@ impl GraphStore for OxigraphStore {
             .execute()?;
         match results {
             QueryResults::Solutions(iter) => {
-                let vars: Vec<String> =
-                    iter.variables().iter().map(|v| v.as_str().to_string()).collect();
+                let vars: Vec<String> = iter.variables().iter().map(|v| v.as_str().to_string()).collect();
                 let mut rows = Vec::new();
                 for sol in iter {
                     let sol = sol?;
@@ -165,8 +162,7 @@ impl GraphStore for OxigraphStore {
                 )?;
             }
             None => {
-                self.store
-                    .dump_to_writer(RdfSerializer::from_format(RdfFormat::NQuads), &mut buf)?;
+                self.store.dump_to_writer(RdfSerializer::from_format(RdfFormat::NQuads), &mut buf)?;
             }
         }
         Ok(String::from_utf8(buf)?)
@@ -174,9 +170,7 @@ impl GraphStore for OxigraphStore {
 
     fn load_turtle(&self, data: &str, graph: &str, base: Option<&str>) -> Result<usize> {
         let g = Self::subject_ref(graph)?;
-        let mut parser = RdfParser::from_format(RdfFormat::Turtle)
-            .without_named_graphs()
-            .with_default_graph(g);
+        let mut parser = RdfParser::from_format(RdfFormat::Turtle).without_named_graphs().with_default_graph(g);
         if let Some(b) = base {
             parser = parser.with_base_iri(b).map_err(|e| anyhow!("bad base IRI: {e}"))?;
         }
@@ -190,5 +184,4 @@ impl GraphStore for OxigraphStore {
         self.store.load_from_slice(RdfFormat::NQuads, data.as_bytes())?;
         Ok(self.store.len()?.saturating_sub(before))
     }
-
 }

@@ -84,20 +84,13 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 fn unauthorized(state: &AppState, id: &Value, detail: &str) -> Response {
     (
         StatusCode::UNAUTHORIZED,
-        [
-            (header::WWW_AUTHENTICATE, oauth::challenge(state)),
-            (header::CONTENT_TYPE, "application/json".to_string()),
-        ],
+        [(header::WWW_AUTHENTICATE, oauth::challenge(state)), (header::CONTENT_TYPE, "application/json".to_string())],
         rpc::error(id, rpc::UNAUTHORIZED, detail).to_string(),
     )
         .into_response()
 }
 
-pub async fn endpoint(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
+pub async fn endpoint(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
     let cfg = McpConfig::from_env();
     if !cfg.enabled {
         return json_response(
@@ -186,9 +179,7 @@ pub async fn endpoint(
         // unauthenticated is what lets a client reach the 401 challenge on `tools/list` and
         // start the OAuth flow, rather than failing at connection time.
         "server/discover" if era == Era::Modern => json_response(StatusCode::OK, rpc::result(&id, discover())),
-        "initialize" if era == Era::Legacy => {
-            json_response(StatusCode::OK, rpc::result(&id, initialize(&req.params)))
-        }
+        "initialize" if era == Era::Legacy => json_response(StatusCode::OK, rpc::result(&id, initialize(&req.params))),
         "ping" => json_response(StatusCode::OK, rpc::result(&id, json!({}))),
 
         // Past here, an anonymous caller is treated exactly as the rest of the registry treats
@@ -204,8 +195,10 @@ pub async fn endpoint(
             if principal.is_anonymous() && !state.config.public_read {
                 return unauthorized(&state, &id, "listing tools needs a credential");
             }
-            let list: Vec<Value> =
-                tools::visible(&principal, cfg.read_only, state.config.public_read).iter().map(tools::Tool::to_json).collect();
+            let list: Vec<Value> = tools::visible(&principal, cfg.read_only, state.config.public_read)
+                .iter()
+                .map(tools::Tool::to_json)
+                .collect();
             let mut result = json!({ "tools": list });
             if era == Era::Modern {
                 let obj = result.as_object_mut().expect("object");
@@ -229,8 +222,7 @@ pub async fn endpoint(
                 );
             }
             let args = req.params.get("arguments").cloned().unwrap_or(json!({}));
-            let outcome =
-                super::call::call(&state, &principal, raw_auth.as_deref(), name, &args, cfg.read_only).await;
+            let outcome = super::call::call(&state, &principal, raw_auth.as_deref(), name, &args, cfg.read_only).await;
 
             let mut result = json!({
                 "content": [{ "type": "text", "text": outcome.text }],
@@ -262,10 +254,7 @@ pub async fn endpoint(
             rpc::error_with_data(
                 &id,
                 rpc::INVALID_REQUEST,
-                format!(
-                    "`{}` does not belong to the protocol era this request declared",
-                    req.method
-                ),
+                format!("`{}` does not belong to the protocol era this request declared", req.method),
                 json!({ "supported": rpc::SUPPORTED }),
             ),
         ),
@@ -425,10 +414,7 @@ mod tests {
 
     #[test]
     fn a_diverging_meta_version_is_refused() {
-        let r = req(
-            "tools/list",
-            json!({ "_meta": { "io.modelcontextprotocol/protocolVersion": rpc::V_2025_11_25 } }),
-        );
+        let r = req("tools/list", json!({ "_meta": { "io.modelcontextprotocol/protocolVersion": rpc::V_2025_11_25 } }));
         let h = headers(&[("mcp-protocol-version", rpc::V_2026_07_28), ("mcp-method", "tools/list")]);
         assert!(validate_mirrored_headers(&h, &r).is_err());
     }

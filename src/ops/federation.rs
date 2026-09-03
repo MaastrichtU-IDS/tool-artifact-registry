@@ -359,7 +359,7 @@ impl FedPeerStatus {
             reach: reach::DIRECT.into(),
             hops: 1,
             via: None,
-        note: None,
+            note: None,
         }
     }
 
@@ -432,7 +432,15 @@ fn is_false(b: &bool) -> bool {
 
 impl FedSearchResults {
     pub fn empty(query: &str) -> Self {
-        Self { query: query.into(), hits: vec![], total: 0, partial: false, peers: vec![], already_handled: false, federation: None }
+        Self {
+            query: query.into(),
+            hits: vec![],
+            total: 0,
+            partial: false,
+            peers: vec![],
+            already_handled: false,
+            federation: None,
+        }
     }
 }
 
@@ -470,7 +478,10 @@ mod tests {
         assert!(first.is_fresh());
 
         for expected_repeats in 1..=3 {
-            match claim_query(&ops, "q-1", Some("https://a.example"), Some("https://b.example"), ttl, 100).await.unwrap() {
+            match claim_query(&ops, "q-1", Some("https://a.example"), Some("https://b.example"), ttl, 100)
+                .await
+                .unwrap()
+            {
                 Claim::AlreadyHandled { repeat_count, .. } => assert_eq!(repeat_count, expected_repeats),
                 Claim::Fresh => panic!("a repeated query id must never be claimed twice"),
             }

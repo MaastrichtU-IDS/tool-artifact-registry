@@ -111,9 +111,10 @@ followed.
 
 A webhook URL is chosen by whoever registers the subscription and can point anywhere, so
 refusing private targets is what stops the registry being used to reach inside a network on
-somebody's behalf. The address is checked at registration *and* re-resolved at send time; a
-residual DNS-rebinding race between the two is documented in the code and in
-[Limitations](../limitations.md).
+somebody's behalf. The address is checked at registration *and* re-resolved at send
+time, and the delivery then connects to exactly the address that check approved — the name is
+not looked up again, so a record that changes in between cannot redirect the connection. The
+certificate is still verified against the hostname.
 
 Note the contrast with health probing, which allows private addresses by default. The two look
 alike and are not: a deployment's endpoint is an address in your own estate, and for an internal

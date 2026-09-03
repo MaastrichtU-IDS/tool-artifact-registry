@@ -105,11 +105,16 @@ The software page shows what was declared. What a deployment has actually produc
 query away, and the two can disagree. Surfacing the disagreement should wait until there is
 enough run data for it to mean something.
 
-## 13. A residual DNS-rebinding race on webhook targets
+## 13. ~~A residual DNS-rebinding race on webhook targets~~ — closed
 
 A subscription's webhook URL is checked against private and loopback addresses at registration
-*and* re-resolved at send time. A name that resolves differently between the two checks is a
-window the current code documents rather than closes.
+*and* re-resolved at send time. The send-time check used to return only a verdict, leaving the
+HTTP client to resolve the name a second time — so a record with a short TTL could answer the
+check with a public address and the connection with `169.254.169.254`.
+
+The check now returns the addresses it approved and the delivery is pinned to them, so there is
+no second lookup to win. TLS still verifies the certificate against the hostname: pinning
+replaces DNS, not identity.
 
 ## 14. Subscriptions have no scope of their own
 

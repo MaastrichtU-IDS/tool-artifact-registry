@@ -192,11 +192,12 @@ capability, and it is the security-relevant part of this feature.
 | **Enumerating another deployment's subscriptions** | A subscription id that is not yours returns `403`, never `404` — the split would itself be an oracle. |
 | **Managing someone else's subscription** | `may_manage` is character-for-character the rule `api::tokens` uses: the owning Instance's credential, a curator, or an admin. The Instance comes from the credential, never from the path (§8.3). |
 
-**The gap that remains, stated plainly.** Between the pre-flight resolution check and the
-connection `reqwest` opens, the name is resolved twice. A DNS-rebinding attacker with a very
-short TTL can still win that race. Closing it properly means resolving once and connecting to a
-pinned IP with SNI preserved, which is a change to how the HTTP client is built rather than a
-change here. Everything else on the list is closed.
+**The gap that remained, and how it was closed.** Between the pre-flight resolution check and
+the connection `reqwest` opened, the name was resolved twice, and a DNS-rebinding attacker with
+a very short TTL could win that race. The check now returns the addresses it approved and the
+delivery is made with a client pinned to them via `resolve_to_addrs`, so there is no second
+lookup. The hostname is still what TLS verifies, so pinning replaces DNS without weakening
+identity. The whole list is closed.
 
 ---
 

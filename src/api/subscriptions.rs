@@ -107,13 +107,46 @@ fn env_duration(key: &str, default: Duration) -> Duration {
 /// A client of our own, because the shared one follows redirects. A redirect is exactly how a
 /// checked target turns into an unchecked one: `https://evil.example/h` → `302` →
 /// `http://169.254.169.254/latest/meta-data/`. Nothing is followed here.
-static WEBHOOK_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .user_agent(concat!("tool-artifact-registry/", env!("CARGO_PKG_VERSION"), " (webhook)"))
+static WEBHOOK_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| webhook_client_builder().build().unwrap_or_default());
+
+fn webhook_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).user_agent(concat!(
+        "tool-artifact-registry/",
+        env!("CARGO_PKG_VERSION"),
+        " (webhook)"
+    ))
+}
+
+/// A client that will connect to `pinned` and nowhere else, closing the gap between checking a
+/// name and using it.
+///
+/// `resolve_to_addrs` replaces the resolver for this one host, so the addresses
+/// [`resolve_public_targets`] approved are the addresses used — the name is never looked up
+/// again, and a record that changes in between cannot redirect the connection. TLS still
+/// verifies the certificate against the hostname.
+///
+/// Built per delivery rather than shared, because the pinning is per host and per resolution:
+/// a client cached across deliveries would be caching a DNS answer, which is the thing being
+/// avoided. Deliveries are a background trickle, so a connection pool that lives for one POST
+/// is the right trade for not having to trust a second lookup.
+///
+/// With no addresses to pin — which is what `allow_private_targets` produces, since an
+/// operator who has turned the guard off has said the target set is theirs to choose — the
+/// shared client is used unchanged.
+fn pinned_client(url: &url::Url, pinned: &[std::net::SocketAddr]) -> Result<reqwest::Client, String> {
+    if pinned.is_empty() {
+        return Ok(WEBHOOK_CLIENT.clone());
+    }
+    let host = url.host_str().ok_or_else(|| "webhook URL has no host".to_string())?;
+    // An IP literal resolves to itself; there is no name to rebind and nothing to override.
+    if url.host().is_some_and(|h| matches!(h, url::Host::Ipv4(_) | url::Host::Ipv6(_))) {
+        return Ok(WEBHOOK_CLIENT.clone());
+    }
+    webhook_client_builder()
+        .resolve_to_addrs(host.trim_matches(['[', ']']), pinned)
         .build()
-        .unwrap_or_default()
-});
+        .map_err(|e| format!("could not build a pinned HTTP client for {host}: {e}"))
+}
 
 // ------------------------------------------------------------------ authorisation
 
@@ -473,7 +506,8 @@ fn require_iri(field: &str, value: &str) -> AppResult<()> {
 ///
 /// It deliberately does **not** resolve DNS: a receiver that has not been deployed yet must
 /// still be registrable, and a name that resolves now can resolve elsewhere later anyway. The
-/// resolution check happens again for every attempt, in [`resolved_targets_are_public`].
+/// resolution check happens again for every attempt, in [`resolve_public_targets`], whose
+/// answer the delivery is then pinned to.
 pub fn validate_webhook_url(raw: &str, settings: &WebhookSettings) -> AppResult<String> {
     let url = url::Url::parse(raw).map_err(|e| AppError::bad_request(format!("webhook_url is not a URL: {e}")))?;
     match url.scheme() {
@@ -559,30 +593,39 @@ fn is_public_ip(ip: &IpAddr) -> bool {
 /// The dynamic half of the guard, applied before every attempt. A name that was fine at
 /// registration can be repointed at `169.254.169.254` afterwards; this is what catches that.
 ///
-/// Honest limit: between this lookup and the connection `reqwest` makes, the name is resolved
-/// twice, so a determined DNS-rebinding attacker with a very short TTL can still win the race.
-/// Closing it properly needs connect-to-a-pinned-IP, which is a bigger change to how the HTTP
-/// client is built; it is named in the design note as the remaining gap.
-async fn resolved_targets_are_public(url: &url::Url, settings: &WebhookSettings) -> Result<(), String> {
+/// **Returns the addresses it approved, and the delivery connects to those.** It used to
+/// return only "yes", and the name was then resolved a second time by the HTTP client — so a
+/// short-TTL record could answer the check with a public address and the connection with a
+/// private one, and the window between the two lookups was the whole vulnerability. There is
+/// no second lookup now: `post_webhook` pins these addresses onto the client it uses, so the
+/// bytes go to an address this function returned or the delivery does not happen.
+///
+/// The hostname is still what TLS verifies against — pinning replaces DNS, not the identity
+/// check, so a certificate for the receiver's name is still required.
+async fn resolve_public_targets(
+    url: &url::Url,
+    settings: &WebhookSettings,
+) -> Result<Vec<std::net::SocketAddr>, String> {
     if settings.allow_private_targets {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let host = url.host_str().ok_or_else(|| "webhook URL has no host".to_string())?;
+    // A URL that already names an address has nothing to rebind: it is checked, and pinning it
+    // to itself would only add a resolver override that can never fire.
     let port = url.port_or_known_default().unwrap_or(443);
-    let addrs = tokio::net::lookup_host((host.trim_matches(['[', ']']), port))
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.trim_matches(['[', ']']), port))
         .await
-        .map_err(|e| format!("could not resolve {host}: {e}"))?;
-    let mut any = false;
-    for a in addrs {
-        any = true;
+        .map_err(|e| format!("could not resolve {host}: {e}"))?
+        .collect();
+    for a in &addrs {
         if !is_public_ip(&a.ip()) {
             return Err(format!("{host} resolves to {}, which is not a public address; refusing to connect", a.ip()));
         }
     }
-    if !any {
+    if addrs.is_empty() {
         return Err(format!("{host} resolved to no addresses"));
     }
-    Ok(())
+    Ok(addrs)
 }
 
 fn new_secret() -> String {
@@ -766,10 +809,12 @@ struct DeliveryError {
 async fn post_webhook(d: &subs::DueDelivery, settings: &WebhookSettings) -> Result<u16, DeliveryError> {
     let url = url::Url::parse(&d.webhook_url)
         .map_err(|e| DeliveryError { message: format!("webhook URL is no longer valid: {e}"), status: None })?;
-    resolved_targets_are_public(&url, settings).await.map_err(|m| DeliveryError { message: m, status: None })?;
+    let pinned =
+        resolve_public_targets(&url, settings).await.map_err(|m| DeliveryError { message: m, status: None })?;
+    let client = pinned_client(&url, &pinned).map_err(|m| DeliveryError { message: m, status: None })?;
 
     let timestamp = chrono::Utc::now().timestamp().to_string();
-    let mut req = WEBHOOK_CLIENT
+    let mut req = client
         .post(url)
         .timeout(settings.timeout)
         .header("content-type", "application/json")
@@ -893,6 +938,56 @@ mod tests {
             assert!(validate_webhook_url(bad, &s).is_err(), "{bad} must be refused");
         }
         assert!(validate_webhook_url("https://hooks.example.org/tar", &s).is_ok());
+    }
+
+    /// The rebinding fix, demonstrated rather than asserted.
+    ///
+    /// `.invalid` is guaranteed by RFC 2606 never to resolve, so a request to a host under it
+    /// can only arrive if the pinned address replaced DNS entirely. The listener receiving the
+    /// bytes is the proof: there is no lookup left between the check and the connection for a
+    /// changed record to win.
+    #[tokio::test]
+    async fn a_delivery_connects_to_the_address_that_was_checked_and_not_to_dns() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accepted = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 128];
+            let n = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await.unwrap_or(0);
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+
+        let url = url::Url::parse(&format!("http://receiver.test.invalid:{}/hook", addr.port())).unwrap();
+
+        // The counterfactual, so this test proves the pin rather than assuming it: the shared
+        // client has no override and cannot resolve the name at all.
+        let unpinned = pinned_client(&url, &[]).expect("the shared client");
+        let refused = unpinned.post(url.clone()).body("{}").timeout(Duration::from_secs(5)).send().await;
+        assert!(refused.is_err(), "without the pin the name must not resolve; the pin is what connects");
+
+        let client = pinned_client(&url, &[addr]).expect("a pinned client");
+        let _ = client.post(url).body("{}").timeout(Duration::from_secs(5)).send().await;
+
+        let request = tokio::time::timeout(Duration::from_secs(5), accepted).await.expect("connected").unwrap();
+        assert!(request.starts_with("POST /hook"), "the pinned address received the delivery: {request:?}");
+        assert!(
+            request.contains("receiver.test.invalid"),
+            "and still addressed the receiver by name, which is what TLS would verify: {request:?}"
+        );
+    }
+
+    /// The check itself still refuses a name that resolves somewhere private — pinning is what
+    /// makes the answer binding, not a replacement for asking the question.
+    #[tokio::test]
+    async fn a_name_resolving_into_the_private_range_is_refused_before_anything_is_pinned() {
+        let s = deny_private();
+        let local = url::Url::parse("https://localhost/hook").unwrap();
+        let err = resolve_public_targets(&local, &s).await.expect_err("localhost is not public");
+        assert!(err.contains("not a public address"), "{err}");
+
+        // With the guard off there is nothing to pin, and the shared client is used.
+        let lax = WebhookSettings { allow_private_targets: true, ..Default::default() };
+        assert_eq!(resolve_public_targets(&local, &lax).await.unwrap(), Vec::new());
     }
 
     #[test]

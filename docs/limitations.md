@@ -135,19 +135,46 @@ Managing a subscription reuses the rule that governs token management — admin,
 credential of the owning deployment. There is no `subscribe:*` scope, so a credential cannot be
 issued that may subscribe and nothing else.
 
-## 15. The external SPARQL backend blocks a worker thread per store call
+## 15. ~~The external SPARQL backend blocks a worker thread per store call~~ — closed for the request path
 
 `GraphStore` is a synchronous trait — it predates the second backend, and every read in the
-registry is a plain function call because the store used to be in-process. The external backend
-therefore does its HTTP on a dedicated thread with its own runtime while the calling thread waits
-on a channel, which is correct but means a store call occupies its Tokio worker thread for the
-whole round trip instead of yielding.
+registry is a plain function call because the store used to be in-process. Against
+`TAR_SPARQL_ENDPOINT`, calling one of its methods directly from an async handler occupied that
+handler's Tokio worker thread for the whole HTTP round trip: on a multi-threaded runtime with
+more concurrent requests than worker threads, one slow remote query delayed every other request
+the same worker was about to advance.
 
-`reqwest::blocking` is not an alternative (it refuses to run inside a runtime) and
-`block_in_place` is not either (it requires the multi-threaded runtime, and the test suite runs
-on a current-thread one). Making the trait async is the real fix and touches every call site.
+Making the trait itself `async fn` — the fix this entry used to name — turned out to be far
+larger than it reads: not 119 call sites, but recolouring most of `src/domain`, most of
+`src/api`, and `src/auth/jwt`, converting every synchronous store-layer unit test to
+`#[tokio::test]`, and rewriting iterator patterns that call domain functions into `stream`
+combinators. The change actually made is the one Tokio's own documentation recommends for
+exactly this shape of problem: every request-path call site — all ~90 API handlers across 18
+files, and the three OIDC credential-binding lookups in `auth::jwt` that run on every
+bearer-token request before any handler is reached — passes its synchronous, store-touching
+work to [`error::blocking`], which runs it on Tokio's dedicated blocking thread pool and gives
+the worker thread back to the scheduler for the round trip's duration. `Ctx` moved from
+borrowing `&AppState` to owning an `Arc<AppState>` clone so it can cross that boundary. Nothing
+in `src/domain` or `src/store` changed: the same synchronous functions run, just on a different
+thread.
 
-Embedded Oxigraph, the default, is unaffected: those calls never leave the process.
+Two call sites were deliberately left as they were, both flagged in code comments: the
+per-artifact and per-`was_derived_from`-parent existence checks inside `advertise()`'s main
+loop, and the equivalent one in the OpenLineage adapter's `map_dataset`. Both interleave a
+synchronous `exists()` check with `state.ops.*` calls that are already async, inside a loop that
+decides its own control flow per iteration — cleanly separating the two would mean restructuring
+the loop into two passes, which is a larger and more error-prone change than the check's actual
+cost justifies: it is a single fast existence lookup, not a scan.
+
+Also unwrapped, and deliberately: `seed.rs`, `bundles.rs::sync`, and the peer-resolver and
+health-check background loops. Those run once at boot or pace themselves on their own timer,
+never competing with a flood of concurrent user requests for the same worker pool, which is the
+specific failure this fix closes.
+
+Embedded Oxigraph, the default, is unaffected either way: those calls never leave the process,
+so moving them to a different thread pool costs a small fixed dispatch overhead and buys
+nothing. The behavioural difference only shows up against a remote endpoint under real
+concurrent load.
 
 ## 16. Atomicity on an external endpoint is the server's promise, not ours
 

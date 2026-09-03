@@ -34,6 +34,13 @@ use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+/// See [`crate::error::blocking`] — every handler in this module that touches the store goes
+/// through it. Re-exported here so a call site inside `api::*` can write `super::blocking`
+/// rather than reaching across to `crate::error`, which is where it actually lives: nothing
+/// about it is specific to HTTP, and `auth::jwt` needs the same thing on the authentication
+/// path, which runs before any handler in this module is reached at all.
+pub use crate::error::blocking;
+
 pub fn router(state: Arc<AppState>) -> Router {
     let limit = state.config.max_payload_bytes;
     let api = Router::new()
@@ -308,7 +315,7 @@ pub fn page_iris(state: &AppState, where_body: &str, paging: &Paging) -> AppResu
 
 /// Respond to a resource GET honouring `Accept`, with Signposting attached (spec §6.3).
 pub async fn resource_response(
-    state: &AppState,
+    state: &Arc<AppState>,
     headers: &HeaderMap,
     iri: &str,
     json: &impl serde::Serialize,
@@ -326,26 +333,27 @@ pub async fn resource_response(
         // An agent that asks the JSON API for markdown gets the same rendering the IRI
         // serves, rather than a 406 or, worse, JSON under a markdown content type.
         Repr::Markdown => {
-            let quads = state.store.describe(iri).map_err(AppError::from)?;
-            let kind = crate::ids::local_id(&state.config.base_iri, iri)
-                .map(|(k, _)| k)
-                .ok_or_else(|| AppError::not_found(format!("{iri} is not a record of this registry")))?;
             let ctx = crate::domain::Ctx::new(state).await?;
-            Ok(Negotiated {
-                repr,
-                body: llms::render_record(state, &ctx, kind, iri, &quads)?,
-                signposting: Some(signposting),
-                status: axum::http::StatusCode::OK,
+            let iri = iri.to_string();
+            let body = blocking(move || {
+                let quads = ctx.state.store.describe(&iri).map_err(AppError::from)?;
+                let kind = crate::ids::local_id(&ctx.state.config.base_iri, &iri)
+                    .map(|(k, _)| k)
+                    .ok_or_else(|| AppError::not_found(format!("{iri} is not a record of this registry")))?;
+                llms::render_record(&ctx.state, &ctx, kind, &iri, &quads)
             })
+            .await?;
+            Ok(Negotiated { repr, body, signposting: Some(signposting), status: axum::http::StatusCode::OK })
         }
         Repr::Turtle | Repr::JsonLd | Repr::NQuads => {
-            let quads = state.store.describe(iri).map_err(AppError::from)?;
-            Ok(Negotiated {
-                repr,
-                body: serialize(&quads, repr, &state.config.base_iri)?,
-                signposting: Some(signposting),
-                status: axum::http::StatusCode::OK,
+            let state = state.clone();
+            let iri = iri.to_string();
+            let body = blocking(move || {
+                let quads = state.store.describe(&iri).map_err(AppError::from)?;
+                serialize(&quads, repr, &state.config.base_iri)
             })
+            .await?;
+            Ok(Negotiated { repr, body, signposting: Some(signposting), status: axum::http::StatusCode::OK })
         }
         Repr::Html => Err(AppError::unsupported_media("HTML is served by the SPA route")),
     }

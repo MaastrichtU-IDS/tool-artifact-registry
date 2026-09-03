@@ -150,8 +150,12 @@ pub async fn search(
 
     // ------------------------------------------------------------- local answer
     let limit = sq.limit.unwrap_or(30).clamp(1, 100);
-    let mut hits: Vec<FedSearchHit> =
-        local_hits(&ctx, &q, sq.entity_type.as_deref(), limit)?.into_iter().map(FedSearchHit::local).collect();
+    let local: Vec<SearchHit> = super::blocking({
+        let (ctx, q, entity_type) = (ctx.clone(), q.clone(), sq.entity_type.clone());
+        move || local_hits(&ctx, &q, entity_type.as_deref(), limit)
+    })
+    .await?;
+    let mut hits: Vec<FedSearchHit> = local.into_iter().map(FedSearchHit::local).collect();
     let mut peers_status: Vec<FedPeerStatus> = Vec::new();
     let mut partial = false;
 
@@ -459,33 +463,37 @@ pub async fn capabilities(
     if clauses.is_empty() {
         return Err(AppError::bad_request("give at least one of produces= or consumes= (an ArtifactType IRI)"));
     }
-    let sparql = format!(
-        r#"{p}
+    let items = super::blocking(move || {
+        let sparql = format!(
+            r#"{p}
 SELECT DISTINCT ?s ?cap WHERE {{ GRAPH ?g {{ ?s tar:hasCapability ?cap . {clauses} }} }} LIMIT 200"#,
-        p = ns::PREFIXES
-    );
-    let rows = state.store.select(&sparql).map_err(AppError::from)?;
-    let mut items = Vec::new();
-    for row in rows.rows {
-        let (Some(iri), Some(cap)) = (row.iri("s"), row.iri("cap")) else { continue };
-        let quads = state.store.describe(&iri).map_err(AppError::from)?;
-        let props = crate::rdf::Props::from_quads(&iri, &quads);
-        let entity = if props.has_type(crate::domain::software::TYPE_SOFTWARE) {
-            "software"
-        } else if props.has_type(crate::domain::instance::TYPE_SOFTWARE_AGENT) {
-            "instance"
-        } else {
-            "release"
-        };
-        items.push(serde_json::json!({
-            "iri": iri,
-            "entity_type": entity,
-            "name": props.str(ns::SCHEMA, "name").or_else(|| props.str(ns::RDFS, "label")),
-            "capability": crate::domain::software::capability_from(&ctx, &cap, entity),
-            "origin": ctx.origin(props.graph.as_deref()),
-        }));
-    }
-    let total = items.len();
+            p = ns::PREFIXES
+        );
+        let rows = ctx.state.store.select(&sparql).map_err(AppError::from)?;
+        let mut items = Vec::new();
+        for row in rows.rows {
+            let (Some(iri), Some(cap)) = (row.iri("s"), row.iri("cap")) else { continue };
+            let quads = ctx.state.store.describe(&iri).map_err(AppError::from)?;
+            let props = crate::rdf::Props::from_quads(&iri, &quads);
+            let entity = if props.has_type(crate::domain::software::TYPE_SOFTWARE) {
+                "software"
+            } else if props.has_type(crate::domain::instance::TYPE_SOFTWARE_AGENT) {
+                "instance"
+            } else {
+                "release"
+            };
+            items.push(serde_json::json!({
+                "iri": iri,
+                "entity_type": entity,
+                "name": props.str(ns::SCHEMA, "name").or_else(|| props.str(ns::RDFS, "label")),
+                "capability": crate::domain::software::capability_from(&ctx, &cap, entity),
+                "origin": ctx.origin(props.graph.as_deref()),
+            }));
+        }
+        Ok(items)
+    })
+    .await?;
+    let total: usize = items.len();
     Ok(Json(serde_json::json!({ "items": items, "total": total })))
 }
 
@@ -499,7 +507,8 @@ pub struct GraphQuery {
 pub async fn graph(State(state): State<Arc<AppState>>, Query(q): Query<GraphQuery>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let depth = q.depth.unwrap_or(1).clamp(1, 4);
-    Ok(Json(crate::domain::artifact::lineage(&ctx, &q.iri, depth, "both")?))
+    let lineage = super::blocking(move || crate::domain::artifact::lineage(&ctx, &q.iri, depth, "both")).await?;
+    Ok(Json(lineage))
 }
 
 /// Used by the peer resolver's timeout budget.

@@ -131,69 +131,85 @@ pub async fn create(
     if input.label.trim().is_empty() {
         return Err(AppError::bad_request("an artifact type needs a label"));
     }
-    let iri = match input.iri.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(given) => adoptable(&state, given)?,
-        None => match input.slug.as_deref().map(slugify).filter(|s| !s.is_empty()) {
-            Some(slug) => format!("{}/type/{slug}", state.base()),
-            None => ids::mint(state.base(), Kind::Type),
-        },
-    };
-    // Re-registering the same slug updates the label rather than minting a duplicate concept:
-    // a type IRI is a name, and names are meant to be stable.
-    //
-    // One graph to clear, because there is now one place a type can be. This used to clear the
-    // vocabulary graph too: `tar seed` wrote its sixteen types in beside the bundles, so
-    // clearing only the local graph left the seeded definition standing next to the new one —
-    // the same IRI with two `skos:prefLabel`s, the picker showing whichever it read first, and a
-    // curator getting a 200 for a rename that never appeared. The seeded types are records now
-    // (`seed::type_quads`) and land here like every other minted type, so the second clear has
-    // nothing left to do. A bundle graph is never touched from a write path at all: it is
-    // dropped and reloaded from the file it came from, and a statement in it that the file does
-    // not contain would either vanish at the next restart or outlive everything that could
-    // reproduce it.
-    let mut tx = GraphTx::new();
-    tx.replace_subject(&iri, ns::G_LOCAL);
-    let mut n = Node::local(&iri);
-    n.a(TYPE_CONCEPT);
-    // The class, in the same node and therefore the same graph as `a skos:Concept`, on both the
-    // minting and the adopting path. This used to be a `tar:conceptBranch` literal, and because
-    // it was a separate triple a later backfill was able to write it into a different graph from
-    // the concept these lines create — after which the type was held, accepted on write, and
-    // offered by no picker.
-    n.a(crate::domain::vocabulary::CLASS_ARTIFACT_TYPE);
-    n.text(ns::SKOS, "prefLabel", &input.label);
-    n.opt_text(ns::SKOS, "definition", &input.definition);
-    n.texts(ns::SKOS, "altLabel", &input.aliases);
-    n.opt_link(ns::SKOS, "inScheme", &input.scheme);
-    n.opt_text(ns::TAR, "defaultMediaType", &input.default_media_type);
-    n.link(ns::PROV, "wasAttributedTo", &principal.subject);
-    tx.extend(n.finish());
-    state.store.apply(tx).map_err(AppError::from)?;
+    let label = input.label.clone();
+    let subject = principal.subject.clone();
+    let iri = super::blocking({
+        let state = state.clone();
+        move || -> AppResult<String> {
+            let iri = match input.iri.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(given) => adoptable(&state, given)?,
+                None => match input.slug.as_deref().map(slugify).filter(|s| !s.is_empty()) {
+                    Some(slug) => format!("{}/type/{slug}", state.base()),
+                    None => ids::mint(state.base(), Kind::Type),
+                },
+            };
+            // Re-registering the same slug updates the label rather than minting a duplicate
+            // concept: a type IRI is a name, and names are meant to be stable.
+            //
+            // One graph to clear, because there is now one place a type can be. This used to
+            // clear the vocabulary graph too: `tar seed` wrote its sixteen types in beside the
+            // bundles, so clearing only the local graph left the seeded definition standing
+            // next to the new one — the same IRI with two `skos:prefLabel`s, the picker showing
+            // whichever it read first, and a curator getting a 200 for a rename that never
+            // appeared. The seeded types are records now (`seed::type_quads`) and land here
+            // like every other minted type, so the second clear has nothing left to do. A
+            // bundle graph is never touched from a write path at all: it is dropped and
+            // reloaded from the file it came from, and a statement in it that the file does not
+            // contain would either vanish at the next restart or outlive everything that could
+            // reproduce it.
+            let mut tx = GraphTx::new();
+            tx.replace_subject(&iri, ns::G_LOCAL);
+            let mut n = Node::local(&iri);
+            n.a(TYPE_CONCEPT);
+            // The class, in the same node and therefore the same graph as `a skos:Concept`, on
+            // both the minting and the adopting path. This used to be a `tar:conceptBranch`
+            // literal, and because it was a separate triple a later backfill was able to write
+            // it into a different graph from the concept these lines create — after which the
+            // type was held, accepted on write, and offered by no picker.
+            n.a(crate::domain::vocabulary::CLASS_ARTIFACT_TYPE);
+            n.text(ns::SKOS, "prefLabel", &input.label);
+            n.opt_text(ns::SKOS, "definition", &input.definition);
+            n.texts(ns::SKOS, "altLabel", &input.aliases);
+            n.opt_link(ns::SKOS, "inScheme", &input.scheme);
+            n.opt_text(ns::TAR, "defaultMediaType", &input.default_media_type);
+            n.link(ns::PROV, "wasAttributedTo", &subject);
+            tx.extend(n.finish());
+            state.store.apply(tx).map_err(AppError::from)?;
+            Ok(iri)
+        }
+    })
+    .await?;
     let _ = state
         .ops
-        .audit(Some(&principal.subject), principal.actor_kind(), "type.create", Some(&iri), Some(&input.label), None)
+        .audit(Some(&principal.subject), principal.actor_kind(), "type.create", Some(&iri), Some(&label), None)
         .await;
 
     let ctx = Ctx::new(&state).await?;
-    Ok((StatusCode::CREATED, Json(load(&ctx, &iri)?)))
+    let out = super::blocking({
+        let iri = iri.clone();
+        move || load(&ctx, &iri)
+    })
+    .await?;
+    Ok((StatusCode::CREATED, Json(out)))
 }
 
 pub async fn list(State(state): State<Arc<AppState>>, Query(paging): Query<Paging>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    // Types this registry *knows as types*: the ones it minted or adopted, plus any IRI
-    // something actually declares itself as or claims to produce or consume.
-    //
-    // Deliberately not "every skos:Concept in the store". The bundled vocabularies run to
-    // thousands of concepts and live in the same graph; listing them here would answer "which
-    // types does this registry use?" with "all of them", which is not an answer. Searching the
-    // whole vocabulary is what /api/v1/vocab/search is for.
-    //
-    // The last two arms ask for the class rather than for skos:Concept, which is also what keeps
-    // a version-series node out: those were typed as concepts once, and every artifact's title
-    // turned up in the type list.
-    let minted_prefix = format!("{}/type/", ctx.base());
-    let q = format!(
-        r#"{p}
+    let page = super::blocking(move || {
+        // Types this registry *knows as types*: the ones it minted or adopted, plus any IRI
+        // something actually declares itself as or claims to produce or consume.
+        //
+        // Deliberately not "every skos:Concept in the store". The bundled vocabularies run to
+        // thousands of concepts and live in the same graph; listing them here would answer
+        // "which types does this registry use?" with "all of them", which is not an answer.
+        // Searching the whole vocabulary is what /api/v1/vocab/search is for.
+        //
+        // The last two arms ask for the class rather than for skos:Concept, which is also what
+        // keeps a version-series node out: those were typed as concepts once, and every
+        // artifact's title turned up in the type list.
+        let minted_prefix = format!("{}/type/", ctx.base());
+        let q = format!(
+            r#"{p}
 SELECT DISTINCT ?s WHERE {{
   GRAPH ?g {{
     {{ ?a dct:conformsTo ?s }} UNION {{ ?c tar:produces ?s }} UNION {{ ?c tar:consumes ?s }}
@@ -201,21 +217,25 @@ SELECT DISTINCT ?s WHERE {{
     UNION {{ ?s a <{artifact_type}> . FILTER(?g = <{local}>) }}
   }}
 }} ORDER BY STR(?s)"#,
-        p = ns::PREFIXES,
-        local = ns::G_LOCAL,
-        artifact_type = crate::domain::vocabulary::CLASS_ARTIFACT_TYPE
-    );
-    let rows = state.store.select(&q).map_err(AppError::from)?;
-    let iris: Vec<String> = rows.rows.iter().filter_map(|r| r.iri("s")).collect();
-    let total = iris.len() as i64;
-    let items: Vec<ArtifactTypeOut> = iris.iter().take(paging.limit()).filter_map(|i| load(&ctx, i).ok()).collect();
-    Ok(Json(crate::model::Page::new(items, total, None)))
+            p = ns::PREFIXES,
+            local = ns::G_LOCAL,
+            artifact_type = crate::domain::vocabulary::CLASS_ARTIFACT_TYPE
+        );
+        let rows = ctx.state.store.select(&q).map_err(AppError::from)?;
+        let iris: Vec<String> = rows.rows.iter().filter_map(|r| r.iri("s")).collect();
+        let total = iris.len() as i64;
+        let items: Vec<ArtifactTypeOut> = iris.iter().take(paging.limit()).filter_map(|i| load(&ctx, i).ok()).collect();
+        Ok(crate::model::Page::new(items, total, None))
+    })
+    .await?;
+    Ok(Json(page))
 }
 
 pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Type, &id);
-    Ok(Json(load(&ctx, &iri)?))
+    let out = super::blocking(move || load(&ctx, &iri)).await?;
+    Ok(Json(out))
 }
 
 fn load(ctx: &Ctx, iri: &str) -> AppResult<ArtifactTypeOut> {

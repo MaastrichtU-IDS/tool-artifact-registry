@@ -92,45 +92,51 @@ async fn run(
     // ASK, and matching on the raw first word sent every prefixed ASK and DESCRIBE down the
     // SELECT path, where the store answers "expected a SELECT query" with a 500.
     let form = query_form(&q);
-    if form == "ASK" {
-        let b = state.store.ask(&q).map_err(AppError::from)?;
-        return Ok((
-            [(axum::http::header::CONTENT_TYPE, "application/sparql-results+json")],
-            serde_json::json!({"head": {}, "boolean": b}).to_string(),
-        ));
-    }
-    if form == "CONSTRUCT" || form == "DESCRIBE" {
-        let triples = state.store.construct(&q).map_err(AppError::from)?;
-        let quads: Vec<oxigraph::model::Quad> = triples
-            .into_iter()
-            .map(|t| {
-                oxigraph::model::Quad::new(t.subject, t.predicate, t.object, oxigraph::model::GraphName::DefaultGraph)
+    let (content_type, body) = super::blocking(move || -> AppResult<(&'static str, String)> {
+        if form == "ASK" {
+            let b = state.store.ask(&q).map_err(AppError::from)?;
+            return Ok(("application/sparql-results+json", serde_json::json!({"head": {}, "boolean": b}).to_string()));
+        }
+        if form == "CONSTRUCT" || form == "DESCRIBE" {
+            let triples = state.store.construct(&q).map_err(AppError::from)?;
+            let quads: Vec<oxigraph::model::Quad> = triples
+                .into_iter()
+                .map(|t| {
+                    oxigraph::model::Quad::new(
+                        t.subject,
+                        t.predicate,
+                        t.object,
+                        oxigraph::model::GraphName::DefaultGraph,
+                    )
+                })
+                .collect();
+            let body = crate::negotiate::serialize(&quads, crate::negotiate::Repr::Turtle, state.base())?;
+            return Ok(("text/turtle; charset=utf-8", body));
+        }
+
+        let bindings = state.store.select(&q).map_err(AppError::from)?;
+        let rows: Vec<serde_json::Value> = bindings
+            .rows
+            .iter()
+            .map(|r| {
+                let mut o = serde_json::Map::new();
+                for v in &bindings.vars {
+                    if let Some(term) = r.term(v) {
+                        o.insert(v.clone(), term_json(term));
+                    }
+                }
+                serde_json::Value::Object(o)
             })
             .collect();
-        let body = crate::negotiate::serialize(&quads, crate::negotiate::Repr::Turtle, state.base())?;
-        return Ok(([(axum::http::header::CONTENT_TYPE, "text/turtle; charset=utf-8")], body));
-    }
-
-    let bindings = state.store.select(&q).map_err(AppError::from)?;
-    let rows: Vec<serde_json::Value> = bindings
-        .rows
-        .iter()
-        .map(|r| {
-            let mut o = serde_json::Map::new();
-            for v in &bindings.vars {
-                if let Some(term) = r.term(v) {
-                    o.insert(v.clone(), term_json(term));
-                }
-            }
-            serde_json::Value::Object(o)
-        })
-        .collect();
-    let doc = serde_json::json!({
-        "head": {"vars": bindings.vars},
-        "results": {"bindings": rows}
-    });
-    let ct = if wants_json { "application/json" } else { "application/sparql-results+json" };
-    Ok(([(axum::http::header::CONTENT_TYPE, ct)], doc.to_string()))
+        let doc = serde_json::json!({
+            "head": {"vars": bindings.vars},
+            "results": {"bindings": rows}
+        });
+        let ct = if wants_json { "application/json" } else { "application/sparql-results+json" };
+        Ok((ct, doc.to_string()))
+    })
+    .await?;
+    Ok(([(axum::http::header::CONTENT_TYPE, content_type)], body))
 }
 
 /// The query form — `SELECT`, `ASK`, `CONSTRUCT` or `DESCRIBE` — read past the SPARQL

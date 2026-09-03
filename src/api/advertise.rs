@@ -69,29 +69,35 @@ async fn advertise(
 ) -> AppResult<impl IntoResponse> {
     principal.require_scope(role.scope())?;
     let instance_iri = principal.require_instance()?;
-    if !state.store.exists(&instance_iri).map_err(AppError::from)? {
-        return Err(AppError::forbidden(format!(
-            "credential names Instance {instance_iri}, which this registry does not know"
-        )));
-    }
-    // Validate up front, on throwaway candidate quads, rather than on the transaction just
-    // before it commits: the loop below writes idempotency and resolution rows to SQLite as it
-    // goes, and a rejection after that would leave a claim recorded for a run that never
-    // existed.
-    {
-        let mut candidate =
-            rundom::run_quads(&ids::mint(state.base(), Kind::Run), &input.run, &instance_iri, &principal.subject);
-        for a in input.artifacts.iter().filter(|a| a.iri.is_none()) {
-            candidate.extend(artdom::artifact_quads(
-                state.base(),
-                &ids::mint(state.base(), Kind::Artifact),
-                a,
-                &principal.subject,
-                None,
-            ));
+    // Both checked together, and both fast, single-purpose store reads: whether the credential
+    // still names something real, and — on throwaway candidate quads, rather than on the
+    // transaction just before it commits — whether what is about to be built would validate at
+    // all. The loop below writes idempotency and resolution rows to SQLite as it goes, and a
+    // rejection after that would leave a claim recorded for a run that never existed.
+    super::blocking({
+        let (state, instance_iri, input, subject) =
+            (state.clone(), instance_iri.clone(), input.clone(), principal.subject.clone());
+        move || {
+            if !state.store.exists(&instance_iri).map_err(AppError::from)? {
+                return Err(AppError::forbidden(format!(
+                    "credential names Instance {instance_iri}, which this registry does not know"
+                )));
+            }
+            let mut candidate =
+                rundom::run_quads(&ids::mint(state.base(), Kind::Run), &input.run, &instance_iri, &subject);
+            for a in input.artifacts.iter().filter(|a| a.iri.is_none()) {
+                candidate.extend(artdom::artifact_quads(
+                    state.base(),
+                    &ids::mint(state.base(), Kind::Artifact),
+                    a,
+                    &subject,
+                    None,
+                ));
+            }
+            shacl::enforce_write(&state, &candidate).map(|_| ())
         }
-        shacl::enforce_write(&state, &candidate)?;
-    }
+    })
+    .await?;
 
     // Resolve or mint the Run. A second advertisement for the same CI attempt attaches to the
     // same Run rather than inventing a new one.
@@ -124,6 +130,12 @@ async fn advertise(
     let mut artifact_iris = Vec::new();
     let mut queued = Vec::new();
 
+    // The `state.store.exists` checks in this loop are not wrapped in `blocking()` (see
+    // limitations.md #15). Each is interleaved with `state.ops.*` calls that are already async
+    // and the loop decides its own control flow per iteration, so cleanly separating the sync
+    // half from the async half would mean two passes over `input.artifacts` rather than one.
+    // A single fast existence lookup does not carry the cost that restructuring would be worth
+    // paying to avoid.
     for a in &input.artifacts {
         let artifact_iri = match a.iri.as_deref().filter(|s| !s.is_empty()) {
             // A bare reference: local or foreign. Foreign IRIs are stored verbatim.
@@ -196,7 +208,11 @@ async fn advertise(
     }
 
     if !tx.is_empty() {
-        state.store.apply(tx).map_err(AppError::from)?;
+        super::blocking({
+            let state = state.clone();
+            move || state.store.apply(tx).map_err(AppError::from)
+        })
+        .await?;
     }
 
     // Standing interest, answered at the moment it is satisfied. This runs *after* the commit
@@ -303,5 +319,6 @@ pub async fn ensure_run(
 /// Load a run for the response of the adapter.
 pub async fn run_summary(state: &Arc<AppState>, iri: &str) -> AppResult<RunSummary> {
     let ctx = Ctx::new(state).await?;
-    rundom::load_run_summary(&ctx, iri)
+    let iri = iri.to_string();
+    super::blocking(move || rundom::load_run_summary(&ctx, &iri)).await
 }

@@ -78,23 +78,27 @@ fn where_body(f: &SoftwareFilter) -> String {
 
 pub async fn list(State(state): State<Arc<AppState>>, Query(f): Query<SoftwareFilter>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let body = where_body(&f);
-    let (iris, next) = page_iris(&state, &body, &f.paging)?;
-    let total = count(&state, &body)?;
-    let counts = dom::software_counts(&ctx, None)?;
-    let mut items = Vec::new();
-    for iri in iris {
-        let quads = state.store.describe(&iri).map_err(AppError::from)?;
-        let p = Props::from_quads(&iri, &quads);
-        let mut sw = dom::software_from_props(&ctx, &iri, &p);
-        if let Some(c) = counts.get(&iri) {
-            sw.instance_count = c.instances;
-            sw.runs_30d = c.runs_30d;
+    let page = super::blocking(move || {
+        let body = where_body(&f);
+        let (iris, next) = page_iris(&ctx.state, &body, &f.paging)?;
+        let total = count(&ctx.state, &body)?;
+        let counts = dom::software_counts(&ctx, None)?;
+        let mut items = Vec::new();
+        for iri in iris {
+            let quads = ctx.state.store.describe(&iri).map_err(AppError::from)?;
+            let p = Props::from_quads(&iri, &quads);
+            let mut sw = dom::software_from_props(&ctx, &iri, &p);
+            if let Some(c) = counts.get(&iri) {
+                sw.instance_count = c.instances;
+                sw.runs_30d = c.runs_30d;
+            }
+            items.push(sw);
         }
-        items.push(sw);
-    }
-    let mut page = Page::new(items, total, next);
-    page.facets = facets(&ctx)?;
+        let mut page = Page::new(items, total, next);
+        page.facets = facets(&ctx)?;
+        Ok(page)
+    })
+    .await?;
     Ok(Json(page))
 }
 
@@ -137,7 +141,11 @@ pub async fn get(
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Software, &id);
-    let sw = dom::load_software(&ctx, &iri)?;
+    let sw = super::blocking({
+        let iri = iri.clone();
+        move || dom::load_software(&ctx, &iri)
+    })
+    .await?;
     let mut sp = Signposting::new(&iri).collection(&format!("{}/api/v1/software", state.base()));
     if let Some(l) = &sw.license {
         sp = sp.license(l);
@@ -182,18 +190,30 @@ pub async fn create(
     if let Some(sync) = &input.sync {
         crate::domain::forge::check_fields(&sync.fields)?;
     }
-    let iri = ids::mint(state.base(), Kind::Software);
-    let quads = dom::software_quads(state.base(), &iri, &input, &principal.subject, None);
-    shacl::enforce_write(&state, &quads)?;
-    let mut tx = GraphTx::new();
-    tx.extend(quads);
-    state.store.apply(tx).map_err(AppError::from)?;
+    let (iri, name) = (ids::mint(state.base(), Kind::Software), input.name.clone());
+    let subject = principal.subject.clone();
+    super::blocking({
+        let (state, iri) = (state.clone(), iri.clone());
+        move || {
+            let quads = dom::software_quads(state.base(), &iri, &input, &subject, None);
+            shacl::enforce_write(&state, &quads)?;
+            let mut tx = GraphTx::new();
+            tx.extend(quads);
+            state.store.apply(tx).map_err(AppError::from)
+        }
+    })
+    .await?;
     let _ = state
         .ops
-        .audit(Some(&principal.subject), principal.actor_kind(), "software.create", Some(&iri), Some(&input.name), None)
+        .audit(Some(&principal.subject), principal.actor_kind(), "software.create", Some(&iri), Some(&name), None)
         .await;
     let ctx = Ctx::new(&state).await?;
-    Ok((StatusCode::CREATED, Json(dom::load_software(&ctx, &iri)?)))
+    let sw = super::blocking({
+        let iri = iri.clone();
+        move || dom::load_software(&ctx, &iri)
+    })
+    .await?;
+    Ok((StatusCode::CREATED, Json(sw)))
 }
 
 /// PATCH merges: the body carries only what changes, and everything else stands.
@@ -212,32 +232,51 @@ pub async fn patch(
     if !ids::is_local(state.base(), &iri) {
         return Err(AppError::forbidden("this registry is not authoritative for that IRI (spec §9.7)"));
     }
-    let existing = state.store.describe(&iri).map_err(AppError::from)?;
-    if existing.is_empty() {
-        return Err(AppError::not_found(format!("no software at {iri}")));
-    }
     let ctx = Ctx::new(&state).await?;
-    let current = software_in_from(&dom::load_software(&ctx, &iri)?);
-    let merged = super::instances::merge_json(
-        serde_json::to_value(current).map_err(|e| AppError::internal(e.to_string()))?,
-        body,
-    );
-    let input: SoftwareIn = serde_json::from_value(merged)
-        .map_err(|e| AppError::bad_request(format!("could not apply the change: {e}")))?;
+    let (input, created) = super::blocking({
+        let (state, iri, ctx) = (state.clone(), iri.clone(), ctx);
+        move || -> AppResult<(SoftwareIn, Option<String>)> {
+            let existing = state.store.describe(&iri).map_err(AppError::from)?;
+            if existing.is_empty() {
+                return Err(AppError::not_found(format!("no software at {iri}")));
+            }
+            let created = Props::from_quads(&iri, &existing).str(ns::DCT, "created");
+            let current = software_in_from(&dom::load_software(&ctx, &iri)?);
+            let merged = super::instances::merge_json(
+                serde_json::to_value(current).map_err(|e| AppError::internal(e.to_string()))?,
+                body,
+            );
+            let input = serde_json::from_value(merged)
+                .map_err(|e| AppError::bad_request(format!("could not apply the change: {e}")))?;
+            Ok((input, created))
+        }
+    })
+    .await?;
     check_registration_binding(&state, &input)?;
     if let Some(sync) = &input.sync {
         crate::domain::forge::check_fields(&sync.fields)?;
     }
-    let created = Props::from_quads(&iri, &existing).str(ns::DCT, "created");
-    let tx = dom::replace_software(state.base(), &iri, &input, &principal.subject, created);
-    shacl::enforce_write(&state, &tx.insert)?;
-    state.store.apply(tx).map_err(AppError::from)?;
+    let subject = principal.subject.clone();
+    super::blocking({
+        let (state, iri) = (state.clone(), iri.clone());
+        move || {
+            let tx = dom::replace_software(state.base(), &iri, &input, &subject, created);
+            shacl::enforce_write(&state, &tx.insert)?;
+            state.store.apply(tx).map_err(AppError::from)
+        }
+    })
+    .await?;
     let _ = state
         .ops
         .audit(Some(&principal.subject), principal.actor_kind(), "software.update", Some(&iri), None, None)
         .await;
     let ctx = Ctx::new(&state).await?;
-    Ok(Json(dom::load_software(&ctx, &iri)?))
+    let sw = super::blocking({
+        let iri = iri.clone();
+        move || dom::load_software(&ctx, &iri)
+    })
+    .await?;
+    Ok(Json(sw))
 }
 
 /// Soft delete (spec §7.2): the IRI keeps resolving and the UI renders a tombstone banner.
@@ -252,21 +291,28 @@ pub async fn soft_delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn tombstone(state: &AppState, iri: &str, principal: &Principal) -> AppResult<()> {
-    let existing = state.store.describe(iri).map_err(AppError::from)?;
-    if existing.is_empty() {
-        return Err(AppError::not_found(format!("nothing at {iri}")));
-    }
-    let mut n = crate::rdf::Node::local(iri);
-    n.boolean(ns::TAR, "tombstoned", true);
-    n.datetime(ns::TAR, "tombstonedAt", &chrono::Utc::now().to_rfc3339());
-    // Supplement (audit 2026-08-30): the standard reading of a tombstone. adms:status has an
-    // open domain, and WITHDRAWN comes from the EU dataset-status authority table.
-    n.link(ns::ADMS, "status", &format!("{}WITHDRAWN", ns::EU_DATASET_STATUS));
-    n.link(ns::PROV, "wasAttributedTo", &principal.subject);
-    let mut tx = GraphTx::new();
-    tx.extend(n.finish());
-    state.store.apply(tx).map_err(AppError::from)?;
+pub async fn tombstone(state: &Arc<AppState>, iri: &str, principal: &Principal) -> AppResult<()> {
+    super::blocking({
+        let (state, iri, subject) = (state.clone(), iri.to_string(), principal.subject.clone());
+        move || {
+            let existing = state.store.describe(&iri).map_err(AppError::from)?;
+            if existing.is_empty() {
+                return Err(AppError::not_found(format!("nothing at {iri}")));
+            }
+            let mut n = crate::rdf::Node::local(&iri);
+            n.boolean(ns::TAR, "tombstoned", true);
+            n.datetime(ns::TAR, "tombstonedAt", &chrono::Utc::now().to_rfc3339());
+            // Supplement (audit 2026-08-30): the standard reading of a tombstone. adms:status
+            // has an open domain, and WITHDRAWN comes from the EU dataset-status authority
+            // table.
+            n.link(ns::ADMS, "status", &format!("{}WITHDRAWN", ns::EU_DATASET_STATUS));
+            n.link(ns::PROV, "wasAttributedTo", &subject);
+            let mut tx = GraphTx::new();
+            tx.extend(n.finish());
+            state.store.apply(tx).map_err(AppError::from)
+        }
+    })
+    .await?;
     let _ = state.ops.audit(Some(&principal.subject), principal.actor_kind(), "tombstone", Some(iri), None, None).await;
     Ok(())
 }
@@ -274,7 +320,7 @@ pub async fn tombstone(state: &AppState, iri: &str, principal: &Principal) -> Ap
 pub async fn list_releases(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Software, &id);
-    let releases = dom::list_releases(&ctx, &iri)?;
+    let releases = super::blocking(move || dom::list_releases(&ctx, &iri)).await?;
     let total = releases.len() as i64;
     Ok(Json(Page::new(releases, total, None)))
 }
@@ -287,30 +333,38 @@ pub async fn create_release(
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
     let software_iri = ids::iri_for(state.base(), Kind::Software, &id);
-    if !state.store.exists(&software_iri).map_err(AppError::from)? {
-        return Err(AppError::not_found(format!("no software at {software_iri}")));
-    }
     let iri = ids::mint(state.base(), Kind::Release);
-    let quads = dom::release_quads(state.base(), &iri, &software_iri, &input, &principal.subject);
-    shacl::enforce_write(&state, &quads)?;
-    let mut tx = GraphTx::new();
-    tx.extend(quads);
-    state.store.apply(tx).map_err(AppError::from)?;
+    let subject = principal.subject.clone();
+    let version = input.version.clone();
+    super::blocking({
+        let (state, software_iri, iri) = (state.clone(), software_iri.clone(), iri.clone());
+        move || {
+            if !state.store.exists(&software_iri).map_err(AppError::from)? {
+                return Err(AppError::not_found(format!("no software at {software_iri}")));
+            }
+            let quads = dom::release_quads(state.base(), &iri, &software_iri, &input, &subject);
+            shacl::enforce_write(&state, &quads)?;
+            let mut tx = GraphTx::new();
+            tx.extend(quads);
+            state.store.apply(tx).map_err(AppError::from)
+        }
+    })
+    .await?;
     let _ = state
         .ops
-        .audit(
-            Some(&principal.subject),
-            principal.actor_kind(),
-            "release.create",
-            Some(&iri),
-            Some(&input.version),
-            None,
-        )
+        .audit(Some(&principal.subject), principal.actor_kind(), "release.create", Some(&iri), Some(&version), None)
         .await;
     let ctx = Ctx::new(&state).await?;
-    let quads = state.store.describe(&iri).map_err(AppError::from)?;
-    let p = Props::from_quads(&iri, &quads);
-    Ok((StatusCode::CREATED, Json(dom::release_from_props(&ctx, &iri, &p))))
+    let release = super::blocking({
+        let iri = iri.clone();
+        move || {
+            let quads = ctx.state.store.describe(&iri).map_err(AppError::from)?;
+            let p = Props::from_quads(&iri, &quads);
+            Ok(dom::release_from_props(&ctx, &iri, &p))
+        }
+    })
+    .await?;
+    Ok((StatusCode::CREATED, Json(release)))
 }
 
 /// Pull the managed fields from the source repository (`POST /api/v1/software/{id}/sync`).
@@ -324,18 +378,27 @@ pub async fn sync(
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
     let iri = ids::iri_for(state.base(), Kind::Software, &id);
-    let quads = state.store.describe(&iri).map_err(AppError::from)?;
-    if quads.is_empty() {
-        return Err(AppError::not_found(format!("no software at {iri}")));
-    }
     let ctx = Ctx::new(&state).await?;
-    let existing = dom::load_software(&ctx, &iri)?;
-    let Some(cfg) = existing.sync.clone() else {
-        return Err(AppError::bad_request("this record is not connected to a repository — set `sync` on it first"));
-    };
-    if !cfg.enabled {
-        return Err(AppError::bad_request("sync is disabled for this record"));
-    }
+    let (existing, quads, cfg) = super::blocking({
+        let (ctx, iri) = (ctx.clone(), iri.clone());
+        move || {
+            let quads = ctx.state.store.describe(&iri).map_err(AppError::from)?;
+            if quads.is_empty() {
+                return Err(AppError::not_found(format!("no software at {iri}")));
+            }
+            let existing = dom::load_software(&ctx, &iri)?;
+            let Some(cfg) = existing.sync.clone() else {
+                return Err(AppError::bad_request(
+                    "this record is not connected to a repository — set `sync` on it first",
+                ));
+            };
+            if !cfg.enabled {
+                return Err(AppError::bad_request("sync is disabled for this record"));
+            }
+            Ok((existing, quads, cfg))
+        }
+    })
+    .await?;
 
     // The signed-in curator's own GitHub token, when Keycloak brokered one, so the registry
     // reads exactly what that person can read. Falls back to the registry-wide token.
@@ -362,7 +425,11 @@ pub async fn sync(
             status.last_status = "error".into();
             status.last_error = e.detail.clone();
             status.last_changed = Vec::new();
-            write_sync_status(&state, &iri, &status)?;
+            super::blocking({
+                let (state, iri, status) = (state.clone(), iri.clone(), status.clone());
+                move || write_sync_status(&state, &iri, &status)
+            })
+            .await?;
             return Err(e);
         }
     };
@@ -373,37 +440,46 @@ pub async fn sync(
         fields: cfg.fields.clone(),
         enabled: cfg.enabled,
     });
-    let created = Props::from_quads(&iri, &quads).str(ns::DCT, "created");
-    let tx = dom::replace_software(state.base(), &iri, &input, &principal.subject, created);
-    shacl::enforce_write(&state, &tx.insert)?;
-    state.store.apply(tx).map_err(AppError::from)?;
-    write_sync_status(&state, &iri, &status)?;
-
-    // Releases are separate records, so they are added rather than replaced: a version already
-    // registered is left alone, which keeps any local edits to it.
-    let mut added = Vec::new();
-    if !outcome.releases.is_empty() {
-        let known: Vec<String> = dom::list_releases(&ctx, &iri)?.into_iter().map(|r| r.version).collect();
-        for r in &outcome.releases {
-            if known.iter().any(|k| k == &r.version) {
-                continue;
-            }
-            let rel_iri = ids::mint(state.base(), Kind::Release);
-            let quads = dom::release_quads(state.base(), &rel_iri, &iri, r, &principal.subject);
-            if shacl::enforce_write(&state, &quads).is_err() {
-                continue;
-            }
-            let mut tx = GraphTx::new();
-            tx.extend(quads);
+    let subject = principal.subject.clone();
+    let added = super::blocking({
+        let (state, iri, ctx, mut status) = (state.clone(), iri.clone(), ctx.clone(), status.clone());
+        let releases = outcome.releases.clone();
+        move || -> AppResult<Vec<String>> {
+            let created = Props::from_quads(&iri, &quads).str(ns::DCT, "created");
+            let tx = dom::replace_software(state.base(), &iri, &input, &subject, created);
+            shacl::enforce_write(&state, &tx.insert)?;
             state.store.apply(tx).map_err(AppError::from)?;
-            added.push(r.version.clone());
-        }
-    }
+            write_sync_status(&state, &iri, &status)?;
 
-    if !added.is_empty() {
-        status.last_changed.push("releases".into());
-        write_sync_status(&state, &iri, &status)?;
-    }
+            // Releases are separate records, so they are added rather than replaced: a version
+            // already registered is left alone, which keeps any local edits to it.
+            let mut added = Vec::new();
+            if !releases.is_empty() {
+                let known: Vec<String> = dom::list_releases(&ctx, &iri)?.into_iter().map(|r| r.version).collect();
+                for r in &releases {
+                    if known.iter().any(|k| k == &r.version) {
+                        continue;
+                    }
+                    let rel_iri = ids::mint(state.base(), Kind::Release);
+                    let quads = dom::release_quads(state.base(), &rel_iri, &iri, r, &subject);
+                    if shacl::enforce_write(&state, &quads).is_err() {
+                        continue;
+                    }
+                    let mut tx = GraphTx::new();
+                    tx.extend(quads);
+                    state.store.apply(tx).map_err(AppError::from)?;
+                    added.push(r.version.clone());
+                }
+            }
+
+            if !added.is_empty() {
+                status.last_changed.push("releases".into());
+                write_sync_status(&state, &iri, &status)?;
+            }
+            Ok(added)
+        }
+    })
+    .await?;
     let _ = state
         .ops
         .audit(Some(&principal.subject), principal.actor_kind(), "software.sync", Some(&iri), Some(&cfg.repo), None)
@@ -413,8 +489,13 @@ pub async fn sync(
     if !added.is_empty() {
         changed.push("releases".into());
     }
+    let sw = super::blocking({
+        let iri = iri.clone();
+        move || dom::load_software(&ctx, &iri)
+    })
+    .await?;
     Ok(Json(serde_json::json!({
-        "software": dom::load_software(&ctx, &iri)?,
+        "software": sw,
         "changed": changed,
         "releases_added": added,
         "skipped": outcome.skipped,
@@ -497,13 +578,20 @@ pub async fn delete_release(
     principal.require_curator()?;
     let software_iri = ids::iri_for(state.base(), Kind::Software, &id);
     let iri = ids::iri_for(state.base(), Kind::Release, &release_id);
-    let quads = state.store.describe(&iri).map_err(AppError::from)?;
-    if quads.is_empty() {
-        return Err(AppError::not_found(format!("no release at {iri}")));
-    }
-    if Props::from_quads(&iri, &quads).iri(ns::DCT, "isVersionOf").as_deref() != Some(software_iri.as_str()) {
-        return Err(AppError::not_found("that release does not belong to this software"));
-    }
+    super::blocking({
+        let (state, software_iri, iri) = (state.clone(), software_iri.clone(), iri.clone());
+        move || {
+            let quads = state.store.describe(&iri).map_err(AppError::from)?;
+            if quads.is_empty() {
+                return Err(AppError::not_found(format!("no release at {iri}")));
+            }
+            if Props::from_quads(&iri, &quads).iri(ns::DCT, "isVersionOf").as_deref() != Some(software_iri.as_str()) {
+                return Err(AppError::not_found("that release does not belong to this software"));
+            }
+            Ok(())
+        }
+    })
+    .await?;
     tombstone(&state, &iri, &principal).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -527,27 +615,36 @@ pub async fn put_capability_on(
     input: &CapabilityIn,
     layer: &str,
 ) -> AppResult<axum::response::Response> {
-    let existing = state.store.describe(subject).map_err(AppError::from)?;
-    if existing.is_empty() {
-        return Err(AppError::not_found(format!("nothing at {subject}")));
-    }
-    let props = Props::from_quads(subject, &existing);
-    let cap_iri = props.iri(ns::TAR, "hasCapability").unwrap_or_else(|| ids::mint(state.base(), Kind::Capability));
-    let cap_quads = dom::capability_quads(&cap_iri, input);
-    shacl::enforce_write(&state, &cap_quads)?;
-    let mut tx = GraphTx::new();
-    tx.replace_subject(&cap_iri, ns::G_LOCAL);
-    tx.extend(cap_quads);
-    let mut n = crate::rdf::Node::local(subject);
-    n.link(ns::TAR, "hasCapability", &cap_iri);
-    tx.extend(n.finish());
-    state.store.apply(tx).map_err(AppError::from)?;
+    let cap_iri = super::blocking({
+        let (state, subject, input) = (state.clone(), subject.to_string(), input.clone());
+        move || {
+            let existing = state.store.describe(&subject).map_err(AppError::from)?;
+            if existing.is_empty() {
+                return Err(AppError::not_found(format!("nothing at {subject}")));
+            }
+            let props = Props::from_quads(&subject, &existing);
+            let cap_iri =
+                props.iri(ns::TAR, "hasCapability").unwrap_or_else(|| ids::mint(state.base(), Kind::Capability));
+            let cap_quads = dom::capability_quads(&cap_iri, &input);
+            shacl::enforce_write(&state, &cap_quads)?;
+            let mut tx = GraphTx::new();
+            tx.replace_subject(&cap_iri, ns::G_LOCAL);
+            tx.extend(cap_quads);
+            let mut n = crate::rdf::Node::local(&subject);
+            n.link(ns::TAR, "hasCapability", &cap_iri);
+            tx.extend(n.finish());
+            state.store.apply(tx).map_err(AppError::from)?;
+            Ok(cap_iri)
+        }
+    })
+    .await?;
     let _ = state
         .ops
         .audit(Some(&principal.subject), principal.actor_kind(), "capability.declare", Some(subject), Some(layer), None)
         .await;
     let ctx = Ctx::new(state).await?;
-    let cap = dom::capability_from(&ctx, &cap_iri, layer);
+    let layer = layer.to_string();
+    let cap = super::blocking(move || Ok(dom::capability_from(&ctx, &cap_iri, &layer))).await?;
     Ok(Json(cap).into_response())
 }
 
@@ -559,7 +656,7 @@ pub async fn export_biotools(
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Software, &id);
-    let sw = dom::load_software(&ctx, &iri)?;
+    let sw = super::blocking(move || dom::load_software(&ctx, &iri)).await?;
 
     let function = sw.capability.as_ref().map(|c| {
         serde_json::json!([{

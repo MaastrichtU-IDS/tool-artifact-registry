@@ -112,11 +112,15 @@ fn where_body(base: &str, f: &ArtifactFilter) -> String {
 
 pub async fn list(State(state): State<Arc<AppState>>, Query(f): Query<ArtifactFilter>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let body = where_body(state.base(), &f);
-    let (iris, next) = page_iris(&state, &body, &f.paging)?;
-    let total = count(&state, &body)?;
-    let items: Vec<Artifact> = iris.iter().filter_map(|i| dom::load_artifact(&ctx, i).ok()).collect();
-    Ok(Json(Page::new(items, total, next)))
+    let page = super::blocking(move || {
+        let body = where_body(ctx.base(), &f);
+        let (iris, next) = page_iris(&ctx.state, &body, &f.paging)?;
+        let total = count(&ctx.state, &body)?;
+        let items: Vec<Artifact> = iris.iter().filter_map(|i| dom::load_artifact(&ctx, i).ok()).collect();
+        Ok(Page::new(items, total, next))
+    })
+    .await?;
+    Ok(Json(page))
 }
 
 pub async fn get(
@@ -126,7 +130,11 @@ pub async fn get(
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Artifact, &id);
-    let artifact = dom::load_artifact(&ctx, &iri)?;
+    let artifact = super::blocking({
+        let iri = iri.clone();
+        move || dom::load_artifact(&ctx, &iri)
+    })
+    .await?;
     let mut sp = Signposting::new(&iri).collection(&format!("{}/api/v1/artifacts", state.base()));
     if let Some(t) = &artifact.conforms_to {
         sp = sp.type_(&t.iri);
@@ -159,12 +167,19 @@ pub async fn create(
         principal.require_scope(crate::auth::SCOPE_ADVERTISE_PRODUCE)?;
     }
     let iri = ids::mint(state.base(), Kind::Artifact);
-    let quads = dom::artifact_quads(state.base(), &iri, &input, &principal.subject, None);
-    shacl::enforce_write(&state, &quads)?;
-    let mut tx = GraphTx::new();
-    tx.extend(quads);
-    state.store.apply(tx).map_err(AppError::from)?;
-    if let Some(k) = &input.external_key {
+    let (external_key, title) = (input.external_key.clone(), input.title.clone());
+    super::blocking({
+        let (state, iri, subject) = (state.clone(), iri.clone(), principal.subject.clone());
+        move || {
+            let quads = dom::artifact_quads(state.base(), &iri, &input, &subject, None);
+            shacl::enforce_write(&state, &quads)?;
+            let mut tx = GraphTx::new();
+            tx.extend(quads);
+            state.store.apply(tx).map_err(AppError::from)
+        }
+    })
+    .await?;
+    if let Some(k) = &external_key {
         let _ = state.ops.remember_artifact(k, &iri).await;
     }
     // The other way an artifact appears. A curator's direct registration has no run and often
@@ -181,17 +196,15 @@ pub async fn create(
     .await;
     let _ = state
         .ops
-        .audit(
-            Some(&principal.subject),
-            principal.actor_kind(),
-            "artifact.create",
-            Some(&iri),
-            input.title.as_deref(),
-            None,
-        )
+        .audit(Some(&principal.subject), principal.actor_kind(), "artifact.create", Some(&iri), title.as_deref(), None)
         .await;
     let ctx = Ctx::new(&state).await?;
-    Ok((StatusCode::CREATED, Json(dom::load_artifact(&ctx, &iri)?)))
+    let artifact = super::blocking({
+        let iri = iri.clone();
+        move || dom::load_artifact(&ctx, &iri)
+    })
+    .await?;
+    Ok((StatusCode::CREATED, Json(artifact)))
 }
 
 // ------------------------------------------------------- naming bytes
@@ -330,15 +343,22 @@ pub async fn lineage(
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Artifact, &id);
-    if !state.store.exists(&iri).map_err(AppError::from)? {
-        return Err(AppError::not_found(format!("no artifact at {iri}")));
-    }
     let depth = q.depth.unwrap_or(1).clamp(1, 6);
     let direction = q.direction.unwrap_or_else(|| "both".into());
     if !["up", "down", "both"].contains(&direction.as_str()) {
         return Err(AppError::bad_request("direction must be up, down or both"));
     }
-    Ok(Json(dom::lineage(&ctx, &iri, depth, &direction)?))
+    let lineage = super::blocking({
+        let iri = iri.clone();
+        move || {
+            if !ctx.state.store.exists(&iri).map_err(AppError::from)? {
+                return Err(AppError::not_found(format!("no artifact at {iri}")));
+            }
+            dom::lineage(&ctx, &iri, depth, &direction)
+        }
+    })
+    .await?;
+    Ok(Json(lineage))
 }
 
 /// Other artifacts in the same `dct:isVersionOf` series (handoff §5.5 "Versions").

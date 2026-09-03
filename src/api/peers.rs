@@ -216,7 +216,11 @@ pub async fn remove(
     let Some(peer) = state.ops.get_peer(&id).await.map_err(AppError::from)? else {
         return Err(AppError::not_found(format!("no peer {id}")));
     };
-    state.store.drop_graph(&ns::peer_graph(&peer.id)).map_err(AppError::from)?;
+    super::blocking({
+        let (state, peer_id) = (state.clone(), peer.id.clone());
+        move || state.store.drop_graph(&ns::peer_graph(&peer_id)).map_err(AppError::from)
+    })
+    .await?;
     state.ops.delete_peer(&peer.id).await.map_err(AppError::from)?;
     let _ = state
         .ops
@@ -241,12 +245,23 @@ pub async fn resolve(
     if crate::ids::is_local(state.base(), &iri) {
         return Err(AppError::bad_request("that IRI is local — dereference it directly"));
     }
-    if !q.refresh && state.store.exists(&iri).map_err(AppError::from)? {
-        let graph = state.store.graph_of(&iri).map_err(AppError::from)?;
-        return Ok(Json(json!({
-            "iri": iri, "cached": true, "graph": graph,
-            "turtle": crate::negotiate::serialize(&state.store.describe(&iri).map_err(AppError::from)?, crate::negotiate::Repr::Turtle, state.base())?
-        })));
+    if !q.refresh {
+        let cached = super::blocking({
+            let (state, iri) = (state.clone(), iri.clone());
+            move || -> AppResult<Option<serde_json::Value>> {
+                if !state.store.exists(&iri).map_err(AppError::from)? {
+                    return Ok(None);
+                }
+                let graph = state.store.graph_of(&iri).map_err(AppError::from)?;
+                let quads = state.store.describe(&iri).map_err(AppError::from)?;
+                let turtle = crate::negotiate::serialize(&quads, crate::negotiate::Repr::Turtle, state.base())?;
+                Ok(Some(json!({ "iri": iri, "cached": true, "graph": graph, "turtle": turtle })))
+            }
+        })
+        .await?;
+        if let Some(body) = cached {
+            return Ok(Json(body));
+        }
     }
     let stub = fetch_stub(&state, &iri).await?;
     Ok(Json(stub))
@@ -273,13 +288,19 @@ pub async fn fetch_stub(state: &Arc<AppState>, iri: &str) -> AppResult<serde_jso
     let peer_id = peer.as_ref().map(|p| p.id.clone()).unwrap_or_else(|| "unknown".into());
     let graph = ns::peer_graph(&peer_id);
     // Replace whatever we cached before, then load the fresh description.
-    let mut tx = crate::store::GraphTx::new();
-    tx.replace_subject(iri, &graph);
-    state.store.apply(tx).map_err(AppError::from)?;
-    let n = state
-        .store
-        .load_turtle(&body, &graph, Some(iri))
-        .map_err(|e| AppError::bad_request(format!("{iri} did not return parseable Turtle: {e}")))?;
+    let n = super::blocking({
+        let (state, iri, graph, body) = (state.clone(), iri.to_string(), graph.clone(), body);
+        move || {
+            let mut tx = crate::store::GraphTx::new();
+            tx.replace_subject(&iri, &graph);
+            state.store.apply(tx).map_err(AppError::from)?;
+            state
+                .store
+                .load_turtle(&body, &graph, Some(&iri))
+                .map_err(|e| AppError::bad_request(format!("{iri} did not return parseable Turtle: {e}")))
+        }
+    })
+    .await?;
     let ttl = chrono::Duration::from_std(state.config.peer_resolve_ttl).unwrap_or(chrono::Duration::hours(24));
     let _ = state.ops.mark_resolved(iri, ttl).await;
     if let Some(p) = &peer {

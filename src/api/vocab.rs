@@ -77,10 +77,11 @@ pub async fn search(State(state): State<Arc<AppState>>, Query(q): Query<VocabQue
         },
         None => String::new(),
     };
-    // Match the label or any synonym; EDAM's altLabels are how people actually name things.
-    let filter = super::text_filter(&needle, &["?label", "?alt"]);
-    let sparql = format!(
-        r#"{p}
+    let results = super::blocking(move || {
+        // Match the label or any synonym; EDAM's altLabels are how people actually name things.
+        let filter = super::text_filter(&needle, &["?label", "?alt"]);
+        let sparql = format!(
+            r#"{p}
 SELECT DISTINCT ?c ?label ?def ?class ?broader WHERE {{
   GRAPH ?g {{
     ?c a skos:Concept .
@@ -93,46 +94,49 @@ SELECT DISTINCT ?c ?label ?def ?class ?broader WHERE {{
   OPTIONAL {{ GRAPH ?kg {{ ?c a ?class }} FILTER(STRSTARTS(STR(?class), "{tar}")) }}
   {filter}
 }} LIMIT 400"#,
-        p = ns::PREFIXES,
-        tar = ns::TAR
-    );
+            p = ns::PREFIXES,
+            tar = ns::TAR
+        );
 
-    // Both stores, record first. The record store holds the terms this registry minted, adopted
-    // or cached from a peer; the reference store holds the bundles. `domain::vocabulary::held`
-    // reads the same union, and it must: a search that could not find a term the write path
-    // accepts — or that offered one it refuses — is the trap this module's header warns about.
-    // Record first so that a locally adopted copy of a bundled IRI shows the label somebody here
-    // actually gave it.
-    let mut rows = state.store.select(&sparql).map_err(AppError::from)?;
-    rows.rows.extend(state.reference.select(&sparql).map_err(AppError::from)?.rows);
-    let mut items: Vec<VocabHit> = Vec::new();
-    for row in rows.rows {
-        let (Some(iri), Some(label)) = (row.iri("c"), row.str("label")) else { continue };
-        if items.iter().any(|h| h.iri == iri) {
-            continue;
+        // Both stores, record first. The record store holds the terms this registry minted,
+        // adopted or cached from a peer; the reference store holds the bundles.
+        // `domain::vocabulary::held` reads the same union, and it must: a search that could not
+        // find a term the write path accepts — or that offered one it refuses — is the trap
+        // this module's header warns about. Record first so that a locally adopted copy of a
+        // bundled IRI shows the label somebody here actually gave it.
+        let mut rows = ctx.state.store.select(&sparql).map_err(AppError::from)?;
+        rows.rows.extend(ctx.state.reference.select(&sparql).map_err(AppError::from)?.rows);
+        let mut items: Vec<VocabHit> = Vec::new();
+        for row in rows.rows {
+            let (Some(iri), Some(label)) = (row.iri("c"), row.str("label")) else { continue };
+            if items.iter().any(|h| h.iri == iri) {
+                continue;
+            }
+            let score = rank(&needle, &label);
+            items.push(VocabHit {
+                source: crate::domain::type_source(ctx.base(), &iri),
+                branch: row.iri("class").as_deref().and_then(branch_for_class).map(str::to_string),
+                // EuroSciVoc carries almost no definitions but nearly always a parent, and the
+                // parent is what disambiguates: this vocabulary has ontology, odontology and
+                // palaeontology, and only the broader term tells them apart at a glance.
+                definition: row.str("def").or_else(|| row.str("broader").map(|b| format!("in {b}"))),
+                label,
+                iri,
+                score,
+            });
         }
-        let score = rank(&needle, &label);
-        items.push(VocabHit {
-            source: crate::domain::type_source(ctx.base(), &iri),
-            branch: row.iri("class").as_deref().and_then(branch_for_class).map(str::to_string),
-            // EuroSciVoc carries almost no definitions but nearly always a parent, and the
-            // parent is what disambiguates: this vocabulary has ontology, odontology and
-            // palaeontology, and only the broader term tells them apart at a glance.
-            definition: row.str("def").or_else(|| row.str("broader").map(|b| format!("in {b}"))),
-            label,
-            iri,
-            score,
+        items.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.label.len().cmp(&b.label.len()))
         });
-    }
-    items.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.label.len().cmp(&b.label.len()))
-    });
-    let total = items.len();
-    items.truncate(limit);
-    Ok(Json(VocabResults { items, total: total as i64 }))
+        let total = items.len();
+        items.truncate(limit);
+        Ok(VocabResults { items, total: total as i64 })
+    })
+    .await?;
+    Ok(Json(results))
 }
 
 #[derive(Debug, Serialize)]
@@ -211,7 +215,8 @@ pub async fn resolve(
     let ctx = Ctx::new(&state).await?;
     let iris: Vec<String> =
         q.iris.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).take(100).collect();
-    Ok(Json(ctx.type_refs(&iris)))
+    let refs = super::blocking(move || Ok(ctx.type_refs(&iris))).await?;
+    Ok(Json(refs))
 }
 
 /// Unused today, but keeps the paging import honest if the endpoint grows a cursor.

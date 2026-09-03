@@ -330,7 +330,7 @@ pub async fn principal_from_claims(state: &Arc<AppState>, issuer: &str, claims: 
     // guessing would attribute a run to the wrong one. That case stays unbound and the refusal
     // says why.
     if bound.is_none() {
-        bound = find_self_registered_instance(state, issuer, &candidates)?;
+        bound = find_self_registered_instance(state, issuer, &candidates).await?;
     }
 
     if let Some(binding) = bound {
@@ -444,13 +444,15 @@ pub async fn find_instance_for_client(
     if candidates.is_empty() {
         return Ok(None);
     }
-    let values = candidates
-        .iter()
-        .map(|c| format!("\"{}\"", c.replace('\\', "\\\\").replace('"', "\\\"")))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let q = format!(
-        r#"{prefixes}
+    let (state, issuer, candidates) = (state.clone(), issuer.to_string(), candidates.to_vec());
+    crate::error::blocking(move || {
+        let values = candidates
+            .iter()
+            .map(|c| format!("\"{}\"", c.replace('\\', "\\\\").replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let q = format!(
+            r#"{prefixes}
 SELECT ?i ?label ?iss (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scopes) WHERE {{
   GRAPH <{g}> {{
     VALUES ?cid {{ {values} }}
@@ -460,27 +462,29 @@ SELECT ?i ?label ?iss (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scopes) 
     OPTIONAL {{ ?i tar:allowedScope ?scope }}
   }}
 }} GROUP BY ?i ?label ?iss"#,
-        prefixes = ns::PREFIXES,
-        g = ns::G_LOCAL,
-    );
-    let rows = state.store.select(&q).map_err(AppError::from)?;
-    for row in rows.rows {
-        if !issuer_admits(&state.config.oidc, row.str("iss").as_deref(), issuer) {
-            continue;
+            prefixes = ns::PREFIXES,
+            g = ns::G_LOCAL,
+        );
+        let rows = state.store.select(&q).map_err(AppError::from)?;
+        for row in rows.rows {
+            if !issuer_admits(&state.config.oidc, row.str("iss").as_deref(), &issuer) {
+                continue;
+            }
+            let Some(iri) = row.iri("i") else { continue };
+            return Ok(Some(InstanceBinding {
+                instance_iri: iri,
+                label: row.str("label"),
+                allowed_scopes: row
+                    .str("scopes")
+                    .map(|s| s.split_whitespace().map(str::to_string).collect())
+                    .unwrap_or_default(),
+                // Declared by the deployment itself, so not shared.
+                registers_software: None,
+            }));
         }
-        let Some(iri) = row.iri("i") else { continue };
-        return Ok(Some(InstanceBinding {
-            instance_iri: iri,
-            label: row.str("label"),
-            allowed_scopes: row
-                .str("scopes")
-                .map(|s| s.split_whitespace().map(str::to_string).collect())
-                .unwrap_or_default(),
-            // Declared by the deployment itself, so not shared.
-            registers_software: None,
-        }));
-    }
-    Ok(None)
+        Ok(None)
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -530,13 +534,15 @@ pub async fn find_software_for_client(
     if candidates.is_empty() {
         return Ok(None);
     }
-    let values = candidates
-        .iter()
-        .map(|c| format!("\"{}\"", c.replace('\\', "\\\\").replace('"', "\\\"")))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let q = format!(
-        r#"{prefixes}
+    let (state, issuer, candidates) = (state.clone(), issuer.to_string(), candidates.to_vec());
+    crate::error::blocking(move || {
+        let values = candidates
+            .iter()
+            .map(|c| format!("\"{}\"", c.replace('\\', "\\\\").replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let q = format!(
+            r#"{prefixes}
 SELECT ?s ?iss WHERE {{
   GRAPH <{g}> {{
     VALUES ?cid {{ {values} }}
@@ -544,25 +550,27 @@ SELECT ?s ?iss WHERE {{
     OPTIONAL {{ ?s tar:registrationIssuer ?iss }}
   }}
 }}"#,
-        prefixes = ns::PREFIXES,
-        g = ns::G_LOCAL,
-    );
-    let rows = state.store.select(&q).map_err(AppError::from)?;
-    for row in rows.rows {
-        if !issuer_admits(&state.config.oidc, row.str("iss").as_deref(), issuer) {
-            continue;
+            prefixes = ns::PREFIXES,
+            g = ns::G_LOCAL,
+        );
+        let rows = state.store.select(&q).map_err(AppError::from)?;
+        for row in rows.rows {
+            if !issuer_admits(&state.config.oidc, row.str("iss").as_deref(), &issuer) {
+                continue;
+            }
+            if let Some(iri) = row.iri("s") {
+                return Ok(Some(iri));
+            }
         }
-        if let Some(iri) = row.iri("s") {
-            return Ok(Some(iri));
-        }
-    }
-    Ok(None)
+        Ok(None)
+    })
+    .await
 }
 
 /// The deployment a credential registered for itself, when there is exactly one.
 ///
 /// See the call site for why ambiguity is left unresolved rather than guessed at.
-pub fn find_self_registered_instance(
+pub async fn find_self_registered_instance(
     state: &Arc<AppState>,
     issuer: &str,
     candidates: &[String],
@@ -570,13 +578,15 @@ pub fn find_self_registered_instance(
     if candidates.is_empty() {
         return Ok(None);
     }
-    let values = candidates
-        .iter()
-        .map(|c| format!("\"{}\"", c.replace('\\', "\\\\").replace('"', "\\\"")))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let q = format!(
-        r#"{prefixes}
+    let (state, issuer, candidates) = (state.clone(), issuer.to_string(), candidates.to_vec());
+    crate::error::blocking(move || {
+        let values = candidates
+            .iter()
+            .map(|c| format!("\"{}\"", c.replace('\\', "\\\\").replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let q = format!(
+            r#"{prefixes}
 SELECT ?i ?label ?sw ?iss (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scopes) WHERE {{
   GRAPH <{g}> {{
     VALUES ?sub {{ {values} }}
@@ -588,33 +598,35 @@ SELECT ?i ?label ?sw ?iss (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scop
   }}
   FILTER NOT EXISTS {{ GRAPH ?tg {{ ?i tar:tombstoned true }} }}
 }} GROUP BY ?i ?label ?sw ?iss"#,
-        prefixes = ns::PREFIXES,
-        g = ns::G_LOCAL,
-    );
-    let rows = state.store.select(&q).map_err(AppError::from)?;
-    // Only deployments this credential registered *at the issuer it is presenting now*. The
-    // subject here is a client id, and this path was the way past a pinned software: once any
-    // deployment existed under the name, a token from any other accepted issuer that spelled
-    // its client the same way bound to it and inherited its scopes.
-    let rows: Vec<_> =
-        rows.rows.iter().filter(|r| issuer_admits(&state.config.oidc, r.str("iss").as_deref(), issuer)).collect();
-    // More than one is the ambiguous case: bind to nothing rather than to an arbitrary one.
-    if rows.len() != 1 {
-        return Ok(None);
-    }
-    let row = rows[0];
-    let Some(iri) = row.iri("i") else { return Ok(None) };
-    Ok(Some(InstanceBinding {
-        instance_iri: iri,
-        label: row.str("label"),
-        allowed_scopes: row
-            .str("scopes")
-            .map(|s| s.split_whitespace().map(str::to_string).collect())
-            .unwrap_or_default(),
-        // The software this credential demonstrably registers deployments of. Carried so that
-        // `announce_self` can tell this apart from a credential that *is* one deployment: a
-        // shared one must keep honouring `instance_key`, or the second deployment to announce
-        // silently overwrites the first.
-        registers_software: row.iri("sw"),
-    }))
+            prefixes = ns::PREFIXES,
+            g = ns::G_LOCAL,
+        );
+        let rows = state.store.select(&q).map_err(AppError::from)?;
+        // Only deployments this credential registered *at the issuer it is presenting now*.
+        // The subject here is a client id, and this path was the way past a pinned software:
+        // once any deployment existed under the name, a token from any other accepted issuer
+        // that spelled its client the same way bound to it and inherited its scopes.
+        let rows: Vec<_> =
+            rows.rows.iter().filter(|r| issuer_admits(&state.config.oidc, r.str("iss").as_deref(), &issuer)).collect();
+        // More than one is the ambiguous case: bind to nothing rather than to an arbitrary one.
+        if rows.len() != 1 {
+            return Ok(None);
+        }
+        let row = rows[0];
+        let Some(iri) = row.iri("i") else { return Ok(None) };
+        Ok(Some(InstanceBinding {
+            instance_iri: iri,
+            label: row.str("label"),
+            allowed_scopes: row
+                .str("scopes")
+                .map(|s| s.split_whitespace().map(str::to_string).collect())
+                .unwrap_or_default(),
+            // The software this credential demonstrably registers deployments of. Carried so
+            // that `announce_self` can tell this apart from a credential that *is* one
+            // deployment: a shared one must keep honouring `instance_key`, or the second
+            // deployment to announce silently overwrites the first.
+            registers_software: row.iri("sw"),
+        }))
+    })
+    .await
 }

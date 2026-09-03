@@ -107,56 +107,63 @@ fn entries(
 }
 
 pub async fn llms_txt(State(state): State<Arc<AppState>>) -> AppResult<impl IntoResponse> {
-    // tar:Software, not schema:SoftwareApplication: a Release carries the schema.org type too,
-    // and indexing on that listed every release as if it were a separate tool.
-    let (software, n_sw) = entries(
-        &state,
-        swdom::TYPE_TAR_SOFTWARE,
-        "?s schema:name ?title",
-        &["?s dct:abstract ?note", "?s schema:description ?note"],
-        CATALOGUE_LIMIT,
-    )?;
-    let (instances, n_in) = entries(
-        &state,
-        instdom::TYPE_TAR_INSTANCE,
-        "?s rdfs:label ?title",
-        &["?s dct:description ?note", "?s dcat:endpointURL ?note"],
-        CATALOGUE_LIMIT,
-    )?;
-    let (artifacts, n_ar) = entries(
-        &state,
-        crate::domain::artifact::TYPE_DATASET,
-        "?s dct:title ?title",
-        &["?s dct:description ?note"],
-        RECENT_LIMIT,
-    )?;
-    let (runs, n_ru) = entries(
-        &state,
-        crate::domain::run::TYPE_ACTIVITY,
-        "?s rdfs:label ?title",
-        &["?s tar:status ?note"],
-        RECENT_LIMIT,
-    )?;
+    let body = super::blocking(move || {
+        // tar:Software, not schema:SoftwareApplication: a Release carries the schema.org type
+        // too, and indexing on that listed every release as if it were a separate tool.
+        let (software, n_sw) = entries(
+            &state,
+            swdom::TYPE_TAR_SOFTWARE,
+            "?s schema:name ?title",
+            &["?s dct:abstract ?note", "?s schema:description ?note"],
+            CATALOGUE_LIMIT,
+        )?;
+        let (instances, n_in) = entries(
+            &state,
+            instdom::TYPE_TAR_INSTANCE,
+            "?s rdfs:label ?title",
+            &["?s dct:description ?note", "?s dcat:endpointURL ?note"],
+            CATALOGUE_LIMIT,
+        )?;
+        let (artifacts, n_ar) = entries(
+            &state,
+            crate::domain::artifact::TYPE_DATASET,
+            "?s dct:title ?title",
+            &["?s dct:description ?note"],
+            RECENT_LIMIT,
+        )?;
+        let (runs, n_ru) = entries(
+            &state,
+            crate::domain::run::TYPE_ACTIVITY,
+            "?s rdfs:label ?title",
+            &["?s tar:status ?note"],
+            RECENT_LIMIT,
+        )?;
 
-    let body = site_index(&SiteIndex {
-        title: &state.config.title,
-        base: state.base(),
-        operator: state.config.operator.as_deref(),
-        software,
-        instances,
-        artifacts,
-        runs,
-        totals: (n_sw, n_in, n_ar, n_ru),
-        sparql_public: state.config.sparql_public,
-        mcp_enabled: crate::mcp::McpConfig::from_env().enabled,
-    });
+        Ok((
+            site_index(&SiteIndex {
+                title: &state.config.title,
+                base: state.base(),
+                operator: state.config.operator.as_deref(),
+                software,
+                instances,
+                artifacts,
+                runs,
+                totals: (n_sw, n_in, n_ar, n_ru),
+                sparql_public: state.config.sparql_public,
+                mcp_enabled: crate::mcp::McpConfig::from_env().enabled,
+            }),
+            state.base().to_string(),
+        ))
+    })
+    .await?;
+    let (body, base) = body;
 
     Ok((
         [
             (axum::http::header::CONTENT_TYPE, "text/markdown; charset=utf-8".to_string()),
             (
                 axum::http::header::LINK,
-                format!("<{}/api/v1/registry>; rel=\"describedby\"; type=\"application/json\"", state.base()),
+                format!("<{}/api/v1/registry>; rel=\"describedby\"; type=\"application/json\"", base),
             ),
         ],
         body,

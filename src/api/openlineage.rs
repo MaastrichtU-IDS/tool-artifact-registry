@@ -27,7 +27,12 @@ pub async fn ingest(
 ) -> AppResult<impl IntoResponse> {
     principal.require_scope(SCOPE_ADVERTISE_PRODUCE)?;
     let instance_iri = principal.require_instance()?;
-    if !state.store.exists(&instance_iri).map_err(AppError::from)? {
+    let exists = super::blocking({
+        let (state, instance_iri) = (state.clone(), instance_iri.clone());
+        move || state.store.exists(&instance_iri).map_err(AppError::from)
+    })
+    .await?;
+    if !exists {
         return Err(AppError::forbidden(format!("credential names unknown Instance {instance_iri}")));
     }
 
@@ -95,7 +100,11 @@ pub async fn ingest(
         }
     }
 
-    state.store.apply(tx).map_err(AppError::from)?;
+    super::blocking({
+        let state = state.clone();
+        move || state.store.apply(tx).map_err(AppError::from)
+    })
+    .await?;
     let _ = state
         .ops
         .audit(
@@ -132,6 +141,11 @@ async fn map_dataset(
     let name = ds.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let facets = ds.get("facets").cloned().unwrap_or(Value::Null);
 
+    // The `state.store.exists` check below is not wrapped in `blocking()` (see
+    // limitations.md #15): it sits inside a loop already interleaved with the async
+    // `state.ops.*` calls further down this function, for the same reason `advertise()`'s own
+    // per-item checks are left as they are.
+    //
     // If the producer put one of our IRIs in the symlinks facet, match it rather than mint.
     if let Some(links) = facets.get("symlinks").and_then(|s| s.get("identifiers")).and_then(|v| v.as_array()) {
         for l in links {

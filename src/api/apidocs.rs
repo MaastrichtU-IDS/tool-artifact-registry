@@ -58,7 +58,11 @@ pub async fn fetch(
 ) -> AppResult<impl IntoResponse> {
     let iri = ids::iri_for(state.base(), Kind::Software, &id);
     let ctx = Ctx::new(&state).await?;
-    let sw = swdom::load_software(&ctx, &iri)?;
+    let sw = super::blocking({
+        let iri = iri.clone();
+        move || swdom::load_software(&ctx, &iri)
+    })
+    .await?;
     let n = q.n.unwrap_or(0);
     let doc = sw
         .api_docs

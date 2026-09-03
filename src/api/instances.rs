@@ -67,25 +67,29 @@ fn where_body(base: &str, f: &InstanceFilter) -> String {
 
 pub async fn list(State(state): State<Arc<AppState>>, Query(f): Query<InstanceFilter>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let body = where_body(state.base(), &f);
-    let (iris, next) = page_iris(&state, &body, &f.paging)?;
-    let total = count(&state, &body)?;
-    let signals = dom::instance_signals(&ctx, None)?;
-    let mut items = Vec::new();
-    for iri in iris {
-        let quads = state.store.describe(&iri).map_err(AppError::from)?;
-        let p = Props::from_quads(&iri, &quads);
-        let mut i = dom::instance_from_props(&ctx, &iri, &p);
-        if let Some(s) = signals.get(&iri) {
-            i.last_run_at = s.last_run_at.clone();
-            i.runs_30d = s.runs_30d;
-            i.failures_30d = s.failures_30d;
-            i.artifact_count = s.artifacts;
+    let page = super::blocking(move || {
+        let body = where_body(ctx.base(), &f);
+        let (iris, next) = page_iris(&ctx.state, &body, &f.paging)?;
+        let total = count(&ctx.state, &body)?;
+        let signals = dom::instance_signals(&ctx, None)?;
+        let mut items = Vec::new();
+        for iri in iris {
+            let quads = ctx.state.store.describe(&iri).map_err(AppError::from)?;
+            let p = Props::from_quads(&iri, &quads);
+            let mut i = dom::instance_from_props(&ctx, &iri, &p);
+            if let Some(s) = signals.get(&iri) {
+                i.last_run_at = s.last_run_at.clone();
+                i.runs_30d = s.runs_30d;
+                i.failures_30d = s.failures_30d;
+                i.artifact_count = s.artifacts;
+            }
+            items.push(i);
         }
-        items.push(i);
-    }
-    dom::decorate(&ctx, &mut items)?;
-    Ok(Json(Page::new(items, total, next)))
+        dom::decorate(&ctx, &mut items)?;
+        Ok(Page::new(items, total, next))
+    })
+    .await?;
+    Ok(Json(page))
 }
 
 pub async fn get(
@@ -96,7 +100,11 @@ pub async fn get(
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Instance, &id);
-    let mut inst = dom::load_instance(&ctx, &iri)?;
+    let mut inst = super::blocking({
+        let iri = iri.clone();
+        move || dom::load_instance(&ctx, &iri)
+    })
+    .await?;
     // Token count is operational state; only someone who could manage them needs it.
     if principal.is_curator() || principal.instance_iri.as_deref() == Some(iri.as_str()) {
         inst.token_count = state
@@ -195,26 +203,32 @@ pub async fn create(
         input.release = Some(ids::iri_for(state.base(), Kind::Release, &r));
     }
     let iri = ids::mint(state.base(), Kind::Instance);
-    let software = resolve_software_for(&state, &input)?;
-    check_deployable(&state, software.as_deref(), &input)?;
-    let quads = dom::instance_quads(state.base(), &iri, &input, &principal.subject, software.as_deref());
-    shacl::enforce_write(&state, &quads)?;
-    let mut tx = GraphTx::new();
-    tx.extend(quads);
-    state.store.apply(tx).map_err(AppError::from)?;
+    let subject = principal.subject.clone();
+    let label = input.label.clone();
+    super::blocking({
+        let (state, iri) = (state.clone(), iri.clone());
+        move || {
+            let software = resolve_software_for(&state, &input)?;
+            check_deployable(&state, software.as_deref(), &input)?;
+            let quads = dom::instance_quads(state.base(), &iri, &input, &subject, software.as_deref());
+            shacl::enforce_write(&state, &quads)?;
+            let mut tx = GraphTx::new();
+            tx.extend(quads);
+            state.store.apply(tx).map_err(AppError::from)
+        }
+    })
+    .await?;
     let _ = state
         .ops
-        .audit(
-            Some(&principal.subject),
-            principal.actor_kind(),
-            "instance.create",
-            Some(&iri),
-            Some(&input.label),
-            None,
-        )
+        .audit(Some(&principal.subject), principal.actor_kind(), "instance.create", Some(&iri), Some(&label), None)
         .await;
     let ctx = Ctx::new(&state).await?;
-    Ok((StatusCode::CREATED, Json(dom::load_instance(&ctx, &iri)?)))
+    let inst = super::blocking({
+        let iri = iri.clone();
+        move || dom::load_instance(&ctx, &iri)
+    })
+    .await?;
+    Ok((StatusCode::CREATED, Json(inst)))
 }
 
 /// Round-trip a stored Instance back into the input shape, so a PATCH can merge onto it.
@@ -296,68 +310,80 @@ pub async fn patch(
     if !ids::is_local(state.base(), &iri) {
         return Err(AppError::forbidden("this registry is not authoritative for that IRI (spec §9.7)"));
     }
-    if !state.store.exists(&iri).map_err(AppError::from)? {
-        return Err(AppError::not_found(format!("no instance at {iri}")));
-    }
     let ctx = Ctx::new(&state).await?;
-    let current = dom::load_instance(&ctx, &iri)?;
+    let caller_instance = principal.instance_iri.clone();
+    let subject = principal.subject.clone();
+    super::blocking({
+        let (state, iri, caller_instance, subject) = (state.clone(), iri.clone(), caller_instance, subject);
+        move || {
+            if !state.store.exists(&iri).map_err(AppError::from)? {
+                return Err(AppError::not_found(format!("no instance at {iri}")));
+            }
+            let current = dom::load_instance(&ctx, &iri)?;
 
-    // A self-registered deployment owns its own record, and nobody else may edit it here.
-    //
-    // Not a policy so much as an admission of what is already true: the deployment re-states
-    // these fields on every announcement, so a curator's edit survives only until the next one
-    // and then vanishes with no error and no trace. Offering an edit that will be silently
-    // undone is worse than refusing it. The credential that registered the record is the one
-    // that may change it, through `PUT /api/v1/instances/self`.
-    //
-    // A curator is not powerless — the remedies are the ones that actually work: withdraw the
-    // record, or revoke what lets the deployment speak (the key, or the client id in the
-    // software's `registration_clients`). Editing the description of a deployment that is
-    // misbehaving was never the fix.
-    //
-    // Below the API there is no such rule: someone with the store itself can write anything.
-    // That is the break-glass path, deliberately out of band and deliberately not an endpoint —
-    // the SPARQL surface is read-only, so nothing here can be talked into doing it.
-    if let Some(owner) = current.self_registered_by.as_deref() {
-        if principal.instance_iri.as_deref() != Some(iri.as_str()) {
-            return Err(AppError::forbidden(format!(
-                "this deployment maintains its own record — it was registered by {owner}, and \
-                 re-states these fields every time it announces itself, so an edit made here \
-                 would be overwritten without warning. The deployment changes them at \
-                 PUT /api/v1/instances/self. To stop it, withdraw the record or revoke the \
-                 credential it registered with."
-            )));
+            // A self-registered deployment owns its own record, and nobody else may edit it
+            // here.
+            //
+            // Not a policy so much as an admission of what is already true: the deployment
+            // re-states these fields on every announcement, so a curator's edit survives only
+            // until the next one and then vanishes with no error and no trace. Offering an
+            // edit that will be silently undone is worse than refusing it. The credential that
+            // registered the record is the one that may change it, through
+            // `PUT /api/v1/instances/self`.
+            //
+            // A curator is not powerless — the remedies are the ones that actually work:
+            // withdraw the record, or revoke what lets the deployment speak (the key, or the
+            // client id in the software's `registration_clients`). Editing the description of
+            // a deployment that is misbehaving was never the fix.
+            //
+            // Below the API there is no such rule: someone with the store itself can write
+            // anything. That is the break-glass path, deliberately out of band and
+            // deliberately not an endpoint — the SPARQL surface is read-only, so nothing here
+            // can be talked into doing it.
+            if let Some(owner) = current.self_registered_by.as_deref() {
+                if caller_instance.as_deref() != Some(iri.as_str()) {
+                    return Err(AppError::forbidden(format!(
+                        "this deployment maintains its own record — it was registered by {owner}, and                          re-states these fields every time it announces itself, so an edit made here                          would be overwritten without warning. The deployment changes them at                          PUT /api/v1/instances/self. To stop it, withdraw the record or revoke the                          credential it registered with."
+                    )));
+                }
+            }
+
+            let merged = merge_json(
+                serde_json::to_value(instance_in_from(&current)).map_err(|e| AppError::internal(e.to_string()))?,
+                body,
+            );
+            let mut input: InstanceIn = serde_json::from_value(merged)
+                .map_err(|e| AppError::bad_request(format!("could not apply the change: {e}")))?;
+            // Ownership of a self-registered record is the registry's to state, not the
+            // caller's to edit: whatever the body said, the stored values stand.
+            input.self_registered_by = current.self_registered_by.clone();
+            input.self_registered_issuer = current.self_registered_issuer.clone();
+            input.instance_key = current.instance_key.clone();
+            if let Some(sw) = input.software.clone() {
+                input.software = Some(ids::iri_for(state.base(), Kind::Software, &sw));
+            }
+            if let Some(r) = input.release.clone() {
+                input.release = Some(ids::iri_for(state.base(), Kind::Release, &r));
+            }
+            let software = resolve_software_for(&state, &input)?;
+            check_deployable(&state, software.as_deref(), &input)?;
+            let tx = dom::replace_instance(state.base(), &iri, &input, &subject, software.as_deref());
+            shacl::enforce_write(&state, &tx.insert)?;
+            state.store.apply(tx).map_err(AppError::from)
         }
-    }
-
-    let merged = merge_json(
-        serde_json::to_value(instance_in_from(&current)).map_err(|e| AppError::internal(e.to_string()))?,
-        body,
-    );
-    let mut input: InstanceIn = serde_json::from_value(merged)
-        .map_err(|e| AppError::bad_request(format!("could not apply the change: {e}")))?;
-    // Ownership of a self-registered record is the registry's to state, not the caller's to
-    // edit: whatever the body said, the stored values stand.
-    input.self_registered_by = current.self_registered_by.clone();
-    input.self_registered_issuer = current.self_registered_issuer.clone();
-    input.instance_key = current.instance_key.clone();
-    if let Some(sw) = input.software.clone() {
-        input.software = Some(ids::iri_for(state.base(), Kind::Software, &sw));
-    }
-    if let Some(r) = input.release.clone() {
-        input.release = Some(ids::iri_for(state.base(), Kind::Release, &r));
-    }
-    let software = resolve_software_for(&state, &input)?;
-    check_deployable(&state, software.as_deref(), &input)?;
-    let tx = dom::replace_instance(state.base(), &iri, &input, &principal.subject, software.as_deref());
-    shacl::enforce_write(&state, &tx.insert)?;
-    state.store.apply(tx).map_err(AppError::from)?;
+    })
+    .await?;
     let _ = state
         .ops
         .audit(Some(&principal.subject), principal.actor_kind(), "instance.update", Some(&iri), None, None)
         .await;
     let ctx = Ctx::new(&state).await?;
-    Ok(Json(dom::load_instance(&ctx, &iri)?))
+    let inst = super::blocking({
+        let iri = iri.clone();
+        move || dom::load_instance(&ctx, &iri)
+    })
+    .await?;
+    Ok(Json(inst))
 }
 
 pub async fn soft_delete(
@@ -428,34 +454,58 @@ pub async fn announce_self(
     // registered, and taking that binding would make the second deployment to announce merge
     // into the first and relabel it, which is what happened.
     let shared = principal.software_iri.is_some();
-    let existing = if shared {
-        find_self_registered(&state, &principal.subject, &self_key)
-            .or_else(|| principal.instance_iri.clone().filter(|_| input.instance_key.is_none()))
-    } else {
-        principal.instance_iri.clone().or_else(|| find_self_registered(&state, &principal.subject, &self_key))
-    };
+    let existing = super::blocking({
+        let (state, subject, self_key, instance_key, instance_iri) = (
+            state.clone(),
+            principal.subject.clone(),
+            self_key.clone(),
+            input.instance_key.clone(),
+            principal.instance_iri.clone(),
+        );
+        move || {
+            Ok(if shared {
+                find_self_registered(&state, &subject, &self_key)
+                    .or_else(|| instance_iri.filter(|_| instance_key.is_none()))
+            } else {
+                instance_iri.or_else(|| find_self_registered(&state, &subject, &self_key))
+            })
+        }
+    })
+    .await?;
 
     if let Some(iri) = existing {
         // Known deployment: merge what it said onto what we hold.
         let ctx = Ctx::new(&state).await?;
-        let current = dom::load_instance(&ctx, &iri)?;
-        let mut merged = instance_in_from(&current);
-        apply_announcement(&mut merged, &input, state.base());
-        shacl::enforce_write(
-            &state,
-            &dom::instance_quads(state.base(), &iri, &merged, &principal.subject, merged.software.as_deref()),
-        )?;
-        let software = resolve_software_for(&state, &merged)?;
-        check_deployable(&state, software.as_deref(), &merged)?;
-        let mut tx = dom::replace_instance(state.base(), &iri, &merged, &principal.subject, software.as_deref());
-        stamp_seen(&mut tx, &iri, &now);
-        state.store.apply(tx).map_err(AppError::from)?;
+        super::blocking({
+            let (state, iri, input, subject, now) =
+                (state.clone(), iri.clone(), input.clone(), principal.subject.clone(), now.clone());
+            move || {
+                let current = dom::load_instance(&ctx, &iri)?;
+                let mut merged = instance_in_from(&current);
+                apply_announcement(&mut merged, &input, state.base());
+                shacl::enforce_write(
+                    &state,
+                    &dom::instance_quads(state.base(), &iri, &merged, &subject, merged.software.as_deref()),
+                )?;
+                let software = resolve_software_for(&state, &merged)?;
+                check_deployable(&state, software.as_deref(), &merged)?;
+                let mut tx = dom::replace_instance(state.base(), &iri, &merged, &subject, software.as_deref());
+                stamp_seen(&mut tx, &iri, &now);
+                state.store.apply(tx).map_err(AppError::from)
+            }
+        })
+        .await?;
         let _ = state
             .ops
             .audit(Some(&principal.subject), principal.actor_kind(), "instance.announce", Some(&iri), None, None)
             .await;
         let ctx = Ctx::new(&state).await?;
-        return Ok((StatusCode::OK, Json(dom::load_instance(&ctx, &iri)?)));
+        let inst = super::blocking({
+            let iri = iri.clone();
+            move || dom::load_instance(&ctx, &iri)
+        })
+        .await?;
+        return Ok((StatusCode::OK, Json(inst)));
     }
 
     // Which software may this credential register a deployment of?
@@ -531,14 +581,21 @@ pub async fn announce_self(
     fresh.self_registered_issuer = principal.issuer.clone();
     fresh.instance_key = Some(self_key.clone());
     let iri = ids::mint(state.base(), Kind::Instance);
-    let resolved = resolve_software_for(&state, &fresh)?;
-    check_deployable(&state, resolved.as_deref(), &fresh)?;
-    let quads = dom::instance_quads(state.base(), &iri, &fresh, &principal.subject, resolved.as_deref());
-    shacl::enforce_write(&state, &quads)?;
-    let mut tx = GraphTx::new();
-    tx.extend(quads);
-    stamp_seen(&mut tx, &iri, &now);
-    state.store.apply(tx).map_err(AppError::from)?;
+    super::blocking({
+        let (state, iri, fresh, subject, now) =
+            (state.clone(), iri.clone(), fresh, principal.subject.clone(), now.clone());
+        move || {
+            let resolved = resolve_software_for(&state, &fresh)?;
+            check_deployable(&state, resolved.as_deref(), &fresh)?;
+            let quads = dom::instance_quads(state.base(), &iri, &fresh, &subject, resolved.as_deref());
+            shacl::enforce_write(&state, &quads)?;
+            let mut tx = GraphTx::new();
+            tx.extend(quads);
+            stamp_seen(&mut tx, &iri, &now);
+            state.store.apply(tx).map_err(AppError::from)
+        }
+    })
+    .await?;
     let _ = state
         .ops
         .audit(
@@ -551,7 +608,12 @@ pub async fn announce_self(
         )
         .await;
     let ctx = Ctx::new(&state).await?;
-    Ok((StatusCode::CREATED, Json(dom::load_instance(&ctx, &iri)?)))
+    let inst = super::blocking({
+        let iri = iri.clone();
+        move || dom::load_instance(&ctx, &iri)
+    })
+    .await?;
+    Ok((StatusCode::CREATED, Json(inst)))
 }
 
 /// Copy the fields a deployment is allowed to say about itself. Everything absent is left as
@@ -599,20 +661,24 @@ pub async fn runs(
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Instance, &id);
-    let body = format!(
-        "GRAPH ?g {{ ?s a <{t}> ; prov:wasAssociatedWith|tar:atInstance <{iri}> }}\n{}",
-        paging.cursor_filter("?s"),
-        t = rundom::TYPE_ACTIVITY
-    );
-    let (iris, next) = page_iris(&state, &body, &paging)?;
-    let total = count(&state, &body)?;
-    let mut items = Vec::new();
-    for r in iris {
-        if let Ok(s) = rundom::load_run_summary(&ctx, &r) {
-            items.push(s);
+    let page = super::blocking(move || {
+        let body = format!(
+            "GRAPH ?g {{ ?s a <{t}> ; prov:wasAssociatedWith|tar:atInstance <{iri}> }}\n{}",
+            paging.cursor_filter("?s"),
+            t = rundom::TYPE_ACTIVITY
+        );
+        let (iris, next) = page_iris(&ctx.state, &body, &paging)?;
+        let total = count(&ctx.state, &body)?;
+        let mut items = Vec::new();
+        for r in iris {
+            if let Ok(s) = rundom::load_run_summary(&ctx, &r) {
+                items.push(s);
+            }
         }
-    }
-    Ok(Json(Page::new(items, total, next)))
+        Ok(Page::new(items, total, next))
+    })
+    .await?;
+    Ok(Json(page))
 }
 
 pub async fn artifacts(
@@ -622,15 +688,19 @@ pub async fn artifacts(
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Instance, &id);
-    let body = format!(
-        "GRAPH ?g {{ ?run prov:wasAssociatedWith|tar:atInstance <{iri}> . ?s prov:wasGeneratedBy ?run }}\n{}",
-        paging.cursor_filter("?s")
-    );
-    let (iris, next) = page_iris(&state, &body, &paging)?;
-    let total = count(&state, &body)?;
-    let items: Vec<Artifact> =
-        iris.iter().filter_map(|a| crate::domain::artifact::load_artifact(&ctx, a).ok()).collect();
-    Ok(Json(Page::new(items, total, next)))
+    let page = super::blocking(move || {
+        let body = format!(
+            "GRAPH ?g {{ ?run prov:wasAssociatedWith|tar:atInstance <{iri}> . ?s prov:wasGeneratedBy ?run }}\n{}",
+            paging.cursor_filter("?s")
+        );
+        let (iris, next) = page_iris(&ctx.state, &body, &paging)?;
+        let total = count(&ctx.state, &body)?;
+        let items: Vec<Artifact> =
+            iris.iter().filter_map(|a| crate::domain::artifact::load_artifact(&ctx, a).ok()).collect();
+        Ok(Page::new(items, total, next))
+    })
+    .await?;
+    Ok(Json(page))
 }
 
 /// The deployment this credential registered previously, if any.

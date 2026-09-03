@@ -17,20 +17,27 @@ use crate::rdf::{Node, Props};
 use crate::state::AppState;
 use oxigraph::model::Quad;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Per-request context: the peer table, loaded once, so every record and list row can carry
 /// a truthful origin chip without a lookup per row.
-pub struct Ctx<'a> {
-    pub state: &'a AppState,
+///
+/// Owns its `AppState` (an `Arc` clone, not a borrow) rather than the `&'a AppState` this used
+/// to hold, so that a `Ctx` — and the domain reads that take one — can move into
+/// [`crate::api::blocking`], which needs `'static`. See its doc comment for why a store call
+/// needs to leave the async worker thread at all.
+#[derive(Clone)]
+pub struct Ctx {
+    pub state: Arc<AppState>,
     /// graph IRI -> peer
     peers: HashMap<String, PeerRecord>,
 }
 
-impl<'a> Ctx<'a> {
-    pub async fn new(state: &'a AppState) -> AppResult<Ctx<'a>> {
+impl Ctx {
+    pub async fn new(state: &Arc<AppState>) -> AppResult<Ctx> {
         let peers = state.ops.list_peers(None).await.unwrap_or_default();
         let map = peers.into_iter().map(|p| (ns::peer_graph(&p.id), p)).collect();
-        Ok(Ctx { state, peers: map })
+        Ok(Ctx { state: state.clone(), peers: map })
     }
 
     pub fn base(&self) -> &str {

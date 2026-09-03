@@ -58,8 +58,12 @@ pub async fn well_known(State(state): State<Arc<AppState>>) -> AppResult<impl In
 }
 
 pub async fn registry(State(state): State<Arc<AppState>>) -> AppResult<impl IntoResponse> {
-    let counts = entity_counts(&state)?;
     let peers = state.ops.list_peers(Some("active")).await.unwrap_or_default();
+    let (counts, triples) = super::blocking({
+        let state = state.clone();
+        move || Ok((entity_counts(&state)?, state.store.count().unwrap_or(0)))
+    })
+    .await?;
     Ok(Json(json!({
         "@context": ns::jsonld_context(),
         "@id": state.config.base_iri,
@@ -71,7 +75,7 @@ pub async fn registry(State(state): State<Arc<AppState>>) -> AppResult<impl Into
         "started_at": state.started_at.to_rfc3339(),
         "counts": counts,
         "peer_count": peers.len(),
-        "triples": state.store.count().unwrap_or(0),
+        "triples": triples,
         "oidc_enabled": state.config.oidc.enabled(),
         "human_signin": state.config.oidc.human_signin_enabled(),
     })))
@@ -129,7 +133,11 @@ pub async fn healthz() -> impl IntoResponse {
 }
 
 pub async fn readyz(State(state): State<Arc<AppState>>) -> AppResult<impl IntoResponse> {
-    state.store.count().map_err(|e| AppError::internal(format!("graph store not ready: {e}")))?;
+    super::blocking({
+        let state = state.clone();
+        move || state.store.count().map(|_| ()).map_err(|e| AppError::internal(format!("graph store not ready: {e}")))
+    })
+    .await?;
     sqlx::query("SELECT 1").execute(state.ops.pool()).await.map_err(AppError::from)?;
     Ok(Json(json!({"status": "ready"})))
 }
@@ -137,12 +145,16 @@ pub async fn readyz(State(state): State<Arc<AppState>>) -> AppResult<impl IntoRe
 /// Prometheus exposition (spec §7.1). Deliberately small: the interesting operational signal
 /// for a catalogue is how much it holds and how federation is doing.
 pub async fn metrics(State(state): State<Arc<AppState>>) -> AppResult<impl IntoResponse> {
-    let counts = entity_counts(&state)?;
     let peers = state.ops.list_peers(None).await.unwrap_or_default();
+    let (counts, triples) = super::blocking({
+        let state = state.clone();
+        move || Ok((entity_counts(&state)?, state.store.count().unwrap_or(0)))
+    })
+    .await?;
     let failing = peers.iter().filter(|p| p.resolve_status == "error").count();
     let mut out = String::new();
     out.push_str("# HELP tar_triples Total triples in the graph store\n# TYPE tar_triples gauge\n");
-    out.push_str(&format!("tar_triples {}\n", state.store.count().unwrap_or(0)));
+    out.push_str(&format!("tar_triples {}\n", triples));
     out.push_str("# HELP tar_entities Records by entity type\n# TYPE tar_entities gauge\n");
     for (k, v) in counts.as_object().into_iter().flatten() {
         out.push_str(&format!("tar_entities{{kind=\"{k}\"}} {v}\n"));
@@ -168,7 +180,11 @@ pub async fn dump(
     Query(q): Query<DumpQuery>,
 ) -> AppResult<impl IntoResponse> {
     principal.require_admin()?;
-    let body = state.store.dump_nquads(q.graph.as_deref()).map_err(AppError::from)?;
+    let body = super::blocking({
+        let (state, graph) = (state.clone(), q.graph.clone());
+        move || state.store.dump_nquads(graph.as_deref()).map_err(AppError::from)
+    })
+    .await?;
     Ok(([(axum::http::header::CONTENT_TYPE, "application/n-quads")], body))
 }
 

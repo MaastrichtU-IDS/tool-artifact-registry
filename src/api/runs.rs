@@ -26,38 +26,42 @@ pub struct RunFilter {
 
 pub async fn list(State(state): State<Arc<AppState>>, Query(f): Query<RunFilter>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let mut body = format!(
-        "GRAPH ?g {{ ?s a <{t}> . OPTIONAL {{ ?s rdfs:label ?label }} OPTIONAL {{ ?s dct:identifier|tar:externalKey ?key }} }}",
-        t = dom::TYPE_ACTIVITY
-    );
-    if let Some(q) = &f.q {
-        body.push('\n');
-        body.push_str(&super::text_filter(q, &["?label", "?key"]));
-    }
-    if let Some(i) = f.instance.as_deref().filter(|v| !v.is_empty()) {
-        let iri = ids::iri_for(state.base(), Kind::Instance, i);
-        body.push_str(&format!("\nGRAPH ?g {{ ?s prov:wasAssociatedWith|tar:atInstance <{iri}> }}"));
-    }
-    if let Some(sw) = f.software.as_deref().filter(|v| !v.is_empty()) {
-        let iri = ids::iri_for(state.base(), Kind::Software, sw);
-        body.push_str(&format!(
-            "\nGRAPH ?g {{ ?s prov:wasAssociatedWith|tar:atInstance ?i . ?i tar:instanceOf <{iri}> }}"
-        ));
-    }
-    if let Some(s) = f.status.as_deref().filter(|v| !v.is_empty()) {
-        body.push_str(&format!("\nGRAPH ?g {{ ?s tar:status \"{}\" }}", super::escape_literal(s)));
-    }
-    body.push_str(&format!("\n{}", f.paging.cursor_filter("?s")));
-
-    let (iris, next) = page_iris(&state, &body, &f.paging)?;
-    let total = count(&state, &body)?;
-    let mut items = Vec::new();
-    for iri in iris {
-        if let Ok(s) = dom::load_run_summary(&ctx, &iri) {
-            items.push(s);
+    let page = super::blocking(move || {
+        let mut body = format!(
+            "GRAPH ?g {{ ?s a <{t}> . OPTIONAL {{ ?s rdfs:label ?label }} OPTIONAL {{ ?s dct:identifier|tar:externalKey ?key }} }}",
+            t = dom::TYPE_ACTIVITY
+        );
+        if let Some(q) = &f.q {
+            body.push('\n');
+            body.push_str(&super::text_filter(q, &["?label", "?key"]));
         }
-    }
-    Ok(Json(Page::new(items, total, next)))
+        if let Some(i) = f.instance.as_deref().filter(|v| !v.is_empty()) {
+            let iri = ids::iri_for(ctx.base(), Kind::Instance, i);
+            body.push_str(&format!("\nGRAPH ?g {{ ?s prov:wasAssociatedWith|tar:atInstance <{iri}> }}"));
+        }
+        if let Some(sw) = f.software.as_deref().filter(|v| !v.is_empty()) {
+            let iri = ids::iri_for(ctx.base(), Kind::Software, sw);
+            body.push_str(&format!(
+                "\nGRAPH ?g {{ ?s prov:wasAssociatedWith|tar:atInstance ?i . ?i tar:instanceOf <{iri}> }}"
+            ));
+        }
+        if let Some(s) = f.status.as_deref().filter(|v| !v.is_empty()) {
+            body.push_str(&format!("\nGRAPH ?g {{ ?s tar:status \"{}\" }}", super::escape_literal(s)));
+        }
+        body.push_str(&format!("\n{}", f.paging.cursor_filter("?s")));
+
+        let (iris, next) = page_iris(&ctx.state, &body, &f.paging)?;
+        let total = count(&ctx.state, &body)?;
+        let mut items = Vec::new();
+        for iri in iris {
+            if let Ok(s) = dom::load_run_summary(&ctx, &iri) {
+                items.push(s);
+            }
+        }
+        Ok(Page::new(items, total, next))
+    })
+    .await?;
+    Ok(Json(page))
 }
 
 pub async fn get(
@@ -67,7 +71,11 @@ pub async fn get(
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Run, &id);
-    let run = dom::load_run(&ctx, &iri)?;
+    let run = super::blocking({
+        let iri = iri.clone();
+        move || dom::load_run(&ctx, &iri)
+    })
+    .await?;
     let sp = Signposting::new(&iri).collection(&format!("{}/api/v1/runs", state.base()));
     Ok(resource_response(&state, &headers, &iri, &run, sp, Repr::Json).await?)
 }

@@ -268,7 +268,12 @@ pub async fn create(
 ) -> AppResult<impl IntoResponse> {
     let iri = ids::iri_for(state.base(), Kind::Instance, &id);
     may_manage(&principal, &iri)?;
-    if !state.store.exists(&iri).map_err(AppError::from)? {
+    let exists = super::blocking({
+        let (state, iri) = (state.clone(), iri.clone());
+        move || state.store.exists(&iri).map_err(AppError::from)
+    })
+    .await?;
+    if !exists {
         return Err(AppError::not_found(format!("no instance at {iri}")));
     }
     if subs::count_for_instance(&state.ops, &iri).await.map_err(AppError::from)? >= subs::MAX_PER_INSTANCE {
@@ -669,15 +674,30 @@ pub async fn notify_advertised(
             return;
         }
     };
-    let software_iri = instance_iri.and_then(|i| software_of_instance(state, i));
+    let (software_iri, loaded_all) = match super::blocking({
+        let (ctx, instance_iri, artifact_iris) = (ctx, instance_iri.map(str::to_string), artifact_iris.to_vec());
+        move || {
+            let software_iri = instance_iri.as_deref().and_then(|i| software_of_instance(&ctx.state, i));
+            // The candidate is read back from the graph rather than from the request body, so
+            // the matcher sees exactly what a reader of the artifact would see — including, for
+            // a reference to an artifact registered earlier, fields this advertisement never
+            // mentioned. A foreign IRI that has not been resolved yet simply has few fields,
+            // and a filter on a field it lacks correctly does not match.
+            let loaded: Vec<Option<crate::model::Artifact>> =
+                artifact_iris.iter().map(|iri| artdom::load_artifact(&ctx, iri).ok()).collect();
+            Ok((software_iri, loaded))
+        }
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = ?e.detail, "could not read artifacts for subscription matching");
+            return;
+        }
+    };
 
-    for artifact_iri in artifact_iris {
-        // The candidate is read back from the graph rather than from the request body, so the
-        // matcher sees exactly what a reader of the artifact would see — including, for a
-        // reference to an artifact registered earlier, fields this advertisement never
-        // mentioned. A foreign IRI that has not been resolved yet simply has few fields, and
-        // a filter on a field it lacks correctly does not match.
-        let loaded = artdom::load_artifact(&ctx, artifact_iri).ok();
+    for (artifact_iri, loaded) in artifact_iris.iter().zip(loaded_all) {
         let candidate = Candidate {
             artifact_iri: artifact_iri.clone(),
             title: loaded.as_ref().and_then(|a| a.title.clone()),

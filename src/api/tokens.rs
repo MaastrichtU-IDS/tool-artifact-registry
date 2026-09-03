@@ -57,7 +57,12 @@ pub async fn create(
 ) -> AppResult<impl IntoResponse> {
     let iri = ids::iri_for(state.base(), Kind::Instance, &id);
     may_manage(&principal, &iri)?;
-    if !state.store.exists(&iri).map_err(AppError::from)? {
+    let exists = super::blocking({
+        let (state, iri) = (state.clone(), iri.clone());
+        move || state.store.exists(&iri).map_err(AppError::from)
+    })
+    .await?;
+    if !exists {
         return Err(AppError::not_found(format!("no instance at {iri}")));
     }
     let scopes: Vec<String> = if input.scopes.is_empty() {
@@ -154,7 +159,12 @@ pub async fn create_for_software(
 ) -> AppResult<impl IntoResponse> {
     may_manage_software(&principal)?;
     let iri = ids::iri_for(state.base(), Kind::Software, &id);
-    if !state.store.exists(&iri).map_err(AppError::from)? {
+    let exists = super::blocking({
+        let (state, iri) = (state.clone(), iri.clone());
+        move || state.store.exists(&iri).map_err(AppError::from)
+    })
+    .await?;
+    if !exists {
         return Err(AppError::not_found(format!("no software at {iri}")));
     }
     // `register:instance` is the point of this credential, so it is the default. The advertise

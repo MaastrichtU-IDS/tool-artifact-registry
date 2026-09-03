@@ -27,14 +27,22 @@ async fn deref(state: Arc<AppState>, headers: HeaderMap, kind: Kind, id: String)
     let iri = ids::iri_for(state.base(), kind, &id);
     let repr = pinned.unwrap_or_else(|| negotiate(&headers, Repr::Html));
 
-    let quads = state.store.describe(&iri).map_err(AppError::from)?;
+    let quads = super::blocking({
+        let (state, iri) = (state.clone(), iri.clone());
+        move || state.store.describe(&iri).map_err(AppError::from)
+    })
+    .await?;
     if quads.is_empty() && repr != Repr::Html {
         return Err(AppError::not_found(format!("nothing at {iri}")));
     }
     let ctx = Ctx::new(&state).await?;
-    let sp = signposting_for(&ctx, kind, &iri, &state);
 
     if repr == Repr::Html {
+        let sp = super::blocking({
+            let (ctx, iri) = (ctx, iri.clone());
+            move || Ok(signposting_for(&ctx, kind, &iri, &ctx.state))
+        })
+        .await?;
         // The SPA renders it; the route is the same URL (handoff §3). The Link headers ride
         // along, because this is the representation a person shares and a machine then
         // follows — omitting them here is omitting them where they matter most.
@@ -47,39 +55,40 @@ async fn deref(state: Arc<AppState>, headers: HeaderMap, kind: Kind, id: String)
         return Ok(resp);
     }
 
-    // Markdown: the same record the Turtle describes, rendered as prose for an agent. Built
-    // from the loaded model rather than from the quads, so it says "outdated" and "health" and
-    // the other things the model computes and the raw graph does not carry.
-    if repr == Repr::Markdown {
-        let body = super::llms::render_record(&state, &ctx, kind, &iri, &quads)?;
-        return Ok(Negotiated { repr, body, signposting: Some(sp), status: axum::http::StatusCode::OK }.into_response());
-    }
-
-    if repr == Repr::Json {
-        let body = match kind {
-            Kind::Software => serde_json::to_string(&swdom::load_software(&ctx, &iri)?),
-            Kind::Instance => serde_json::to_string(&instdom::load_instance(&ctx, &iri)?),
-            Kind::Artifact => serde_json::to_string(&artdom::load_artifact(&ctx, &iri)?),
-            Kind::Run => serde_json::to_string(&rundom::load_run(&ctx, &iri)?),
-            // A release has a JSON shape like everything else; without this arm the `_` below
-            // returned Turtle under a `Content-Type: application/json`.
-            Kind::Release => {
-                let p = crate::rdf::Props::from_quads(&iri, &quads);
-                serde_json::to_string(&swdom::release_from_props(&ctx, &iri, &p))
+    let (body, sp) = super::blocking({
+        let (ctx, iri, quads) = (ctx, iri.clone(), quads);
+        move || -> AppResult<(String, Signposting)> {
+            let sp = signposting_for(&ctx, kind, &iri, &ctx.state);
+            // Markdown: the same record the Turtle describes, rendered as prose for an agent.
+            // Built from the loaded model rather than from the quads, so it says "outdated"
+            // and "health" and the other things the model computes and the raw graph does not
+            // carry.
+            if repr == Repr::Markdown {
+                let body = super::llms::render_record(&ctx.state, &ctx, kind, &iri, &quads)?;
+                return Ok((body, sp));
             }
-            _ => Ok(serialize(&quads, Repr::Turtle, state.base())?),
+            if repr == Repr::Json {
+                let body = match kind {
+                    Kind::Software => serde_json::to_string(&swdom::load_software(&ctx, &iri)?),
+                    Kind::Instance => serde_json::to_string(&instdom::load_instance(&ctx, &iri)?),
+                    Kind::Artifact => serde_json::to_string(&artdom::load_artifact(&ctx, &iri)?),
+                    Kind::Run => serde_json::to_string(&rundom::load_run(&ctx, &iri)?),
+                    // A release has a JSON shape like everything else; without this arm the `_`
+                    // below returned Turtle under a `Content-Type: application/json`.
+                    Kind::Release => {
+                        let p = crate::rdf::Props::from_quads(&iri, &quads);
+                        serde_json::to_string(&swdom::release_from_props(&ctx, &iri, &p))
+                    }
+                    _ => Ok(serialize(&quads, Repr::Turtle, ctx.base())?),
+                }
+                .map_err(|e| AppError::internal(e.to_string()))?;
+                return Ok((body, sp));
+            }
+            Ok((serialize(&quads, repr, ctx.base())?, sp))
         }
-        .map_err(|e| AppError::internal(e.to_string()))?;
-        return Ok(Negotiated { repr, body, signposting: Some(sp), status: axum::http::StatusCode::OK }.into_response());
-    }
-
-    Ok(Negotiated {
-        repr,
-        body: serialize(&quads, repr, state.base())?,
-        signposting: Some(sp),
-        status: axum::http::StatusCode::OK,
-    }
-    .into_response())
+    })
+    .await?;
+    Ok(Negotiated { repr, body, signposting: Some(sp), status: axum::http::StatusCode::OK }.into_response())
 }
 
 fn signposting_for(ctx: &Ctx, kind: Kind, iri: &str, state: &AppState) -> Signposting {
@@ -172,22 +181,27 @@ pub async fn deref_generic(
     if repr == Repr::Html {
         return Ok(super::web::spa_response(&state).await);
     }
-    let quads = state.store.describe(&iri).map_err(AppError::from)?;
-    if quads.is_empty() {
-        return Err(AppError::not_found(format!("nothing at {iri}")));
-    }
-    // Markdown would otherwise fall through to the Turtle serialiser and be labelled
-    // `text/markdown`, which is a lie about the bytes. These records are a handful of triples,
-    // so a fenced block is the honest rendering.
-    let body = if repr == Repr::Markdown {
-        let ttl = serialize(&quads, Repr::Turtle, state.base())?;
-        format!(
-            "# {iri}\n\n> A record in a Tool Artifact Registry. The Turtle below is the whole \
-             of it.\n\n```turtle\n{ttl}```\n"
-        )
-    } else {
-        serialize(&quads, if repr == Repr::Json { Repr::Turtle } else { repr }, state.base())?
-    };
+    let body = super::blocking({
+        let (state, iri) = (state.clone(), iri.clone());
+        move || -> AppResult<String> {
+            let quads = state.store.describe(&iri).map_err(AppError::from)?;
+            if quads.is_empty() {
+                return Err(AppError::not_found(format!("nothing at {iri}")));
+            }
+            // Markdown would otherwise fall through to the Turtle serialiser and be labelled
+            // `text/markdown`, which is a lie about the bytes. These records are a handful of
+            // triples, so a fenced block is the honest rendering.
+            if repr == Repr::Markdown {
+                let ttl = serialize(&quads, Repr::Turtle, state.base())?;
+                return Ok(format!(
+                    "# {iri}\n\n> A record in a Tool Artifact Registry. The Turtle below is the whole \
+                     of it.\n\n```turtle\n{ttl}```\n"
+                ));
+            }
+            Ok(serialize(&quads, if repr == Repr::Json { Repr::Turtle } else { repr }, state.base())?)
+        }
+    })
+    .await?;
     Ok(Negotiated { repr, body, signposting: Some(Signposting::new(&iri)), status: axum::http::StatusCode::OK }
         .into_response())
 }

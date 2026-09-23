@@ -66,7 +66,7 @@ Limits are GCRA (a smoothed token bucket): a sustained rate plus a burst.
 | Class | Anonymous, per IP | Authenticated, per principal |
 |---|---|---|
 | `read` | 300/min, burst 60 | 1200/min, burst 200 |
-| `write` | — (a write needs a credential; a bad one counts under `auth_fail`) | 300/min, burst 60 |
+| `write` | 60/min, burst 20 — a write needs a credential, so this only bounds refused attempts | 300/min, burst 60 |
 | `sparql` | 30/min, burst 10 | 120/min, burst 30 |
 | `federated` | 10/min, burst 5 | 60/min, burst 10 |
 | `mcp` | 120/min, burst 30 | 600/min, burst 100 |
@@ -193,12 +193,22 @@ parsing, including rejection of malformed values.
 - `/healthz` is never limited;
 - a SPARQL query issued through MCP spends the `sparql` bucket.
 
-The existing suites build their routers with limits high enough never to trigger, so none of
-their assertions change.
+`Config::for_test` disables the limiter, so the existing suites' assertions do not change — but
+`resolve_client` still runs in every one of them, so the authenticate-once path is exercised by
+all 292 existing tests, not only by the new ones.
 
 ---
 
-## 9. Not done, deliberately
+## 9. Consequences
+
+- **A bearer token on a read is now always verified.** Before, a handler that never asked for a
+  `Principal` never authenticated. A registry token's verification is an Argon2 check, so a
+  signed-in UI browsing lists now pays it on requests that used to skip it. That is the price
+  of keying on who is calling; `auth_fail` bounds what a stranger can make it cost.
+- **State lives on `AppState`, not the router.** The MCP server rebuilds the router per tool call
+  and the tests build one per harness; limiters held by the router would reset each time.
+
+## 10. Not done, deliberately
 
 - **Concurrency caps** on expensive queries. A rate bounds volume over time, not how many run at
   once; `TAR_SPARQL_TIMEOUT` bounds each. Worth adding if a real deployment shows a burst of

@@ -207,3 +207,35 @@ async fn behind_a_trusted_proxy_the_forwarded_client_is_charged_and_a_forged_hea
     assert_eq!(read("203.0.113.5", "198.51.100.9").await, StatusCode::OK);
     assert_eq!(read("203.0.113.5", "198.51.100.10").await, TOO_MANY);
 }
+
+async fn mcp_call(h: &Harness, from: &str, name: &str, arguments: Value) -> (StatusCode, Value) {
+    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
+    let headers = [
+        ("accept", "application/json, text/event-stream"),
+        ("mcp-protocol-version", V),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", name),
+    ];
+    let (s, v, _) = h.send(from, "POST", "/mcp", None, Some(body), &headers).await;
+    (s, v)
+}
+
+/// Review focus: a refused inner request is a tool error inside a `200`, not a transport failure.
+#[tokio::test]
+async fn a_tool_call_spends_the_bucket_of_the_request_it_makes() {
+    let h = harness(|rl| rl.set(Class::Read, only(Limit::new(1, 2)))).await;
+    let from = "198.51.100.7";
+    for i in 0..2 {
+        let (s, body) = mcp_call(&h, from, "list_records", json!({ "kind": "software" })).await;
+        assert_eq!(s, StatusCode::OK, "call {i}: {body}");
+        assert_eq!(body["result"]["isError"], false, "call {i}: {body}");
+    }
+    // The two inner reads were charged to this address, so a direct read is refused...
+    assert_eq!(h.get(from, "/api/v1/software").await, TOO_MANY);
+    // ...and a third tool call's read comes back as a tool error, not a transport one.
+    let (s, body) = mcp_call(&h, from, "list_records", json!({ "kind": "software" })).await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    assert_eq!(body["result"]["isError"], true, "{body}");
+    // Another address is unaffected by any of it.
+    assert_eq!(h.get("198.51.100.8", "/api/v1/software").await, StatusCode::OK);
+}

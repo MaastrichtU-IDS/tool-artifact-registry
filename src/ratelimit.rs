@@ -492,6 +492,14 @@ pub struct ClientContext {
     pub principal: Result<Principal, AppError>,
 }
 
+tokio::task_local! {
+    /// The outer request's client while the MCP server dispatches a tool call through the
+    /// router in-process. `mcp::call::rest` copies it into each inner request, so a SPARQL query
+    /// made by a tool is charged as `sparql` to the caller, not to nobody. A task-local rather
+    /// than a parameter because `rest` has twenty callers and none of them should have to care.
+    pub static FORWARDED: ClientContext;
+}
+
 const RATELIMIT_POLICY: HeaderName = HeaderName::from_static("ratelimit-policy");
 const RATELIMIT: HeaderName = HeaderName::from_static("ratelimit");
 

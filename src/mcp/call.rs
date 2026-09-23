@@ -78,9 +78,14 @@ async fn rest(
         Some(v) => b.header("content-type", "application/json").body(Body::from(v.to_string())),
         None => b.body(Body::empty()),
     };
-    let Ok(req) = req else {
+    let Ok(mut req) = req else {
         return (StatusCode::INTERNAL_SERVER_ERROR, json!({ "detail": "could not build the internal request" }));
     };
+    // Charge this request to the tool call's caller (see `ratelimit::FORWARDED`). Extensions
+    // cannot be set over HTTP, so nobody outside the process can claim someone else's context.
+    if let Ok(ctx) = crate::ratelimit::FORWARDED.try_with(Clone::clone) {
+        req.extensions_mut().insert(ctx);
+    }
 
     let resp = match crate::api::router(state.clone()).oneshot(req).await {
         Ok(r) => r,

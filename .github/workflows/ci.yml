@@ -3,7 +3,7 @@
 # Three independent jobs — Rust, the UI and the Kubernetes manifests — because they share
 # nothing and a broken component test should not sit behind the Rust build waiting for a turn.
 #
-# **Neither job needs the network or a service.** The end-to-end suite runs against an
+# **No job needs the network or a service.** The end-to-end suite runs against an
 # in-memory Oxigraph and an in-memory SQLite; `TAR_TEST_SPARQL_ENDPOINT` is the opt-in that
 # points it at a real triple store, and leaving it unset is what CI wants. The UI tests stub
 # `fetch` in every test that renders a fetching component. Two Rust tests do resolve a hostname

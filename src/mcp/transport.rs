@@ -372,6 +372,19 @@ fn initialize(params: &Value) -> Value {
     })
 }
 
+/// The middleware has already authenticated this request to know whom to charge; reuse its
+/// answer. Without it (a router built without the layer), authenticate here as before.
+async fn authenticate_once(
+    state: &Arc<AppState>,
+    ctx: Option<&crate::ratelimit::ClientContext>,
+    token: &str,
+) -> crate::error::AppResult<Principal> {
+    match ctx {
+        Some(c) => c.principal.clone(),
+        None => crate::auth::authenticate(state, token).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,18 +482,5 @@ mod tests {
         assert!(origin_allowed(&s, &HeaderMap::new()));
         assert!(origin_allowed(&s, &headers(&[("origin", "https://reg.test.example")])));
         assert!(!origin_allowed(&s, &headers(&[("origin", "https://evil.example")])));
-    }
-}
-
-/// The middleware has already authenticated this request to know whom to charge; reuse its
-/// answer. Without it (a router built without the layer), authenticate here as before.
-async fn authenticate_once(
-    state: &Arc<AppState>,
-    ctx: Option<&crate::ratelimit::ClientContext>,
-    token: &str,
-) -> crate::error::AppResult<Principal> {
-    match ctx {
-        Some(c) => c.principal.clone(),
-        None => crate::auth::authenticate(state, token).await,
     }
 }

@@ -129,11 +129,14 @@ The check now returns the addresses it approved and the delivery is pinned to th
 no second lookup to win. TLS still verifies the certificate against the hostname: pinning
 replaces DNS, not identity.
 
-## 14. Subscriptions have no scope of their own
+## 14. ~~Subscriptions have no scope of their own~~ — closed
 
-Managing a subscription reuses the rule that governs token management — admin, curator, or the
-credential of the owning deployment. There is no `subscribe:*` scope, so a credential cannot be
-issued that may subscribe and nothing else.
+There was no scope for subscribing, so a consumer that only wanted webhooks had to be given a
+credential that could also advertise. `subscribe:artifacts` now exists: a deployment token with
+only that scope manages the deployment's subscriptions and is refused everything else, including
+the deployment's own token endpoints and its record (edit, capability, self-announcement). The scope adds a narrower way in and takes nothing away,
+so the owning deployment's other credentials, curators and admins manage subscriptions exactly
+as before. See [Subscriptions](api/subscriptions.md).
 
 ## 15. ~~The external SPARQL backend blocks a worker thread per store call~~ — closed for the request path
 
@@ -204,10 +207,12 @@ because there is no streaming path from a `SELECT` result to the response body. 
 Oxigraph streams. For a catalogue-sized registry this is fine and for a very large external
 dataset it is not; back that up with the store's own tools instead.
 
-## 18. `tar dump --graph` loses the graph name, on either backend
+## 18. ~~`tar dump --graph` loses the graph name, on either backend~~ — closed
 
-`tar dump` with no argument writes N-Quads and restores faithfully. `tar dump --graph <g>` writes
-N-Triples — which is what `/admin/dump?graph=` and peer stub exchange want — so restoring *that*
-file with `tar restore` puts its triples in the default graph, where nothing looks for them.
-Pre-existing behaviour, unchanged by the second backend, and worth knowing before using a
-single-graph dump as a backup.
+`tar dump --graph <g>` used to write N-Triples, so restoring that file with `tar restore` put its
+triples in the default graph, where nothing looks for them. It now writes N-Quads with `<g>` on
+every line, and `tar restore` puts them back in `<g>`. The conversion is one method shared by
+both backends (`GraphStore::dump_graph_nquads`), so they cannot differ.
+
+`/admin/dump?graph=` still returns N-Triples, deliberately: its consumers, peer stub exchange
+among them, want a single graph's triples, not a backup.

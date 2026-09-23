@@ -8,6 +8,7 @@
 use crate::auth::{Principal, ALL_SCOPES};
 use crate::error::{AppError, AppResult};
 use crate::ids::{self, Kind};
+use crate::ops::TokenSubject;
 use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -32,7 +33,9 @@ fn may_manage(principal: &Principal, instance_iri: &str) -> AppResult<()> {
     if principal.is_admin() || principal.is_curator() {
         return Ok(());
     }
-    if principal.instance_iri.as_deref() == Some(instance_iri) {
+    // Not a subscribe-only credential: it could mint itself a wider one, or revoke the
+    // deployment's advertising tokens, and the narrow scope would narrow nothing.
+    if principal.acts_for_instance(instance_iri) {
         return Ok(());
     }
     Err(AppError::forbidden("only the instance owner, a curator or an admin may manage these tokens"))
@@ -90,7 +93,7 @@ pub async fn create(
     };
     let (rec, plaintext) = state
         .ops
-        .mint_token(Some(&iri), None, "instance", &scopes, input.label.as_deref(), Some(&principal.subject), ttl)
+        .mint_token(TokenSubject::Instance(&iri), &scopes, input.label.as_deref(), Some(&principal.subject), ttl)
         .await
         .map_err(AppError::from)?;
     let _ = state
@@ -194,7 +197,7 @@ pub async fn create_for_software(
     };
     let (rec, plaintext) = state
         .ops
-        .mint_token(None, Some(&iri), "software", &scopes, input.label.as_deref(), Some(&principal.subject), ttl)
+        .mint_token(TokenSubject::Software(&iri), &scopes, input.label.as_deref(), Some(&principal.subject), ttl)
         .await
         .map_err(AppError::from)?;
     let _ = state

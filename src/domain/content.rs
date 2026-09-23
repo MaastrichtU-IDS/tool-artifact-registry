@@ -436,6 +436,6 @@ mod tests {
             Some(canonical.as_str()),
             "hex pasted into the identifier form is a near miss worth accepting"
         );
-        assert_eq!(parse_query("nonsense").and_then(|_| Some(())), None, "a value that names no bytes matches nothing");
+        assert_eq!(parse_query("nonsense").map(|_| ()), None, "a value that names no bytes matches nothing");
     }
 }

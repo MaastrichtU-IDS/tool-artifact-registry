@@ -18,6 +18,21 @@ Managing a subscription needs `admin`, `curator`, or the credential of the deplo
 it. A mismatched subscription id returns `403` rather than `404`, so the endpoint cannot be used
 to enumerate what exists.
 
+A consumer that only wants webhooks does not need a credential that can also advertise. Mint
+the deployment a token with only `subscribe:artifacts`:
+
+```bash
+curl -X POST -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d '{"scopes": ["subscribe:artifacts"], "label": "webhooks"}' \
+  https://registry.example.org/api/v1/instances/$DEPLOYMENT/tokens
+```
+
+That token can create, read, edit, acknowledge and delete its deployment's subscriptions and
+nothing else. It cannot advertise or register. It cannot manage the deployment's tokens, which
+would let it mint itself a wider one, and it cannot edit or announce the deployment's record,
+which carries the scopes the deployment may be given. The deployment's other credentials keep managing
+its subscriptions as before.
+
 ## Creating one
 
 ```bash

@@ -15,7 +15,7 @@ use axum::extract::{Request, State};
 use axum::http::{header, HeaderValue, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use oxigraph::io::{RdfFormat, RdfParser, RdfSerializer};
+use oxigraph::io::{RdfFormat, RdfParser};
 use oxigraph::model::{GraphName, NamedNode, NamedOrBlankNode, Quad, Term};
 use std::sync::Arc;
 
@@ -135,10 +135,9 @@ pub async fn run(state: &AppState, old: &str, dry_run: bool) -> Result<Report> {
     // inserting the result in one transaction: a failure leaves it as it was.
     let local = NamedNode::new(crate::ns::G_LOCAL)?;
     let dump = state.store.dump_nquads(Some(crate::ns::G_LOCAL))?;
-    let (mut before, mut quads) = (Vec::new(), Vec::new());
+    let mut quads = Vec::new();
     for q in RdfParser::from_format(RdfFormat::NTriples).for_slice(dump.as_bytes()) {
         let q = q.context("reading the local graph")?;
-        before.push(Quad::new(q.subject.clone(), q.predicate.clone(), q.object.clone(), local.clone()));
         let (rewritten, changed) = rewrite_quad(q, old, new, &local);
         report.statements += usize::from(changed);
         quads.push(rewritten);
@@ -147,7 +146,7 @@ pub async fn run(state: &AppState, old: &str, dry_run: bool) -> Result<Report> {
         // Kept before anything is written. An external endpoint may run the clear and the
         // insert of one request separately (limitations §16); if the insert then fails, this
         // file is the graph, and `tar restore` puts it back.
-        report.snapshot = snapshot(&state.config.data_dir, &before)?;
+        report.snapshot = snapshot(state)?;
         let mut tx = GraphTx::new();
         tx.clear_graphs.push(crate::ns::G_LOCAL.to_string());
         tx.extend(quads);
@@ -202,19 +201,17 @@ pub async fn run(state: &AppState, old: &str, dry_run: bool) -> Result<Report> {
     Ok(report)
 }
 
-/// Write `quads` to `{data_dir}/rebase-before-{time}.nq`. Nothing for an in-memory store, which
-/// a failed write loses either way.
-fn snapshot(data_dir: &str, quads: &[Quad]) -> Result<Option<std::path::PathBuf>> {
+/// Write the local graph to `{data_dir}/rebase-before-{time}.nq`. Nothing for an in-memory
+/// store, which a failed write loses either way.
+fn snapshot(state: &AppState) -> Result<Option<std::path::PathBuf>> {
+    let data_dir = &state.config.data_dir;
     if data_dir == "memory" {
         return Ok(None);
     }
     let path = std::path::Path::new(data_dir)
         .join(format!("rebase-before-{}.nq", chrono::Utc::now().format("%Y%m%dT%H%M%SZ")));
-    let mut out = RdfSerializer::from_format(RdfFormat::NQuads).for_writer(Vec::new());
-    for q in quads {
-        out.serialize_quad(q)?;
-    }
-    std::fs::write(&path, out.finish()?).with_context(|| format!("writing {}", path.display()))?;
+    let nquads = state.store.dump_graph_nquads(crate::ns::G_LOCAL)?;
+    std::fs::write(&path, nquads).with_context(|| format!("writing {}", path.display()))?;
     Ok(Some(path))
 }
 

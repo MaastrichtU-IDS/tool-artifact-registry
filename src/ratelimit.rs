@@ -815,9 +815,7 @@ mod tests {
 
     #[test]
     fn repeated_failed_credentials_block_an_address_for_a_while() {
-        let mut cfg = RateLimitConfig::default();
-        cfg.auth_fail = Some(Limit::new(1, 2));
-        let rl = RateLimits::new(cfg);
+        let rl = RateLimits::new(RateLimitConfig { auth_fail: Some(Limit::new(1, 2)), ..Default::default() });
         let bad = ip("198.51.100.7");
         rl.note_auth_failure(bad);
         rl.note_auth_failure(bad);

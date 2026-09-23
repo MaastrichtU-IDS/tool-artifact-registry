@@ -448,25 +448,25 @@ loaded from the binary at boot, so a restore does not re-add them. Verified roun
 12,145-triple registry dumped and restored into an empty volume comes back at 12,145 triples
 with the same record counts.
 
-### The trap: `--graph` is not a backup
+### One graph over HTTP is not a backup
 
-`tar dump` with no argument writes **N-Quads**, and the named graph is part of the meaning —
-which graph a statement is in is what distinguishes this registry's records from a peer's cached
-stub.
+The named graph is part of the meaning: which graph a statement is in is what distinguishes
+this registry's records from a peer's cached stub. `tar dump`, with or without `--graph`, writes
+**N-Quads**, so `tar restore` puts every statement back in its graph.
 
-`tar dump --graph <g>` and `/admin/dump?graph=<g>` write **N-Triples**, because that is what the
-single-graph consumers want. Restoring *that* file puts its triples in the default graph, where
-nothing looks for them:
+`/admin/dump?graph=<g>` writes **N-Triples**, because that is what single-graph consumers want.
+Restoring *that* file puts its triples in the default graph, where nothing looks for them:
 
 ```console
-$ head -1 registry.nq        # four terms, the graph last
-<https://w3id.org/tar/ns#ReachableShape> <http://www.w3.org/ns/shacl#not> _:b0 <urn:tar:shapes> .
+$ head -1 local.nq           # tar dump --graph: four terms, the graph last
+<https://registry.example.org/artifact/01a05d4c-…> <http://www.w3.org/ns/prov#wasAttributedTo> <urn:tar:seed> <urn:tar:local> .
 
-$ head -1 local.nt           # three terms, no graph
+$ head -1 local.nt           # /admin/dump?graph=: three terms, no graph
 <https://registry.example.org/artifact/01a05d4c-…> <http://www.w3.org/ns/prov#wasAttributedTo> <urn:tar:seed> .
 ```
 
-Use the whole-store dump for backups. See [Limitations §18](../limitations.md).
+For a backup over HTTP, use `/admin/dump` without `graph`. See [Limitations
+§18](../limitations.md).
 
 ## Where the documentation lives
 

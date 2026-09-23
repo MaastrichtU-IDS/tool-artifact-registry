@@ -1654,7 +1654,7 @@ async fn an_artifact_title_never_becomes_a_selectable_artifact_type() {
     assert_eq!(hits["items"].as_array().unwrap().len(), 0, "nor in the picker: {hits}");
 
     // The type it actually conforms to is listed, because something declares itself as it.
-    assert!(labels.iter().any(|l| *l == "Report"), "the EDAM type in use should be listed: {labels:?}");
+    assert!(labels.contains(&"Report"), "the EDAM type in use should be listed: {labels:?}");
 }
 
 #[tokio::test]
@@ -3506,6 +3506,24 @@ async fn a_bundled_a_minted_and_a_peer_type_all_still_validate() {
         .post("/api/v1/artifacts", ROOT, json!({"title": "e", "conforms_to": "https://example.org/type/invented"}))
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{out}");
+}
+
+/// Limitations §18: a single-graph dump has to restore into that graph, not the default one.
+#[tokio::test]
+async fn a_single_graph_dump_restores_into_that_graph() {
+    let h = harness().await;
+    h.post("/api/v1/software", ROOT, json!({"name": "one graph"})).await;
+    let dump = h.state.store.dump_graph_nquads(tar::ns::G_LOCAL).unwrap();
+    assert!(!dump.is_empty());
+    assert!(dump.lines().all(|l| l.ends_with("<urn:tar:local> .")), "every line names its graph");
+
+    let restored = common::test_store().await;
+    let n = restored.load_nquads(&dump).unwrap();
+    assert_eq!(n, dump.lines().count());
+    let in_graph = "ASK { GRAPH <urn:tar:local> { ?s <https://schema.org/name> \"one graph\" } }";
+    let in_default = "ASK { ?s <https://schema.org/name> \"one graph\" FILTER NOT EXISTS { GRAPH ?g { ?s ?p ?o } } }";
+    assert!(restored.ask(in_graph).unwrap(), "the triples are back in their graph");
+    assert!(!restored.ask(in_default).unwrap(), "and not in the default graph");
 }
 
 /// `tar dump` and `tar restore` have to carry the new graphs, digests included — otherwise the

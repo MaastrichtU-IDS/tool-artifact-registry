@@ -495,3 +495,57 @@ async fn a_subscription_written_against_the_keyword_list_catches_every_spelling(
     let deliveries = all_deliveries(&h, &subscriber, &sid).await;
     assert_eq!(deliveries.len(), 1, "the lower-case spelling must still match: {deliveries:?}");
 }
+
+/// Limitations #14: a credential that may manage its deployment's subscriptions and nothing else.
+#[tokio::test]
+async fn a_subscribe_only_token_manages_subscriptions_and_nothing_else() {
+    let h = harness().await;
+    let sw = h.software().await;
+    let mine = h.deployment(&sw, "mine.example.org").await;
+    let theirs = h.deployment(&sw, "theirs.example.org").await;
+    let (status, tok) = h
+        .post(
+            &format!("/api/v1/instances/{}/tokens", mine.id),
+            ROOT,
+            json!({"scopes": ["subscribe:artifacts"], "label": "webhooks only"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{tok}");
+    let narrow = tok["token"].as_str().unwrap().to_string();
+
+    // Everything about its own deployment's subscriptions.
+    let (status, sub) =
+        h.post(&format!("/api/v1/instances/{}/subscriptions", mine.id), &narrow, json!({"filter": {}})).await;
+    assert_eq!(status, StatusCode::CREATED, "{sub}");
+    let sid = sub["subscription"]["id"].as_str().unwrap().to_string();
+    for (method, uri, body) in [
+        ("GET", format!("/api/v1/instances/{}/subscriptions", mine.id), None),
+        ("GET", format!("/api/v1/subscriptions/{sid}"), None),
+        ("PATCH", format!("/api/v1/subscriptions/{sid}"), Some(json!({"label": "renamed"}))),
+        ("GET", format!("/api/v1/subscriptions/{sid}/deliveries"), None),
+        ("POST", format!("/api/v1/subscriptions/{sid}/deliveries/ack"), Some(json!({"cursor": 0}))),
+        ("DELETE", format!("/api/v1/subscriptions/{sid}"), None),
+    ] {
+        let (status, body) = h.req(method, &uri, Some(&narrow), body).await;
+        assert!(status.is_success(), "{method} {uri}: {status} {body}");
+    }
+
+    // Nothing else: not advertising, not registering, not another deployment's subscriptions,
+    // and not its own deployment's tokens, which would let it mint itself a wider credential.
+    let refused = [
+        ("POST", "/api/v1/advertise/produced".to_string(), Some(json!({"run": {}, "artifacts": []}))),
+        ("POST", "/api/v1/advertise/consumed".to_string(), Some(json!({"run": {}, "artifacts": []}))),
+        ("POST", "/api/v1/software".to_string(), Some(json!({"name": "sneaky", "kind": "service"}))),
+        ("GET", format!("/api/v1/instances/{}/subscriptions", theirs.id), None),
+        ("POST", format!("/api/v1/instances/{}/tokens", mine.id), Some(json!({"scopes": ["advertise:produce"]}))),
+        ("GET", format!("/api/v1/instances/{}/tokens", mine.id), None),
+        // Nor the deployment's own record, which carries its allowed scopes.
+        ("PATCH", format!("/api/v1/instances/{}", mine.id), Some(json!({"label": "hijacked"}))),
+        ("PUT", format!("/api/v1/instances/{}/capability", mine.id), Some(json!({"consumes": [], "produces": []}))),
+        ("PUT", "/api/v1/instances/self".to_string(), Some(json!({"label": "self", "software": sw}))),
+    ];
+    for (method, uri, body) in refused {
+        let (status, body) = h.req(method, &uri, Some(&narrow), body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri} must be refused: {body}");
+    }
+}

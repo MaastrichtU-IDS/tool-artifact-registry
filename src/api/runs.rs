@@ -77,5 +77,5 @@ pub async fn get(
     })
     .await?;
     let sp = Signposting::new(&iri).collection(&format!("{}/api/v1/runs", state.base()));
-    Ok(resource_response(&state, &headers, &iri, &run, sp, Repr::Json).await?)
+    resource_response(&state, &headers, &iri, &run, sp, Repr::Json).await
 }

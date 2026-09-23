@@ -128,12 +128,9 @@ pub fn api_format_iri(format: &str) -> Option<&'static str> {
 }
 
 pub fn api_format_from_iri(iri: &str) -> Option<&'static str> {
-    for f in ["openapi", "asyncapi", "graphql", "sparql-service-description", "ols4", "postman"] {
-        if api_format_iri(f) == Some(iri) {
-            return Some(f);
-        }
-    }
-    None
+    ["openapi", "asyncapi", "graphql", "sparql-service-description", "ols4", "postman"]
+        .into_iter()
+        .find(|&f| api_format_iri(f) == Some(iri))
 }
 
 impl ApiDoc {

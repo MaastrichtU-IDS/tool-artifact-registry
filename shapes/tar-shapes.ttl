@@ -118,7 +118,7 @@ tar:InstanceShape a sh:NodeShape ;
                   sh:message "dct:accessRights must be a single IRI, normally from the EU access-right authority table" ] ;
     sh:property [ sh:path tar:allowedScope ;
                   sh:in ( "advertise:produce" "advertise:consume" "register:software"
-                          "register:instance" "read:private" "admin:*" ) ;
+                          "register:instance" "read:private" "subscribe:artifacts" "admin:*" ) ;
                   sh:message "unknown scope — see the scopes this registry defines in /.well-known/tar-registry" ] ;
     # An OIDC issuer with no client id binds nothing.
     sh:not [ sh:and ( [ sh:path tar:oidcIssuer ; sh:minCount 1 ]

@@ -159,6 +159,21 @@ pub trait GraphStore: Send + Sync + 'static {
     fn count(&self) -> Result<usize> {
         Ok(self.select(&queries::count())?.rows.first().and_then(|r| r.i64("n")).unwrap_or(0) as usize)
     }
+    /// One graph as N-Quads, its name on every line, so `load_nquads` puts it back where it
+    /// was. `dump_nquads(Some(g))` stays N-Triples, which is what `/admin/dump?graph=` and peer
+    /// stub exchange want; this is the form for a backup. Built on that method rather than per
+    /// backend, so the two backends cannot differ.
+    fn dump_graph_nquads(&self, graph: &str) -> Result<String> {
+        use oxigraph::io::{RdfFormat, RdfParser, RdfSerializer};
+        let g = oxigraph::model::NamedNode::new(graph)?;
+        let triples = self.dump_nquads(Some(graph))?;
+        let mut out = RdfSerializer::from_format(RdfFormat::NQuads).for_writer(Vec::new());
+        for q in RdfParser::from_format(RdfFormat::NTriples).for_slice(triples.as_bytes()) {
+            let q = q?;
+            out.serialize_quad(&Quad::new(q.subject, q.predicate, q.object, g.clone()))?;
+        }
+        Ok(String::from_utf8(out.finish()?)?)
+    }
 }
 
 /// Run the closure query, growing the chain until nothing new is at the bottom of it.

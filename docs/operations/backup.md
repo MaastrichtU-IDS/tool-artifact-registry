@@ -19,7 +19,7 @@ Backing up the directory backs up both. Do it with the process stopped.
 
 ```bash
 tar dump > registry.nq                    # every graph, as N-Quads
-tar dump --graph urn:tar:local > local.nq # just this registry's own records
+tar dump --graph urn:tar:local > local.nq # just this registry's own records, still N-Quads
 tar restore --nquads registry.nq
 ```
 

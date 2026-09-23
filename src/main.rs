@@ -79,7 +79,11 @@ async fn main() -> Result<()> {
         }
         Command::Dump { graph } => {
             let state = boot().await?;
-            print!("{}", state.store.dump_nquads(graph.as_deref())?);
+            // N-Quads either way, so whatever `dump` writes, `restore` puts back where it was.
+            match graph {
+                Some(g) => print!("{}", state.store.dump_graph_nquads(&g)?),
+                None => print!("{}", state.store.dump_nquads(None)?),
+            }
             Ok(())
         }
         Command::Restore { nquads } => {

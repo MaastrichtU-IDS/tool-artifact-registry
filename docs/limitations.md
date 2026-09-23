@@ -52,7 +52,8 @@ as `repository_stats`, and the signal bar shows them. A failed fetch keeps the p
 and records the error beside them.
 
 Records hosted anywhere else, and records not polled yet, still have no numbers, and the UI still
-omits those cells rather than rendering zeros. GitLab is not supported; neither is sync. See the
+omits those cells rather than rendering zeros. Liveness numbers are GitHub-only, as repository
+sync already is: a GitLab repository gets neither. See the
 [design note](specs/2026-09-24-repository-liveness.md).
 
 ## 5. ~~Human sign-in has no token refresh~~ — closed

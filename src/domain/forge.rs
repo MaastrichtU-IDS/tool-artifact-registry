@@ -321,7 +321,7 @@ fn platform_of(name: &str) -> Option<String> {
 /// never disagree about which repository a record has.
 pub fn github_repo(s: &str) -> Option<String> {
     let s = s.trim();
-    let path = ["https://github.com/", "http://github.com/", "https://www.github.com/"]
+    let path = ["https://github.com/", "http://github.com/", "https://www.github.com/", "http://www.github.com/"]
         .iter()
         .find_map(|p| s.strip_prefix(p))
         .or_else(|| (!s.contains("://")).then_some(s))?;
@@ -336,9 +336,14 @@ pub fn github_repo(s: &str) -> Option<String> {
     Some(format!("{owner}/{name}"))
 }
 
-/// A record's GitHub repository: the one it syncs from, else its `code_repository`.
+/// A record's GitHub repository: the one it syncs from, else its `code_repository`. A sync
+/// repository that is not on GitHub means none — not a fall back to the code link, which may
+/// name a different project than the one the record is kept in step with.
 pub fn repo_of(sync_repo: Option<&str>, code_repository: Option<&str>) -> Option<String> {
-    sync_repo.and_then(github_repo).or_else(|| code_repository.and_then(github_repo))
+    match sync_repo {
+        Some(s) => github_repo(s),
+        None => code_repository.and_then(github_repo),
+    }
 }
 
 // ----------------------------------------------------------------- liveness poller
@@ -491,6 +496,7 @@ mod tests {
             "https://github.com/MaastrichtU-IDS/shacl-manager.git",
             "http://github.com/MaastrichtU-IDS/shacl-manager/tree/main",
             "https://www.github.com/MaastrichtU-IDS/shacl-manager#readme",
+            "http://www.github.com/MaastrichtU-IDS/shacl-manager",
         ] {
             assert_eq!(github_repo(s).as_deref(), Some("MaastrichtU-IDS/shacl-manager"), "{s}");
         }
@@ -501,6 +507,8 @@ mod tests {
         // The sync repository wins over the code link, which may point anywhere.
         assert_eq!(repo_of(Some("a/b"), Some("https://github.com/c/d")).as_deref(), Some("a/b"));
         assert_eq!(repo_of(None, Some("https://codeberg.org/c/d")), None);
+        // A sync repository elsewhere is not replaced by a GitHub code link.
+        assert_eq!(repo_of(Some("https://gitlab.com/a/b"), Some("https://github.com/c/d")), None);
     }
 
     #[test]

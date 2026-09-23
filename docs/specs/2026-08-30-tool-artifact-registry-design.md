@@ -733,7 +733,7 @@ Full screen inventory, routes, component list, API contracts per screen, and sta
 | Q5 | Should `Capability` eventually be a SHACL shape rather than an `ArtifactType` chip? | Far more precise matchmaking ("consumes graphs conforming to *this* shape"). Natural v2, and `shacl-manager` already has the machinery. |
 | Q6 | Is SHACL write-validation blocking or advisory? | **Answered in the prototype: severity decides.** `sh:Violation` blocks with `422`; `sh:Warning` is recorded and never blocks, which is how "no licence declared" and "no distribution" are handled. `TAR_SHACL_VALIDATE_WRITES=false` downgrades violations to warnings for an estate that prefers a half-described artifact to a rejected one. |
 | Q7 | Project licence and repository home. | Assumed Apache-2.0 under `MaastrichtU-IDS`, matching siblings. Confirm. |
-| Q8 | Rate limiting and abuse controls for a public instance. | Not designed yet. Needed before any registry is exposed to the open internet with `TAR_PUBLIC_READ=true`. |
+| Q8 | Rate limiting and abuse controls for a public instance. | **Answered: in-registry limits by cost class**, keyed on the verified principal or the real client address — see [Rate limiting](2026-09-23-rate-limiting.md). |
 | Q9 | `TAR_BASE_IRI` change after data exists. | A rebase migration is named in §10.5 but not specified. Needed before the first production deployment moves domain. |
 
 ---

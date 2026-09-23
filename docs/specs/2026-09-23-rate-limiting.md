@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Approved, not yet implemented |
+| **Status** | Implemented |
 | **Date** | 2026-09-23 |
 | **Spec** | [`2026-08-30-tool-artifact-registry-design.md`](2026-08-30-tool-artifact-registry-design.md) — answers Q8 |
 | **Code** | `src/ratelimit.rs`, `src/auth/mod.rs`, `src/api/mod.rs`, `src/mcp/call.rs`, `src/main.rs`, `tests/ratelimit.rs` |

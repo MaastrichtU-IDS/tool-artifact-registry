@@ -50,6 +50,28 @@ operator who wants a genuinely private registry has to say so about the query en
 `/.well-known/` documents and the MCP handshake stay reachable either way — a probe or a
 discovery document that needs a credential fails for the wrong reason.
 
+## Rate limits
+
+On by default. A request is charged by cost class to its verified principal, or to its client
+address when it is anonymous or its credential failed. Admins are never limited; `/healthz`,
+`/readyz`, `/metrics` and `/assets/*` never are. The design is in
+[Rate limiting](../specs/2026-09-23-rate-limiting.md).
+
+| Variable | Default | |
+|---|---|---|
+| `TAR_RATE_LIMIT_ENABLED` | `true` | `false` removes every limit. |
+| `TAR_TRUSTED_PROXIES` | — | Comma-separated CIDRs. **Set this behind any reverse proxy or ingress**, or every request is charged to the proxy's address. |
+| `TAR_RATE_LIMIT_READ` | `300:60/1200:200` | `<anonymous>/<authenticated>`, each `rate:burst` per minute, or `off`. |
+| `TAR_RATE_LIMIT_WRITE` | `60:20/300:60` | |
+| `TAR_RATE_LIMIT_SPARQL` | `30:10/120:30` | `/sparql`. |
+| `TAR_RATE_LIMIT_FEDERATED` | `10:5/60:10` | A federated search, or a peer's relayed leg of one. |
+| `TAR_RATE_LIMIT_MCP` | `120:30/600:100` | The `/mcp` request itself; the requests a tool makes are charged to their own classes. |
+| `TAR_RATE_LIMIT_OUTBOUND` | `10:5/60:10` | Fetching a record's API document, and repository sync. |
+| `TAR_RATE_LIMIT_AUTH_FAIL` | `20:10` | Failed credentials per address; past it, the address is refused authentication until the next attempt would be allowed. |
+
+A malformed value stops the registry at boot and names the variable. `tar config` prints the
+effective limits. Refusals are counted in `/metrics` as `tar_ratelimit_rejections_total{class}`.
+
 ## Validation
 
 | Variable | Default | |

@@ -120,6 +120,21 @@ artifacts](advertising.md).
 Bodies are capped by `TAR_MAX_PAYLOAD_BYTES`, default 2 MiB. Software records carry whole
 READMEs, so this is worth raising if you are importing large ones.
 
+## Rate limits
+
+A client over its limit gets `429 Too Many Requests` as `application/problem+json`, with
+`Retry-After` in seconds and a `detail` naming the limit that applied. Wait that long and retry;
+retrying sooner is refused again.
+
+Every limited response, accepted or not, carries `RateLimit-Policy` (the quota per 60-second
+window) and `RateLimit` (`r`, what is left; `t`, seconds until it is fully replenished), in the
+form of the IETF `draft-ietf-httpapi-ratelimit-headers`, so a client can pace itself instead of
+finding the limit by hitting it.
+
+Authenticated requests are charged to the credential, not the address, and have higher limits;
+a batch job should authenticate even for reads. Repeatedly presenting a bad credential gets an
+address refused authentication for a while — check the credential rather than retrying it.
+
 ## Audit
 
 Every write is recorded. `GET /api/v1/audit` returns the log, for admins.

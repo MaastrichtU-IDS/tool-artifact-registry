@@ -87,6 +87,10 @@ configMapGenerator:
       # - TAR_SPARQL_ENDPOINT=http://fuseki.tar.svc:3030/tar/sparql
       # - TAR_SPARQL_UPDATE_ENDPOINT=http://fuseki.tar.svc:3030/tar/update
 
+      # The ingress controller's pod network, so rate limits see the real client rather than
+      # the proxy. Find it with `kubectl get pods -n <ingress-ns> -o wide`.
+      # - TAR_TRUSTED_PROXIES=10.42.0.0/16
+
 # The ingress hostname is TAR_BASE_IRI with its scheme removed. One source of truth, so the
 # certificate, the route and the identifiers cannot drift apart.
 replacements:

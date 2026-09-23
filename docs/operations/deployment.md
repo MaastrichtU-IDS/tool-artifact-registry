@@ -265,6 +265,11 @@ manifest sets `nginx.ingress.kubernetes.io/proxy-body-size: "2m"`. Without it a 
 record is rejected by the proxy, with the proxy's error rather than the registry's. Keep the two
 in step if you raise either.
 
+The registry rate-limits per client address, and behind an ingress every request arrives from
+the controller's pods. List their network in `TAR_TRUSTED_PROXIES` (commented out in
+`kustomization.yaml`), or every client shares the proxy's bucket and the first busy minute
+locks out everyone.
+
 ## The published image
 
 `ghcr.io/maastrichtu-ids/tool-artifact-registry`, built and pushed by
@@ -309,6 +314,7 @@ wrong:
 | `TAR_WORKLOAD_ISSUERS` | Extra issuers accepted for *workload* tokens only — a Kubernetes API server, a CI provider. They are trusted to say which deployment is calling and nothing else; only `TAR_OIDC_ISSUER` may assert roles. Getting that backwards hands the registry to anyone who can open a pull request. |
 | `TAR_SPARQL_ENDPOINT` | An external graph store instead of the embedded one. Setting it is the whole switch. |
 | `TAR_OPERATOR` | Who runs this. Reported in `/.well-known/tar-registry`. |
+| `TAR_TRUSTED_PROXIES` | The reverse proxy's or ingress's addresses. Without it, rate limits charge every client to the proxy and one busy minute locks everyone out. |
 
 `tar config` prints the effective configuration with secrets redacted, reading the environment
 exactly as `serve` does — so it answers "why is this registry behaving like that" without

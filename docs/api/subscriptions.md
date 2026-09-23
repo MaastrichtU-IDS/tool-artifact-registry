@@ -28,8 +28,9 @@ curl -X POST -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/jso
 ```
 
 That token can create, read, edit, acknowledge and delete its deployment's subscriptions and
-nothing else. It cannot advertise or register, and it cannot manage the deployment's tokens,
-which would let it mint itself a wider one. The deployment's other credentials keep managing
+nothing else. It cannot advertise or register. It cannot manage the deployment's tokens, which
+would let it mint itself a wider one, and it cannot edit or announce the deployment's record,
+which carries the scopes the deployment may be given. The deployment's other credentials keep managing
 its subscriptions as before.
 
 ## Creating one

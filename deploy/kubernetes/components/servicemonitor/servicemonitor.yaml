@@ -1,0 +1,21 @@
+# /metrics is reachable without a credential whatever TAR_PUBLIC_READ says, so the scrape needs
+# no token. It is also exempt from rate limiting.
+#
+# kube-prometheus-stack only picks up ServiceMonitors carrying its release label by default. If
+# yours does, add that label here — `release: <your release name>` — or nothing is scraped and
+# nothing says why.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: tar
+spec:
+  # A ServiceMonitor selects Services, not pods: this is the label on service.yaml.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tool-artifact-registry
+  endpoints:
+    - port: http
+      path: /metrics
+      # Not the operator's 30s default. Every scrape counts the whole graph and every record
+      # kind, and the numbers it reports move on the scale of hours.
+      interval: 60s

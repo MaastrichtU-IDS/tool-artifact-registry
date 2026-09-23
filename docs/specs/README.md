@@ -16,6 +16,7 @@ say what else was considered.
 | [Federated search propagation](2026-08-31-federated-search-propagation.md) | Live fan-out across a graph of registries without looping. |
 | [Rate limiting](2026-09-23-rate-limiting.md) | Answers Q8: cost classes, keying on the verified principal, and finding the client behind a proxy. |
 | [Changing the base IRI](2026-09-23-base-iri-rebase.md) | Answers Q9: renaming the registry's own records, and answering for the old IRIs afterwards. |
+| [Deployment manifests](2026-09-24-deployment-manifests.md) | Amends §10.3: Kustomize only, no Helm chart, and an optional ServiceMonitor. |
 | [Peer stubs](2026-09-24-peer-stubs.md) | Answers Q3: when a quiet peer's records are flagged stale, and what a cached stub keeps. |
 
 The [frontend handoff](../design-handoff.md) is the corresponding document for the UI, including

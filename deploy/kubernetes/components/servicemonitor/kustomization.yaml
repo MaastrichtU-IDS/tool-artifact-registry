@@ -1,0 +1,13 @@
+# Optional: tells a Prometheus Operator to scrape /metrics. Off by default, because applying a
+# ServiceMonitor to a cluster without the operator's CRDs fails the whole `kubectl apply -k`,
+# not just this object. Enable it in ../../kustomization.yaml:
+#
+#   components:
+#     - components/servicemonitor
+#
+# Being a component of the base, it takes the base's namespace and labels like everything else.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - servicemonitor.yaml

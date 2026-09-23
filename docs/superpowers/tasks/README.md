@@ -21,7 +21,7 @@ brainstorming flow, get the design approved, and write a spec in `docs/specs/` b
 | 04 | [Repository liveness metrics](04-repo-liveness-metrics.md) | Needs design · **decided** | limitations #4, handoff §9 |
 | 05 | [Deduplicate federated search results](05-federated-dedup.md) | Needs design · **decided** | limitations #6 |
 | 06 | [A `subscribe:*` scope](06-subscribe-scope.md) | Bounded · **done** on `bounded-tasks` | limitations #14 |
-| 07 | [Helm chart and ServiceMonitor, or drop the promise](07-helm-chart.md) | Needs decision · **decided** | spec §10.3 |
+| 07 | [Helm chart and ServiceMonitor, or drop the promise](07-helm-chart.md) | Needs decision · **done** on `kustomize-servicemonitor` | spec §10.3 |
 
 Suggested order: 01 and 02 (small, independent), then 03, 06, 05, 04, 07.
 

@@ -132,6 +132,13 @@ impl Principal {
         !self.scopes.is_empty() && self.scopes.iter().all(|s| s == SCOPE_SUBSCRIBE_ARTIFACTS)
     }
 
+    /// May act as this deployment — edit its record, capability or tokens. Its own credential
+    /// may, unless it is subscribe-only: that scope exists to manage webhooks and nothing else.
+    /// Subscriptions check `instance_iri` directly, because they are what that scope is for.
+    pub fn acts_for_instance(&self, instance_iri: &str) -> bool {
+        self.instance_iri.as_deref() == Some(instance_iri) && !self.is_subscribe_only()
+    }
+
     pub fn has_scope(&self, scope: &str) -> bool {
         self.is_admin() || self.scopes.contains(scope)
     }

@@ -6,8 +6,14 @@
 //! a curator from a stranger nor a list read from a SPARQL query.
 
 use crate::auth::Principal;
+use crate::error::AppError;
+use crate::state::AppState;
 use anyhow::{bail, Context, Result};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::Method;
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
 use governor::clock::Clock;
 use governor::middleware::StateInformationMiddleware;
 use governor::state::keyed::DefaultKeyedStateStore;
@@ -15,9 +21,11 @@ use governor::Quota;
 use governor::RateLimiter;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::net::SocketAddr;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -471,6 +479,121 @@ pub fn is_exempt(p: &Principal) -> bool {
 /// The same subject at two issuers is two callers.
 pub fn principal_key(p: &Principal) -> String {
     format!("{}|{}", p.issuer.as_deref().unwrap_or(""), p.subject)
+}
+
+// --------------------------------------------------------------------------- middleware
+
+/// Who is calling, resolved once per request and stored in its extensions. The `Principal`
+/// extractor returns `principal` rather than authenticating again, so a route's own `401` —
+/// the MCP endpoint's `WWW-Authenticate` challenge among them — is exactly what it was.
+#[derive(Debug, Clone)]
+pub struct ClientContext {
+    pub ip: IpAddr,
+    pub principal: Result<Principal, AppError>,
+}
+
+const RATELIMIT_POLICY: HeaderName = HeaderName::from_static("ratelimit-policy");
+const RATELIMIT: HeaderName = HeaderName::from_static("ratelimit");
+
+pub async fn middleware(State(state): State<Arc<AppState>>, mut req: Request, next: Next) -> Response {
+    let limits = &state.rate_limits;
+    let ctx = match req.extensions().get::<ClientContext>() {
+        // Already resolved: an MCP tool call dispatched in-process carries its caller's.
+        Some(ctx) => ctx.clone(),
+        None => {
+            let peer = req
+                .extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |c| c.0.ip());
+            let forwarded = forwarded_for(req.headers());
+            let ip = client_ip(peer, forwarded.as_deref(), &limits.config().trusted_proxies);
+            let principal = match crate::auth::bearer(req.headers()) {
+                None => Ok(Principal::anonymous()),
+                Some(raw) => {
+                    if limits.config().enabled {
+                        if let Some(wait) = limits.auth_blocked(ip) {
+                            limits.note_auth_fail_rejection();
+                            let detail = "authentication refused for this address: too many failed credentials";
+                            return too_many(wait, detail.into());
+                        }
+                    }
+                    let result = crate::auth::authenticate(&state, &raw).await;
+                    // Only a refused credential counts, not the ops store being down.
+                    if limits.config().enabled && matches!(&result, Err(e) if e.status == StatusCode::UNAUTHORIZED) {
+                        limits.note_auth_failure(ip);
+                    }
+                    result
+                }
+            };
+            let ctx = ClientContext { ip, principal };
+            req.extensions_mut().insert(ctx.clone());
+            ctx
+        }
+    };
+
+    if !limits.config().enabled {
+        return next.run(req).await;
+    }
+    let Some(class) = classify(req.method(), req.uri().path(), req.uri().query()) else {
+        return next.run(req).await;
+    };
+    let (key, authenticated) = match &ctx.principal {
+        Ok(p) if is_exempt(p) => return next.run(req).await,
+        Ok(p) if !p.is_anonymous() => (Key::Principal(principal_key(p)), true),
+        // Anonymous, or a credential that failed: charged to the address, so a stream of random
+        // bearer strings does not buy a fresh bucket each.
+        _ => (Key::Ip(bucket(ctx.ip)), false),
+    };
+    match limits.check(class, &key, authenticated) {
+        Decision::Exempt => next.run(req).await,
+        Decision::Limited { limit, retry_after, detail } => {
+            let mut resp = too_many(retry_after, detail);
+            set_ratelimit_headers(resp.headers_mut(), class, limit, 0);
+            resp
+        }
+        Decision::Allowed { limit, remaining } => {
+            let mut resp = next.run(req).await;
+            set_ratelimit_headers(resp.headers_mut(), class, limit, remaining);
+            resp
+        }
+    }
+}
+
+/// Every `X-Forwarded-For` header, joined: a proxy may append a second header rather than
+/// extending the first.
+fn forwarded_for(headers: &HeaderMap) -> Option<String> {
+    let all: Vec<&str> = headers.get_all("x-forwarded-for").iter().filter_map(|v| v.to_str().ok()).collect();
+    (!all.is_empty()).then(|| all.join(","))
+}
+
+fn too_many(retry_after: Duration, detail: String) -> Response {
+    let secs = retry_after.as_secs().saturating_add(u64::from(retry_after.subsec_nanos() > 0)).max(1);
+    let mut resp = AppError::too_many_requests(detail).with("retry_after", serde_json::json!(secs)).into_response();
+    resp.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(secs));
+    resp
+}
+
+/// `draft-ietf-httpapi-ratelimit-headers`: the policy (quota per 60-second window) and what is
+/// left of it, with `t` the seconds until the burst is fully replenished.
+fn set_ratelimit_headers(headers: &mut HeaderMap, class: Class, limit: Limit, remaining: u32) {
+    let spent = u64::from(limit.burst.get().saturating_sub(remaining));
+    let reset = (spent * 60).div_ceil(u64::from(limit.per_minute.get()));
+    let name = class.name();
+    if let Ok(v) = HeaderValue::from_str(&format!("\"{name}\";q={};w=60", limit.per_minute)) {
+        headers.insert(RATELIMIT_POLICY, v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&format!("\"{name}\";r={remaining};t={reset}")) {
+        headers.insert(RATELIMIT, v);
+    }
+}
+
+/// Sweep replenished keys once a minute (see [`RateLimits::retain_recent`]).
+pub async fn retain_loop(state: Arc<AppState>) {
+    let mut tick = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        tick.tick().await;
+        state.rate_limits.retain_recent();
+    }
 }
 
 #[cfg(test)]

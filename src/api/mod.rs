@@ -154,6 +154,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         // handler: there are more than twenty read routes, and a setting that is enforced in
         // nineteen of them is not a setting.
         .layer(axum::middleware::from_fn_with_state(state.clone(), require_read_access))
+        // Outside `require_read_access`, so a closed registry's refusals are rate-limited too.
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::ratelimit::middleware))
         .layer(DefaultBodyLimit::max(limit))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .layer(TraceLayer::new_for_http())

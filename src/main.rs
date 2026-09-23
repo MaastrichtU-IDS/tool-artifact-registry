@@ -146,12 +146,18 @@ async fn serve() -> Result<()> {
     // Webhook delivery, off the request path for the same reason peer resolution is: nothing a
     // subscriber's endpoint does may be felt by the deployment that advertised.
     tokio::spawn(api::subscriptions::delivery_loop(state.clone()));
+    if state.config.rate_limit.enabled {
+        tokio::spawn(tar::ratelimit::retain_loop(state.clone()));
+    }
 
     let app = tar::app(state.clone());
     let listener = tokio::net::TcpListener::bind(&listen).await.with_context(|| format!("binding {listen}"))?;
     let addr = listener.local_addr()?;
     tracing::info!(%addr, base_iri = %state.config.base_iri, "tool-artifact-registry listening");
-    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await.context("server error")?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .context("server error")?;
     Ok(())
 }
 

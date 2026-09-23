@@ -32,6 +32,9 @@ pub struct Config {
     pub peer_resolve_ttl: Duration,
     pub peer_resolve_timeout: Duration,
     pub federated_search_timeout: Duration,
+    /// How often the forge poller refreshes a record's repository stats
+    /// (`TAR_FORGE_POLL_INTERVAL`, spec §10.5; see `domain::forge::poll_loop`).
+    pub forge_poll_interval: Duration,
     /// An external SPARQL 1.1 endpoint to use *instead of* the embedded store. Absent — the
     /// default, and what everybody running this today has — means embedded Oxigraph under
     /// `data_dir`, unchanged.
@@ -299,6 +302,7 @@ impl Config {
             peer_resolve_ttl: env_duration("TAR_PEER_RESOLVE_TTL", "24h")?,
             peer_resolve_timeout: env_duration("TAR_PEER_RESOLVE_TIMEOUT", "5s")?,
             federated_search_timeout: env_duration("TAR_FEDERATED_SEARCH_TIMEOUT", "3s")?,
+            forge_poll_interval: env_duration("TAR_FORGE_POLL_INTERVAL", "24h")?,
             // "if user doesn't provide a sparql endpoint, fall back to oxigraph" — so the
             // absence of one variable is the whole switch, and an existing install changes
             // nothing.
@@ -327,6 +331,8 @@ impl Config {
             peer_resolve_ttl: Duration::from_secs(86400),
             peer_resolve_timeout: Duration::from_secs(5),
             federated_search_timeout: Duration::from_secs(3),
+            // The default. Tests never start the poller; they call `poll_once` with their own.
+            forge_poll_interval: Duration::from_secs(86400),
             sparql_backend: None,
             oidc: OidcConfig {
                 client_claim: "azp".into(),

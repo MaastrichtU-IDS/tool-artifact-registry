@@ -70,6 +70,14 @@ export interface SyncStatus {
   last_changed?: string[]
 }
 
+export interface RepositoryStats {
+  stars?: number
+  forks?: number
+  last_commit_at?: string
+  fetched_at?: string
+  last_error?: string
+}
+
 export const SYNCABLE_FIELDS = [
   'tagline', 'description', 'readme', 'homepage', 'license', 'keywords', 'maturity',
   'releases', 'image',
@@ -127,6 +135,8 @@ export interface Software {
   capability?: Capability
   sync?: SyncStatus
   latest_release?: Release
+  /** Absent until the forge poller has fetched the repository; never zeros for unknown. */
+  repository_stats?: RepositoryStats
   instance_count: number
   release_count: number
   runs_30d: number

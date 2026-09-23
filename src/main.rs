@@ -135,6 +135,8 @@ async fn main() -> Result<()> {
             println!("workload issuers      {}", c.oidc.workload_issuers.join(", "));
             println!("oidc client claim     {}", c.oidc.client_claim);
             println!("peer resolve          {} (ttl {:?})", c.peer_resolve_enabled, c.peer_resolve_ttl);
+            let forge_token = if tar::domain::forge::token_for(None).is_some() { "token" } else { "anonymous" };
+            println!("forge poll interval   {:?} ({forge_token})", c.forge_poll_interval);
             let rl = &c.rate_limit;
             let side = |l: Option<tar::ratelimit::Limit>| l.map_or_else(|| "off".to_string(), |l| l.to_string());
             println!("rate_limit            {}", if rl.enabled { "on" } else { "off" });
@@ -188,6 +190,7 @@ async fn serve() -> Result<()> {
         tokio::spawn(api::peers::resolver_loop(state.clone()));
     }
     tokio::spawn(tar::health::check_loop(state.clone()));
+    tokio::spawn(tar::domain::forge::poll_loop(state.clone()));
     // Webhook delivery, off the request path for the same reason peer resolution is: nothing a
     // subscriber's endpoint does may be felt by the deployment that advertised.
     tokio::spawn(api::subscriptions::delivery_loop(state.clone()));

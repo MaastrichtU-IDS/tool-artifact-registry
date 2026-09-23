@@ -382,6 +382,76 @@ impl Ops {
         Ok(r.rows_affected() > 0)
     }
 
+    // ------------------------------------------------------ repository stats
+
+    /// The last forge poll for one software record, if there has been one.
+    pub async fn repository_stats(&self, software_iri: &str) -> Result<Option<crate::model::RepositoryStats>> {
+        let row = sqlx::query("SELECT * FROM repository_stats WHERE software_iri = ?")
+            .bind(software_iri)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| crate::model::RepositoryStats {
+            repo: r.get("repo"),
+            stars: r.get("stars"),
+            forks: r.get("forks"),
+            last_commit_at: r.get("last_commit_at"),
+            fetched_at: r.get("fetched_at"),
+            checked_at: r.get("checked_at"),
+            last_error: r.get("last_error"),
+        }))
+    }
+
+    pub async fn record_repository_stats(
+        &self,
+        software_iri: &str,
+        repo: &str,
+        stars: Option<i64>,
+        forks: Option<i64>,
+        last_commit_at: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT OR REPLACE INTO repository_stats
+               (software_iri, repo, stars, forks, last_commit_at, fetched_at, checked_at, last_error)
+             VALUES (?,?,?,?,?,?,?,NULL)",
+        )
+        .bind(software_iri)
+        .bind(repo)
+        .bind(stars)
+        .bind(forks)
+        .bind(last_commit_at)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Record a failed poll. The previous numbers are kept, because a day-old count is still
+    /// worth showing, unless they belong to a different repository from the one just asked
+    /// about: then they describe the wrong project and go. SQLite evaluates every `SET`
+    /// expression against the old row, so `repo` inside the `CASE`s is the stored one.
+    pub async fn record_repository_error(&self, software_iri: &str, repo: &str, error: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO repository_stats (software_iri, repo, checked_at, last_error) VALUES (?,?,?,?)
+             ON CONFLICT(software_iri) DO UPDATE SET
+               checked_at = excluded.checked_at,
+               last_error = excluded.last_error,
+               stars = CASE WHEN repo = excluded.repo THEN stars END,
+               forks = CASE WHEN repo = excluded.repo THEN forks END,
+               last_commit_at = CASE WHEN repo = excluded.repo THEN last_commit_at END,
+               fetched_at = CASE WHEN repo = excluded.repo THEN fetched_at END,
+               repo = excluded.repo",
+        )
+        .bind(software_iri)
+        .bind(repo)
+        .bind(Utc::now().to_rfc3339())
+        .bind(error)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     // ----------------------------------------------------------------- audit
 
     pub async fn audit(

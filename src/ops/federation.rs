@@ -296,6 +296,8 @@ impl FedSearchHit {
                 peer_base_iri: Some(direct_peer.base_iri.clone()),
                 cached_at: None,
                 resolve_status: Some("live".into()),
+                // It just answered.
+                stale: false,
             };
         } else {
             // Already attributed to its home registry by the peer that relayed it. Keep that

@@ -32,6 +32,11 @@ export function OriginChip({
       {cachedNote && !origin.cached_at && origin.resolve_status !== 'live' && (
         <span className="muted" style={{ fontSize: 12 }}>not resolved yet</span>
       )}
+      {origin.stale && (
+        <span className="chip warn" title="Its home registry has not answered in 90 days. Kept, but it may be out of date.">
+          stale
+        </span>
+      )}
     </span>
   )
 }

@@ -26,6 +26,11 @@ describe('OriginChip', () => {
     expect(screen.getByText(/cached 3h ago/)).toBeInTheDocument()
   })
 
+  it('says in words when a record comes from a peer gone quiet', () => {
+    wrap(<OriginChip origin={{ kind: 'peer', peer_title: 'MUMC', cached_at: '2026-01-01T00:00:00Z', stale: true }} />)
+    expect(screen.getByText('stale')).toBeInTheDocument()
+  })
+
   it('says so when a cross-link has not been resolved', () => {
     wrap(<OriginChip origin={{ kind: 'peer' }} />)
     expect(screen.getByText('not resolved yet')).toBeInTheDocument()

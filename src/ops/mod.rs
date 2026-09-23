@@ -62,6 +62,24 @@ pub struct PeerRecord {
     pub record_count: i64,
     pub state: String,
     pub suggested_by: Option<String>,
+    /// Not heard from in [`PEER_STALE_AFTER_DAYS`]; computed when read, never stored.
+    #[serde(default)]
+    pub stale: bool,
+}
+
+/// A peer whose last successful contact is older than this has its cached records flagged
+/// stale — kept, never dropped, so nothing here that cites them dangles (design note: peer
+/// stubs). A constant until somebody needs another number.
+pub const PEER_STALE_AFTER_DAYS: i64 = 90;
+
+impl PeerRecord {
+    /// Judged from the last successful contact, or from when the peer was added if it has never
+    /// been reached. An unparseable timestamp is not evidence of anything, so it is not stale.
+    pub fn is_stale_at(&self, now: chrono::DateTime<Utc>) -> bool {
+        let since = self.last_seen_at.as_deref().unwrap_or(&self.added_at);
+        chrono::DateTime::parse_from_rfc3339(since)
+            .is_ok_and(|t| now.signed_duration_since(t) > ChronoDuration::days(PEER_STALE_AFTER_DAYS))
+    }
 }
 
 impl Ops {
@@ -255,6 +273,28 @@ impl Ops {
         Ok(r.rows_affected() > 0)
     }
 
+    /// Record the outcome of contacting a peer. Success is what `last_seen_at` means, so a
+    /// failure leaves it alone: the peer was last seen when it last answered.
+    pub async fn note_peer_contact(&self, id: &str, error: Option<&str>) -> Result<()> {
+        match error {
+            None => {
+                sqlx::query("UPDATE peers SET last_seen_at = ?, resolve_status = 'ok', last_error = NULL WHERE id = ?")
+                    .bind(Utc::now().to_rfc3339())
+                    .bind(id)
+                    .execute(&self.pool)
+                    .await?
+            }
+            Some(e) => {
+                sqlx::query("UPDATE peers SET resolve_status = 'error', last_error = ? WHERE id = ?")
+                    .bind(e)
+                    .bind(id)
+                    .execute(&self.pool)
+                    .await?
+            }
+        };
+        Ok(())
+    }
+
     pub async fn set_peer_record_count(&self, id: &str, n: i64) -> Result<()> {
         sqlx::query("UPDATE peers SET record_count = ? WHERE id = ?").bind(n).bind(id).execute(&self.pool).await?;
         Ok(())
@@ -278,8 +318,10 @@ impl Ops {
 
     pub async fn due_resolves(&self, limit: i64) -> Result<Vec<String>> {
         let rows = sqlx::query(
+            // Resolved entries too: `mark_resolved` schedules their refresh at the TTL, and
+            // skipping them meant a stub was fetched once and never again.
             "SELECT iri FROM resolve_queue
-             WHERE status != 'resolved' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+             WHERE next_attempt_at IS NULL OR next_attempt_at <= ?
              ORDER BY next_attempt_at LIMIT ?",
         )
         .bind(Utc::now().to_rfc3339())
@@ -458,6 +500,11 @@ fn peer_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<PeerRecord> {
         record_count: row.try_get("record_count")?,
         state: row.try_get("state")?,
         suggested_by: row.try_get("suggested_by")?,
+        stale: false,
+    })
+    .map(|mut p| {
+        p.stale = p.is_stale_at(Utc::now());
+        p
     })
 }
 
@@ -479,6 +526,77 @@ fn verify_secret(secret: &str, hash: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_peer_is_stale_after_ninety_days_without_contact() {
+        let now = Utc::now();
+        let ago = |days: i64| (now - ChronoDuration::days(days)).to_rfc3339();
+        let peer = |added: String, seen: Option<String>| PeerRecord {
+            id: "p".into(),
+            base_iri: "https://peer.example".into(),
+            title: None,
+            operator: None,
+            added_at: added,
+            last_seen_at: seen,
+            resolve_status: "ok".into(),
+            last_error: None,
+            record_count: 0,
+            state: "active".into(),
+            suggested_by: None,
+            stale: false,
+        };
+        assert!(!peer(ago(400), Some(ago(89))).is_stale_at(now), "seen recently");
+        assert!(peer(ago(400), Some(ago(91))).is_stale_at(now), "not seen for 91 days");
+        assert!(peer(ago(91), None).is_stale_at(now), "never reached, added 91 days ago");
+        assert!(!peer(ago(10), None).is_stale_at(now), "never reached, but only just added");
+        assert!(!peer("garbage".into(), None).is_stale_at(now));
+    }
+
+    /// A resolved stub is refreshed at its TTL. It used to be skipped for good.
+    #[tokio::test]
+    async fn a_resolved_stub_is_due_again_when_its_ttl_runs_out() {
+        let ops = Ops::open(":memory:").await.unwrap();
+        let (expired, fresh) = ("https://peer.example/artifact/1", "https://peer.example/artifact/2");
+        for iri in [expired, fresh] {
+            ops.queue_resolve(iri, None).await.unwrap();
+        }
+        ops.mark_resolved(expired, ChronoDuration::seconds(-1)).await.unwrap();
+        ops.mark_resolved(fresh, ChronoDuration::hours(24)).await.unwrap();
+        assert_eq!(ops.due_resolves(10).await.unwrap(), vec![expired.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn contacting_a_peer_is_recorded_and_a_failure_keeps_when_it_was_last_seen() {
+        let ops = Ops::open(":memory:").await.unwrap();
+        let long_ago = (Utc::now() - ChronoDuration::days(200)).to_rfc3339();
+        ops.upsert_peer(&PeerRecord {
+            id: "p".into(),
+            base_iri: "https://peer.example".into(),
+            title: None,
+            operator: None,
+            added_at: long_ago.clone(),
+            last_seen_at: Some(long_ago),
+            resolve_status: "ok".into(),
+            last_error: None,
+            record_count: 0,
+            state: "active".into(),
+            suggested_by: None,
+            stale: false,
+        })
+        .await
+        .unwrap();
+        assert!(ops.get_peer("p").await.unwrap().unwrap().stale, "200 days without contact");
+
+        ops.note_peer_contact("p", None).await.unwrap();
+        let seen = ops.get_peer("p").await.unwrap().unwrap();
+        assert!(!seen.stale && seen.resolve_status == "ok", "{seen:?}");
+
+        ops.note_peer_contact("p", Some("timed out")).await.unwrap();
+        let failed = ops.get_peer("p").await.unwrap().unwrap();
+        assert_eq!((failed.resolve_status.as_str(), failed.last_error.as_deref()), ("error", Some("timed out")));
+        assert_eq!(failed.last_seen_at, seen.last_seen_at, "a failure is not a sighting");
+        assert!(!failed.stale, "one failure does not make a recently seen peer stale");
+    }
 
     #[tokio::test]
     async fn mints_and_verifies_a_token_once() {

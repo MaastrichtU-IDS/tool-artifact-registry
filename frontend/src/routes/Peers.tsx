@@ -97,6 +97,7 @@ export default function Peers() {
                       <span className={p.resolve_status === 'ok' ? 'chip ok' : p.resolve_status === 'error' ? 'chip danger' : 'chip'}>
                         {p.resolve_status}
                       </span>
+                      {p.stale && <>{' '}<span className="chip warn" title="Not heard from in 90 days; its records are flagged stale">stale</span></>}
                       {p.last_error && <p className="hint">{p.last_error}</p>}
                     </td>
                     <td className="num">{p.record_count}</td>

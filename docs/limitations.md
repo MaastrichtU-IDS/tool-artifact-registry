@@ -77,11 +77,14 @@ still means sign in again, exactly as before.
 Fan-out is live, and results are not deduplicated across peers beyond the origin chip. Two peers
 that both cache a stub of the same third-party record produce two rows.
 
-## 7. Peer resolution caches more than it needs to
+## 7. ~~Peer resolution caches more than it needs to~~ — closed
 
-The resolver fetches a whole Turtle document into the peer graph rather than extracting a
-minimal stub, so a verbose peer can cache considerably more than the type, title, publisher and
-home registry the design called for.
+The resolver loaded a peer's whole Turtle document into the peer graph. A stub now keeps only
+the record and what it owns (its blank nodes, distributions and checksums), and only in the
+vocabularies the registry's record model reads. Other records that came along in the same
+document are dropped. Existing peer graphs are trimmed as each stub is next refreshed, which,
+it turned out, had never happened: resolved stubs were being skipped by the refresh query. See
+[Peer stubs](specs/2026-09-24-peer-stubs.md).
 
 ## 8. Keyset pagination orders by IRI string
 

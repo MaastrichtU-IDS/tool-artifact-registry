@@ -24,6 +24,10 @@ pub struct Origin {
     pub cached_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolve_status: Option<String>,
+    /// The peer has not answered in 90 days (design note: peer stubs). The record is kept and
+    /// still resolves; this says how far to trust it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stale: bool,
 }
 
 impl Origin {

@@ -8,6 +8,8 @@ export interface Origin {
   peer_base_iri?: string
   cached_at?: string
   resolve_status?: string
+  /** The peer has not answered in 90 days; the record is kept, but may be out of date. */
+  stale?: boolean
 }
 
 export interface TypeRef {
@@ -321,6 +323,7 @@ export interface Peer {
   record_count: number
   state: 'active' | 'suggested' | 'dismissed'
   suggested_by?: string
+  stale?: boolean
 }
 
 export interface TokenRecord {

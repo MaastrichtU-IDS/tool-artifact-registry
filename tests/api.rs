@@ -1503,6 +1503,63 @@ async fn spawn_hostile_peer(hits: usize, title_len: usize) -> String {
     base
 }
 
+/// Peer stubs §4: a graph left over-full by the old resolver, which loaded the peer's whole
+/// document, is trimmed on the next refresh — and refreshing does not count the record again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refresh_trims_a_legacy_peer_graph_and_counts_the_record_once() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let doc = format!(
+        r#"@prefix dct: <http://purl.org/dc/terms/> .
+           <{base}/artifact/1> dct:title "the record" .
+           <{base}/artifact/2> dct:title "a neighbour" .
+           <{base}/> dct:title "the peer's catalog" ."#
+    );
+    let (wk, body) = (base.clone(), doc.clone());
+    let app = axum::Router::new()
+        .route(
+            "/.well-known/tar-registry",
+            axum::routing::get(move || {
+                let wk = wk.clone();
+                async move { axum::Json(json!({"base_iri": wk, "title": "legacy peer", "peers": []})) }
+            }),
+        )
+        .route(
+            "/artifact/1",
+            axum::routing::get(move || {
+                let body = body.clone();
+                async move { ([(axum::http::header::CONTENT_TYPE, "text/turtle")], body) }
+            }),
+        );
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let h = harness().await;
+    let (status, body) = h.post("/api/v1/peers", ROOT, json!({"base_url": base, "announce": false})).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let peer = h.state.ops.list_peers(Some("active")).await.unwrap().remove(0);
+    let graph = tar::ns::peer_graph(&peer.id);
+    let record = format!("{base}/artifact/1");
+    // What the old resolver left behind: the whole document.
+    h.state.store.load_turtle(&doc, &graph, Some(&record)).unwrap();
+    h.state.ops.set_peer_record_count(&peer.id, 1).await.unwrap();
+
+    let resolve = format!("/api/v1/resolve?iri={}&refresh=true", urlencoding(&record));
+    for _ in 0..2 {
+        let (status, body) = h.get(&resolve).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let cached = h.state.store.dump_nquads(Some(&graph)).unwrap();
+    assert!(cached.contains("the record"), "{cached}");
+    assert!(!cached.contains("a neighbour"), "the leftover neighbour is gone: {cached}");
+    assert!(!cached.contains("the peer's catalog"), "{cached}");
+    let peer = h.state.ops.get_peer(&peer.id).await.unwrap().unwrap();
+    assert_eq!(peer.record_count, 1, "refreshing an already cached record does not count it again");
+    assert_eq!(peer.resolve_status, "ok");
+    assert!(peer.last_seen_at.is_some() && !peer.stale);
+}
+
 // ---------------------------------------------------------------- forge sync
 
 #[tokio::test]

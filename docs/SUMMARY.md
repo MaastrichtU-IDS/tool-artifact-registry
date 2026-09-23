@@ -53,4 +53,5 @@
   - [Rate limiting](specs/2026-09-23-rate-limiting.md)
   - [Changing the base IRI](specs/2026-09-23-base-iri-rebase.md)
   - [Deployment manifests](specs/2026-09-24-deployment-manifests.md)
+  - [Peer stubs](specs/2026-09-24-peer-stubs.md)
 - [Frontend handoff](design-handoff.md)

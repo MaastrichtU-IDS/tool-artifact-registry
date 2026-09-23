@@ -57,6 +57,7 @@ impl Ctx {
                     peer_base_iri: Some(p.base_iri.clone()),
                     cached_at: p.last_seen_at.clone(),
                     resolve_status: Some(p.resolve_status.clone()),
+                    stale: p.stale,
                 },
                 None => Origin {
                     kind: "peer".into(),
@@ -82,6 +83,7 @@ impl Ctx {
                     peer_base_iri: Some(p.base_iri.clone()),
                     cached_at: p.last_seen_at.clone(),
                     resolve_status: Some(p.resolve_status.clone()),
+                    stale: p.stale,
                 };
             }
         }

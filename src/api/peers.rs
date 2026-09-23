@@ -128,6 +128,7 @@ pub async fn add(
         record_count: existing.as_ref().map(|p| p.record_count).unwrap_or(0),
         state: "active".into(),
         suggested_by: None,
+        stale: false,
     };
     state.ops.upsert_peer(&record).await.map_err(AppError::from)?;
 
@@ -149,6 +150,7 @@ pub async fn add(
             record_count: 0,
             state: "suggested".into(),
             suggested_by: Some(base_url.clone()),
+            stale: false,
         };
         let _ = state.ops.upsert_peer(&s).await;
     }
@@ -199,6 +201,7 @@ pub async fn announce(State(state): State<Arc<AppState>>, Json(input): Json<Anno
         record_count: 0,
         state: "suggested".into(),
         suggested_by: Some("announce".into()),
+        stale: false,
     };
     state.ops.upsert_peer(&s).await.map_err(AppError::from)?;
     let _ = state.ops.audit(None, "anonymous", "peer.announce", Some(&base), input.title.as_deref(), None).await;
@@ -268,45 +271,137 @@ pub async fn resolve(
 }
 
 /// Dereference a foreign IRI with `Accept: text/turtle`, write a minimal stub into the peer
-/// graph, and record success or backoff.
+/// graph, and record success or backoff — on the IRI, and on the peer it belongs to.
 pub async fn fetch_stub(state: &Arc<AppState>, iri: &str) -> AppResult<serde_json::Value> {
     let peer = owning_peer(state, iri).await;
-    let resp = state.http.get(iri).header(axum::http::header::ACCEPT, "text/turtle").send().await;
-    let body = match resp {
-        Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
-        Ok(r) => {
-            let msg = format!("{iri} returned {}", r.status());
+    let failed = |msg: String| {
+        let (state, peer_id) = (state.clone(), peer.as_ref().map(|p| p.id.clone()));
+        async move {
             let _ = state.ops.mark_resolve_failed(iri, &msg).await;
-            return Err(AppError::bad_request(msg));
-        }
-        Err(e) => {
-            let msg = format!("cannot dereference {iri}: {e}");
-            let _ = state.ops.mark_resolve_failed(iri, &msg).await;
-            return Err(AppError::bad_request(msg));
+            if let Some(id) = peer_id {
+                let _ = state.ops.note_peer_contact(&id, Some(&msg)).await;
+            }
+            AppError::bad_request(msg)
         }
     };
+    let body = match state.http.get(iri).header(axum::http::header::ACCEPT, "text/turtle").send().await {
+        Ok(r) if r.status().is_success() => match r.text().await {
+            Ok(body) => body,
+            // Not an empty document: parsing "" would replace the cached stub with nothing.
+            Err(e) => return Err(failed(format!("reading {iri}: {e}")).await),
+        },
+        Ok(r) => return Err(failed(format!("{iri} returned {}", r.status())).await),
+        Err(e) => return Err(failed(format!("cannot dereference {iri}: {e}")).await),
+    };
+    // It answered, so it is alive, whatever the body turns out to be.
+    if let Some(p) = &peer {
+        let _ = state.ops.note_peer_contact(&p.id, None).await;
+    }
     let peer_id = peer.as_ref().map(|p| p.id.clone()).unwrap_or_else(|| "unknown".into());
     let graph = ns::peer_graph(&peer_id);
-    // Replace whatever we cached before, then load the fresh description.
-    let n = super::blocking({
-        let (state, iri, graph, body) = (state.clone(), iri.to_string(), graph.clone(), body);
+    let stub = match stub_quads(iri, &body, &graph) {
+        Ok(s) => s,
+        Err(e) => return Err(failed(format!("{iri} did not return parseable Turtle: {e}")).await),
+    };
+    // Other records the document describes. Before stubs were trimmed, the whole document was
+    // loaded, so this graph may hold them from an earlier fetch; they go now, unless one of them
+    // is a stub in its own right, which its own refresh keeps.
+    let mut leftovers = Vec::new();
+    for s in stub.others {
+        if !state.ops.is_tracked(&s).await.unwrap_or(true) {
+            leftovers.push(s);
+        }
+    }
+    // Replace whatever we cached before with the trimmed stub, as one `GraphTx`.
+    let n = stub.quads.len();
+    let was_cached = super::blocking({
+        let (state, iri, graph) = (state.clone(), iri.to_string(), graph.clone());
         move || {
+            let q = format!(
+                "ASK {{ GRAPH {} {{ {} ?p ?o }} }}",
+                crate::store::queries::iri(&graph)?,
+                crate::store::queries::iri(&iri)?
+            );
+            let was_cached = state.store.ask(&q).map_err(AppError::from)?;
             let mut tx = crate::store::GraphTx::new();
             tx.replace_subject(&iri, &graph);
+            for s in &leftovers {
+                tx.replace_subject(s, &graph);
+            }
+            tx.extend(stub.quads);
             state.store.apply(tx).map_err(AppError::from)?;
-            state
-                .store
-                .load_turtle(&body, &graph, Some(&iri))
-                .map_err(|e| AppError::bad_request(format!("{iri} did not return parseable Turtle: {e}")))
+            Ok(was_cached)
         }
     })
     .await?;
     let ttl = chrono::Duration::from_std(state.config.peer_resolve_ttl).unwrap_or(chrono::Duration::hours(24));
+    // Tracked from now on, however it was first resolved, so its refresh keeps it and another
+    // document's refresh does not mistake it for a leftover.
+    let _ = state.ops.queue_resolve(iri, peer.as_ref().map(|p| p.id.as_str())).await;
     let _ = state.ops.mark_resolved(iri, ttl).await;
-    if let Some(p) = &peer {
+    // A refresh is not a new record; counting it again would inflate "cached" once a day.
+    if let (Some(p), false) = (&peer, was_cached) {
         let _ = state.ops.set_peer_record_count(&p.id, p.record_count + 1).await;
     }
     Ok(json!({ "iri": iri, "cached": false, "graph": graph, "triples": n, "peer": peer.map(|p| p.base_iri) }))
+}
+
+/// Namespaces the registry's record model reads. A statement in any other vocabulary is
+/// something no screen or query here would ever show, so a stub does not keep it.
+const STUB_NAMESPACES: [&str; 11] =
+    [ns::RDF, ns::RDFS, ns::DCT, ns::DCAT, ns::PROV, ns::SCHEMA, ns::SKOS, ns::SPDX, ns::CODEMETA, ns::FOAF, ns::TAR];
+const OWL_SAME_AS: &str = "http://www.w3.org/2002/07/owl#sameAs";
+
+/// Trim a peer's Turtle to a stub (design note: peer stubs §4). Only the record itself and what
+/// it owns — its blank nodes and the sub-resources `describe` would return with it — and only
+/// in the vocabularies the model reads. Other records in the same document are dropped; they
+/// are resolved on their own if something here cites them.
+struct Stub {
+    quads: Vec<oxigraph::model::Quad>,
+    /// Named subjects in the document that are not part of the stub.
+    others: Vec<String>,
+}
+
+/// Ownership is followed no deeper than the external backend's delete does
+/// (`queries::DEFAULT_DEPTH`), so a refresh there removes everything the last fetch wrote.
+fn stub_quads(iri: &str, turtle: &str, graph: &str) -> anyhow::Result<Stub> {
+    use oxigraph::io::{RdfFormat, RdfParser};
+    use oxigraph::model::{GraphName, NamedNode, NamedOrBlankNode, Quad, Term};
+    let parsed: Vec<Quad> = RdfParser::from_format(RdfFormat::Turtle)
+        .with_base_iri(iri)?
+        .for_slice(turtle.as_bytes())
+        .collect::<Result<_, _>>()?;
+    let graph = GraphName::NamedNode(NamedNode::new(graph)?);
+    let wanted = |p: &str| p == OWL_SAME_AS || STUB_NAMESPACES.iter().any(|ns| p.starts_with(ns));
+    let mut frontier = vec![(NamedOrBlankNode::NamedNode(NamedNode::new(iri)?), 0)];
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    while let Some((node, depth)) = frontier.pop() {
+        if !seen.insert(node.clone()) {
+            continue;
+        }
+        let deeper = depth < crate::store::queries::DEFAULT_DEPTH;
+        for q in parsed.iter().filter(|q| q.subject == node && wanted(q.predicate.as_str())) {
+            match &q.object {
+                Term::BlankNode(b) if deeper => frontier.push((NamedOrBlankNode::BlankNode(b.clone()), depth + 1)),
+                Term::NamedNode(n) if deeper && crate::store::is_owned_subresource(q.predicate.as_str()) => {
+                    frontier.push((NamedOrBlankNode::NamedNode(n.clone()), depth + 1))
+                }
+                _ => {}
+            }
+            out.push(Quad::new(q.subject.clone(), q.predicate.clone(), q.object.clone(), graph.clone()));
+        }
+    }
+    let mut others: Vec<String> = parsed
+        .iter()
+        .filter_map(|q| match &q.subject {
+            NamedOrBlankNode::NamedNode(n) if !seen.contains(&q.subject) => Some(n.as_str().to_string()),
+            _ => None,
+        })
+        .collect();
+    others.sort();
+    others.dedup();
+    Ok(Stub { quads: out, others })
 }
 
 async fn owning_peer(state: &Arc<AppState>, iri: &str) -> Option<PeerRecord> {
@@ -332,5 +427,42 @@ pub async fn resolver_loop(state: Arc<AppState>) {
                 Err(e) => tracing::debug!(iri = %iri, error = ?e.detail, "resolve failed; backing off"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Limitations #7: the record and what it owns, in vocabularies the registry reads.
+    #[test]
+    fn a_stub_keeps_the_record_and_what_it_owns_and_nothing_else() {
+        let doc = r#"
+            @prefix dct: <http://purl.org/dc/terms/> .
+            @prefix dcat: <http://www.w3.org/ns/dcat#> .
+            @prefix spdx: <http://spdx.org/rdf/terms#> .
+            @prefix ex: <https://unrelated.example/ns#> .
+            <https://peer.example/artifact/1> a dcat:Dataset ;
+                dct:title "report" ;
+                ex:internalScore 42 ;
+                dcat:distribution <https://peer.example/distribution/1> .
+            <https://peer.example/distribution/1> dcat:downloadURL <https://files.example/r.ttl> ;
+                spdx:checksum [ spdx:checksumValue "abc" ] .
+            <https://peer.example/artifact/2> dct:title "a neighbour" .
+            <https://peer.example/> a dcat:Catalog ; dct:title "the peer" .
+        "#;
+        let stub = stub_quads("https://peer.example/artifact/1", doc, "urn:tar:peer:p").unwrap();
+        assert_eq!(stub.others, ["https://peer.example/", "https://peer.example/artifact/2"], "what a refresh clears");
+        let quads = stub.quads;
+        let text: Vec<String> = quads.iter().map(|q| q.to_string()).collect();
+        let has = |needle: &str| text.iter().any(|t| t.contains(needle));
+        assert!(has("\"report\""), "{text:#?}");
+        assert!(has("downloadURL"), "the owned distribution is kept: {text:#?}");
+        assert!(has("\"abc\""), "and its checksum, through a blank node: {text:#?}");
+        assert!(!has("internalScore"), "a vocabulary nothing here reads is dropped: {text:#?}");
+        assert!(!has("a neighbour"), "another record in the document is dropped: {text:#?}");
+        assert!(!has("the peer"), "and so is the peer's catalog: {text:#?}");
+        assert!(quads.iter().all(|q| q.graph_name.to_string() == "<urn:tar:peer:p>"));
+        assert_eq!(quads.len(), 6, "{text:#?}");
     }
 }

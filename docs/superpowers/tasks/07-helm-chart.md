@@ -25,3 +25,10 @@ not here — check with the user whether that already exists before duplicating 
 Whichever option: manifests that `kubectl apply -k` / `helm template` render without error
 (add a CI step that renders them), one replica and `Recreate` preserved, a ServiceMonitor
 scraping `/metrics`, `docs/operations/deployment.md` and spec §10.3 agreeing with what ships.
+
+## Decisions (user, 2026-09-24)
+
+- **Kustomize only.** Amend spec §10.3 to say so and why, and add a **ServiceMonitor as an
+  optional Kustomize component**. Render the manifests in CI.
+- The ids3 deployment **already exists in the services repository**. This repo ships only the
+  generic base and the component, and the docs point to the services repo for ids3.

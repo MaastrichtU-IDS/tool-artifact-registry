@@ -34,3 +34,13 @@ which the handoff requires to keep doing whenever the data is unknown.
 Approved spec, then: a poller or cache with tests against a stubbed forge (no network in tests —
 CI must stay offline), the signal-bar cells rendering real numbers and still omitted when unknown
 (frontend test), `TAR_FORGE_*` documented in `docs/operations/configuration.md`, #4 closed.
+
+## Decisions (user, 2026-09-24)
+
+- Stored in **SQLite only**, as operational data. Not in the graph, so peers and SPARQL don't
+  see the numbers.
+- **GitHub only**, matching repository sync. Records hosted elsewhere keep the cells omitted.
+- Fetched by a **background poller** on `TAR_FORGE_POLL_INTERVAL` (24h), spread out to stay
+  within GitHub's rate limit.
+- It uses **the same client, token and egress path as repository sync**: `TAR_FORGE_TOKEN` when
+  set, anonymous otherwise (with a slower poll).

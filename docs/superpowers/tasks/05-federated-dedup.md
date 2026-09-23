@@ -28,3 +28,10 @@ for one record.
 
 A short design note (a section appended to the propagation spec is fine), then: merge by the
 agreed key, a test with two fake peers returning the same IRI, the UI showing one row, #6 closed.
+
+## Decisions (user, 2026-09-24)
+
+- The key is the record's IRI.
+- The **home registry's copy wins** if it answered; otherwise **the freshest cached copy** does.
+- The row keeps its origin chip and gains **`also_from`**, which the UI shows as "also from: A, B".
+- Deduplication happens **at the origin registry only**. Relays pass everything through.

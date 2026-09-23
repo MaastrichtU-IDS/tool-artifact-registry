@@ -38,3 +38,14 @@ Two problems in the same code, best designed together.
 A spec in `docs/specs/`, approved, then an implementation with tests for: the state transition
 at the threshold, a recovered peer coming back, a stub keeping only the agreed predicates, and
 peer search / dereference still working on trimmed stubs. Q3 marked answered; #7 closed.
+
+## Decisions (user, 2026-09-24)
+
+- A long-unreachable peer's stubs are **kept and flagged stale**, never dropped or tombstoned, so
+  local records citing them keep resolving.
+- The threshold is **90 days, per peer**, measured from the peer's last successful resolve.
+- A stub keeps **what the registry actually reads**: type, title, publisher and home registry,
+  plus whatever search, chips and dereference use. Derive the exact predicate list from the code
+  and write it into the spec.
+- Existing over-full peer graphs are **trimmed on their next refresh**. There is no boot
+  migration.

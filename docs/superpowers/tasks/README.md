@@ -7,6 +7,8 @@ the task up cold: context, where the code is, what done looks like, and what is 
 **Before starting any task:** branch from whatever carries the latest work. At the time of
 writing that is `base-iri-rebase`, which contains `rate-limiting`; neither is merged to `main`.
 
+**Decisions.** The user answered every open question for 03, 04, 05 and 07 on 2026-09-24. Each brief now ends with a *Decisions* section; the spec for each still has to be written before any code.
+
 **Two kinds of task.** *Bounded* tasks change code that already exists and can go straight to
 TDD. *Needs design* tasks have an open question the user must answer first — run the
 brainstorming flow, get the design approved, and write a spec in `docs/specs/` before any code.
@@ -15,11 +17,11 @@ brainstorming flow, get the design approved, and write a spec in `docs/specs/` b
 |---|---|---|---|
 | 01 | [`tar dump --graph` restores into the wrong graph](01-dump-graph-name.md) | Bounded · **done** on `bounded-tasks` | limitations #18 |
 | 02 | [Clear the clippy warnings](02-clippy-cleanup.md) | Bounded · **done** on `bounded-tasks` | CI advisory step |
-| 03 | [Peer stub retention, and caching only a stub](03-peer-stub-retention.md) | Needs design | spec Q3, limitations #7 |
-| 04 | [Repository liveness metrics](04-repo-liveness-metrics.md) | Needs design | limitations #4, handoff §9 |
-| 05 | [Deduplicate federated search results](05-federated-dedup.md) | Needs design | limitations #6 |
+| 03 | [Peer stub retention, and caching only a stub](03-peer-stub-retention.md) | Needs design · **decided** | spec Q3, limitations #7 |
+| 04 | [Repository liveness metrics](04-repo-liveness-metrics.md) | Needs design · **decided** | limitations #4, handoff §9 |
+| 05 | [Deduplicate federated search results](05-federated-dedup.md) | Needs design · **decided** | limitations #6 |
 | 06 | [A `subscribe:*` scope](06-subscribe-scope.md) | Bounded · **done** on `bounded-tasks` | limitations #14 |
-| 07 | [Helm chart and ServiceMonitor, or drop the promise](07-helm-chart.md) | Needs decision | spec §10.3 |
+| 07 | [Helm chart and ServiceMonitor, or drop the promise](07-helm-chart.md) | Needs decision · **decided** | spec §10.3 |
 
 Suggested order: 01 and 02 (small, independent), then 03, 06, 05, 04, 07.
 

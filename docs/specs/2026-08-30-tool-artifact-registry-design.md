@@ -653,11 +653,16 @@ volumes: { tar-data: }
 
 One service. That is the whole minimal install (req. 6).
 
-### 10.3 Helm
+### 10.3 Kubernetes
 
-Chart at `deploy/helm/tool-artifact-registry`: Deployment (**1 replica — Oxigraph is
-single-writer**, `strategy: Recreate`), RWO PVC, Service, Ingress, ConfigMap, Secret,
-ServiceMonitor. Probes on `/healthz` and `/readyz`.
+Kustomize at `deploy/kubernetes/`: Deployment (**1 replica — Oxigraph is single-writer**,
+`strategy: Recreate`), RWO PVC, Service, Ingress, generated ConfigMap; the Secret is created out
+of band. Probes on `/healthz` and `/readyz`. A ServiceMonitor scraping `/metrics` is an optional
+Kustomize component, off by default because it needs the Prometheus Operator's CRDs.
+
+**Kustomize only, no Helm chart** (amended 2026-09-24). A chart alongside the Kustomize set would
+be a second set of manifests to keep correct, and the ids3 deployment (§10.4) uses Kustomize and
+ArgoCD anyway. See [Deployment manifests](2026-09-24-deployment-manifests.md).
 
 ### 10.4 ids3
 

@@ -34,6 +34,8 @@ pub struct Config {
     /// `data_dir`, unchanged.
     pub sparql_backend: Option<SparqlBackend>,
     pub oidc: OidcConfig,
+    /// Rate limits (`src/ratelimit.rs`). On by default, so a bare `docker run` is protected.
+    pub rate_limit: crate::ratelimit::RateLimitConfig,
 }
 
 /// A remote graph store, reached over SPARQL 1.1 Query and Update.
@@ -289,6 +291,7 @@ impl Config {
             // nothing.
             sparql_backend: env("TAR_SPARQL_ENDPOINT").map(SparqlBackend::from_env).transpose()?,
             oidc,
+            rate_limit: crate::ratelimit::RateLimitConfig::from_env()?,
         })
     }
 
@@ -318,6 +321,9 @@ impl Config {
                 require_audience: true,
                 ..Default::default()
             },
+            // Off, so no existing test meets a limit by running fast. The middleware that
+            // resolves the client still runs, so every suite exercises authenticate-once.
+            rate_limit: crate::ratelimit::RateLimitConfig::disabled(),
         }
     }
 }

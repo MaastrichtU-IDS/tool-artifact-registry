@@ -99,6 +99,16 @@ async fn main() -> Result<()> {
             println!("workload issuers      {}", c.oidc.workload_issuers.join(", "));
             println!("oidc client claim     {}", c.oidc.client_claim);
             println!("peer resolve          {} (ttl {:?})", c.peer_resolve_enabled, c.peer_resolve_ttl);
+            let rl = &c.rate_limit;
+            let side = |l: Option<tar::ratelimit::Limit>| l.map_or_else(|| "off".to_string(), |l| l.to_string());
+            println!("rate_limit            {}", if rl.enabled { "on" } else { "off" });
+            let proxies: Vec<String> = rl.trusted_proxies.iter().map(ToString::to_string).collect();
+            println!("trusted_proxies       {}", if proxies.is_empty() { "(none)".into() } else { proxies.join(", ") });
+            for class in tar::ratelimit::Class::ALL {
+                let l = rl.limits(class);
+                println!("rate_limit.{:<11}anon {} · authed {}", class.name(), side(l.anon), side(l.authed));
+            }
+            println!("rate_limit.auth_fail  {}", side(rl.auth_fail));
             Ok(())
         }
     }

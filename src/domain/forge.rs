@@ -470,9 +470,10 @@ pub async fn poll_loop(state: Arc<AppState>) {
             async move { repo_stats(&http, &repo, token.as_deref()).await }
         })
         .await;
-        // Wake at least hourly, so a record created this morning gets numbers today rather than
-        // tomorrow; `poll_once` skips everything not yet due, so waking often costs nothing.
-        // The lower bound stops a zero interval from spinning on the store.
+        // Between passes, wake at least hourly: `poll_once` skips everything not yet due, so
+        // waking often costs nothing. A pass itself is spread over the interval, though, so a
+        // record created while one is running waits for the next pass — up to about one
+        // interval. The lower bound stops a zero interval from spinning on the store.
         tokio::time::sleep(interval.clamp(Duration::from_secs(60), Duration::from_secs(3600))).await;
     }
 }

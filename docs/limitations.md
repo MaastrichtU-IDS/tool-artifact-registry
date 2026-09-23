@@ -129,11 +129,14 @@ The check now returns the addresses it approved and the delivery is pinned to th
 no second lookup to win. TLS still verifies the certificate against the hostname: pinning
 replaces DNS, not identity.
 
-## 14. Subscriptions have no scope of their own
+## 14. ~~Subscriptions have no scope of their own~~ — closed
 
-Managing a subscription reuses the rule that governs token management — admin, curator, or the
-credential of the owning deployment. There is no `subscribe:*` scope, so a credential cannot be
-issued that may subscribe and nothing else.
+There was no scope for subscribing, so a consumer that only wanted webhooks had to be given a
+credential that could also advertise. `subscribe:artifacts` now exists: a deployment token with
+only that scope manages the deployment's subscriptions and is refused everything else, including
+the deployment's own token endpoints. The scope adds a narrower way in and takes nothing away,
+so the owning deployment's other credentials, curators and admins manage subscriptions exactly
+as before. See [Subscriptions](api/subscriptions.md).
 
 ## 15. ~~The external SPARQL backend blocks a worker thread per store call~~ — closed for the request path
 

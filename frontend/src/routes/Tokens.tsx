@@ -5,7 +5,7 @@ import { useAsync } from '../lib/useAsync'
 import { CopyField, ErrorState, Modal, ProblemJsonError, Skeleton } from '../components/common'
 import { RelativeTime } from '../components/chips'
 
-const SCOPES = ['advertise:produce', 'advertise:consume', 'register:software', 'register:instance', 'read:private']
+const SCOPES = ['advertise:produce', 'advertise:consume', 'register:software', 'register:instance', 'read:private', 'subscribe:artifacts']
 
 export default function Tokens() {
   const { id = '' } = useParams()

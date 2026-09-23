@@ -32,14 +32,19 @@ pub const SCOPE_ADVERTISE_CONSUME: &str = "advertise:consume";
 pub const SCOPE_REGISTER_SOFTWARE: &str = "register:software";
 pub const SCOPE_REGISTER_INSTANCE: &str = "register:instance";
 pub const SCOPE_READ_PRIVATE: &str = "read:private";
+/// Manage the owning deployment's subscriptions, and nothing else (limitations #14). A
+/// deployment's other credentials may still manage its subscriptions without it: the scope adds
+/// a narrower way in and takes nothing away.
+pub const SCOPE_SUBSCRIBE_ARTIFACTS: &str = "subscribe:artifacts";
 pub const SCOPE_ADMIN: &str = "admin:*";
 
-pub const ALL_SCOPES: [&str; 6] = [
+pub const ALL_SCOPES: [&str; 7] = [
     SCOPE_ADVERTISE_PRODUCE,
     SCOPE_ADVERTISE_CONSUME,
     SCOPE_REGISTER_SOFTWARE,
     SCOPE_REGISTER_INSTANCE,
     SCOPE_READ_PRIVATE,
+    SCOPE_SUBSCRIBE_ARTIFACTS,
     SCOPE_ADMIN,
 ];
 
@@ -119,6 +124,12 @@ impl Principal {
 
     pub fn is_curator(&self) -> bool {
         self.is_admin() || self.roles.contains(&Role::Curator)
+    }
+
+    /// Holds `subscribe:artifacts` and no other scope: a credential for a downstream consumer
+    /// that manages its webhooks, and must not be able to do anything else as the deployment.
+    pub fn is_subscribe_only(&self) -> bool {
+        !self.scopes.is_empty() && self.scopes.iter().all(|s| s == SCOPE_SUBSCRIBE_ARTIFACTS)
     }
 
     pub fn has_scope(&self, scope: &str) -> bool {

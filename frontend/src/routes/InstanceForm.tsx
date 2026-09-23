@@ -6,7 +6,7 @@ import { useSession } from '../lib/session'
 import { ProblemJsonError, Skeleton } from '../components/common'
 import { TermPicker } from '../components/TermPicker'
 
-const SCOPES = ['advertise:produce', 'advertise:consume', 'register:software', 'register:instance', 'read:private']
+const SCOPES = ['advertise:produce', 'advertise:consume', 'register:software', 'register:instance', 'read:private', 'subscribe:artifacts']
 
 export default function InstanceForm() {
   const { id } = useParams()

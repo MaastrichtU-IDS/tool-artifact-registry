@@ -611,6 +611,7 @@ fn list_enumerations() -> Outcome {
                 "register:software": "register and update software",
                 "register:instance": "register deployments",
                 "read:private": "read records that are not publicly readable",
+                "subscribe:artifacts": "manage the deployment's own subscriptions, and nothing else",
                 "admin:*": "everything",
             }
         },

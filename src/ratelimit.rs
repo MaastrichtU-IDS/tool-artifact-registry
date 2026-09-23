@@ -5,11 +5,21 @@
 //! than only at an ingress because a bare `docker run` has none, and an ingress can tell neither
 //! a curator from a stranger nor a list read from a SPARQL query.
 
+use crate::auth::Principal;
 use anyhow::{bail, Context, Result};
 use axum::http::Method;
+use governor::clock::Clock;
+use governor::middleware::StateInformationMiddleware;
+use governor::state::keyed::DefaultKeyedStateStore;
 use governor::Quota;
+use governor::RateLimiter;
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 // ------------------------------------------------------------------------------ classes
 
@@ -320,10 +330,154 @@ impl RateLimitConfig {
     }
 }
 
+// ------------------------------------------------------------------------------ runtime
+
+/// Who a request is charged to.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Key {
+    Ip(IpAddr),
+    Principal(String),
+}
+
+/// What the limiter decided about one request.
+#[derive(Debug)]
+pub enum Decision {
+    /// No limit applies to this class and side.
+    Exempt,
+    Allowed {
+        limit: Limit,
+        remaining: u32,
+    },
+    Limited {
+        limit: Limit,
+        retry_after: Duration,
+        detail: String,
+    },
+}
+
+/// `StateInformationMiddleware` so an accepted request learns how much burst is left, for the
+/// `RateLimit` header.
+type Limiter = RateLimiter<Key, DefaultKeyedStateStore<Key>, governor::clock::DefaultClock, StateInformationMiddleware>;
+
+fn limiter(limit: Option<Limit>) -> Option<Limiter> {
+    limit.map(|l| RateLimiter::keyed(l.quota()).with_middleware::<StateInformationMiddleware>())
+}
+
+/// The live limiters. On `AppState`, not on the router: the MCP server builds a router per tool
+/// call and the tests build one per harness, and limiters owned by a router would reset each time.
+pub struct RateLimits {
+    anon: Vec<Option<Limiter>>,
+    authed: Vec<Option<Limiter>>,
+    auth_fail: Option<Limiter>,
+    /// Addresses refused authentication until the instant given. governor cannot report "this
+    /// key is empty" without spending from it, so the refusal is recorded when it happens.
+    auth_blocked: Mutex<HashMap<IpAddr, Instant>>,
+    rejections: [AtomicU64; 6],
+    auth_fail_rejections: AtomicU64,
+    config: RateLimitConfig,
+}
+
+impl RateLimits {
+    pub fn new(config: RateLimitConfig) -> Self {
+        let anon = Class::ALL.iter().map(|c| limiter(config.limits(*c).anon)).collect();
+        let authed = Class::ALL.iter().map(|c| limiter(config.limits(*c).authed)).collect();
+        Self {
+            anon,
+            authed,
+            auth_fail: limiter(config.auth_fail),
+            auth_blocked: Mutex::new(HashMap::new()),
+            rejections: Default::default(),
+            auth_fail_rejections: AtomicU64::new(0),
+            config,
+        }
+    }
+
+    pub fn config(&self) -> &RateLimitConfig {
+        &self.config
+    }
+
+    pub fn check(&self, class: Class, key: &Key, authenticated: bool) -> Decision {
+        let (limiters, limit, who) = if authenticated {
+            (&self.authed, self.config.limits(class).authed, "authenticated clients")
+        } else {
+            (&self.anon, self.config.limits(class).anon, "anonymous clients")
+        };
+        let (Some(limiter), Some(limit)) = (&limiters[class.index()], limit) else { return Decision::Exempt };
+        match limiter.check_key(key) {
+            Ok(snapshot) => Decision::Allowed { limit, remaining: snapshot.remaining_burst_capacity() },
+            Err(not_until) => {
+                self.rejections[class.index()].fetch_add(1, Ordering::Relaxed);
+                Decision::Limited {
+                    limit,
+                    retry_after: not_until.wait_time_from(limiter.clock().now()),
+                    detail: format!("{} limit for {who}: {limit}", class.name()),
+                }
+            }
+        }
+    }
+
+    /// How much longer this address is refused authentication, if it is.
+    pub fn auth_blocked(&self, ip: IpAddr) -> Option<Duration> {
+        let until = *self.auth_blocked.lock().unwrap().get(&bucket(ip))?;
+        until.checked_duration_since(Instant::now()).filter(|d| !d.is_zero())
+    }
+
+    /// Spend one failed attempt for this address; past its burst, block it until the next
+    /// attempt would be allowed.
+    pub fn note_auth_failure(&self, ip: IpAddr) {
+        let Some(limiter) = &self.auth_fail else { return };
+        let ip = bucket(ip);
+        if let Err(not_until) = limiter.check_key(&Key::Ip(ip)) {
+            let wait = not_until.wait_time_from(limiter.clock().now());
+            self.auth_blocked.lock().unwrap().insert(ip, Instant::now() + wait);
+        }
+    }
+
+    pub fn note_auth_fail_rejection(&self) {
+        self.auth_fail_rejections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Forget keys that have fully replenished, so the maps stay bounded under address churn.
+    pub fn retain_recent(&self) {
+        for l in self.anon.iter().chain(&self.authed).chain(std::iter::once(&self.auth_fail)).flatten() {
+            l.retain_recent();
+        }
+        let now = Instant::now();
+        self.auth_blocked.lock().unwrap().retain(|_, until| *until > now);
+    }
+
+    /// Prometheus text, appended to `/metrics`.
+    pub fn metrics(&self) -> String {
+        let mut out = String::from(
+            "# HELP tar_ratelimit_rejections_total Requests refused with 429, by class\n\
+             # TYPE tar_ratelimit_rejections_total counter\n",
+        );
+        for c in Class::ALL {
+            let n = self.rejections[c.index()].load(Ordering::Relaxed);
+            out.push_str(&format!("tar_ratelimit_rejections_total{{class=\"{}\"}} {n}\n", c.name()));
+        }
+        let n = self.auth_fail_rejections.load(Ordering::Relaxed);
+        out.push_str(&format!("tar_ratelimit_rejections_total{{class=\"auth_fail\"}} {n}\n"));
+        out
+    }
+}
+
+/// Admins, root among them, are never limited: an operator must not be locked out of their own
+/// registry during the incident the limits exist for.
+pub fn is_exempt(p: &Principal) -> bool {
+    p.is_admin()
+}
+
+/// The same subject at two issuers is two callers.
+pub fn principal_key(p: &Principal) -> String {
+    format!("{}|{}", p.issuer.as_deref().unwrap_or(""), p.subject)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use crate::auth::{Principal, Role};
+    use std::time::Duration;
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
@@ -485,5 +639,71 @@ mod tests {
             let err = RateLimitConfig::from_lookup(lookup(&[(k, v)])).unwrap_err();
             assert!(format!("{err:#}").contains(k), "{k}={v}: {err:#}");
         }
+    }
+
+    fn with(class: Class, anon: Option<Limit>, authed: Option<Limit>) -> RateLimits {
+        let mut cfg = RateLimitConfig::default();
+        cfg.set(class, ClassLimits { anon, authed });
+        RateLimits::new(cfg)
+    }
+
+    #[test]
+    fn a_bucket_refuses_past_its_burst_and_says_when_to_retry() {
+        let rl = with(Class::Sparql, Some(Limit::new(1, 2)), None);
+        let a = Key::Ip(ip("198.51.100.7"));
+        assert!(matches!(rl.check(Class::Sparql, &a, false), Decision::Allowed { remaining: 1, .. }));
+        assert!(matches!(rl.check(Class::Sparql, &a, false), Decision::Allowed { remaining: 0, .. }));
+        match rl.check(Class::Sparql, &a, false) {
+            Decision::Limited { retry_after, detail, .. } => {
+                assert!(retry_after > Duration::from_secs(50), "{retry_after:?}");
+                assert_eq!(detail, "sparql limit for anonymous clients: 1/min, burst 2");
+            }
+            _ => panic!("the third request passed a burst of two"),
+        }
+        // Another address, and another class for the same address, are untouched.
+        assert!(matches!(rl.check(Class::Sparql, &Key::Ip(ip("198.51.100.8")), false), Decision::Allowed { .. }));
+        assert!(matches!(rl.check(Class::Read, &a, false), Decision::Allowed { .. }));
+        // A side set to `off` is not limited at all.
+        assert!(matches!(rl.check(Class::Sparql, &Key::Principal("p".into()), true), Decision::Exempt));
+        assert!(rl.metrics().contains("tar_ratelimit_rejections_total{class=\"sparql\"} 1\n"), "{}", rl.metrics());
+        assert!(rl.metrics().contains("tar_ratelimit_rejections_total{class=\"read\"} 0\n"));
+    }
+
+    #[test]
+    fn repeated_failed_credentials_block_an_address_for_a_while() {
+        let mut cfg = RateLimitConfig::default();
+        cfg.auth_fail = Some(Limit::new(1, 2));
+        let rl = RateLimits::new(cfg);
+        let bad = ip("198.51.100.7");
+        rl.note_auth_failure(bad);
+        rl.note_auth_failure(bad);
+        assert_eq!(rl.auth_blocked(bad), None, "two failures are within the burst");
+        rl.note_auth_failure(bad);
+        assert!(rl.auth_blocked(bad).is_some_and(|d| d > Duration::from_secs(50)), "{:?}", rl.auth_blocked(bad));
+        assert_eq!(rl.auth_blocked(ip("198.51.100.8")), None);
+        // Expired blocks are forgotten by the sweep; a live one survives it.
+        rl.retain_recent();
+        assert!(rl.auth_blocked(bad).is_some());
+    }
+
+    #[test]
+    fn admins_are_exempt_and_nobody_else_is() {
+        let mut admin = Principal::anonymous();
+        admin.roles.insert(Role::Admin);
+        let mut curator = Principal::anonymous();
+        curator.roles.insert(Role::Curator);
+        assert!(is_exempt(&admin));
+        assert!(!is_exempt(&curator));
+        assert!(!is_exempt(&Principal::anonymous()));
+    }
+
+    #[test]
+    fn a_principal_is_keyed_by_issuer_and_subject() {
+        let mut a = Principal::anonymous();
+        a.subject = "alice".into();
+        a.issuer = Some("https://kc.example/realms/a".into());
+        let mut b = a.clone();
+        b.issuer = Some("https://kc.example/realms/b".into());
+        assert_ne!(principal_key(&a), principal_key(&b), "the same subject at two issuers is two callers");
     }
 }

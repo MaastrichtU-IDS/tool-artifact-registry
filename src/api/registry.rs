@@ -165,6 +165,7 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> AppResult<impl IntoR
     out.push_str(&format!("tar_peers_failing {failing}\n"));
     out.push_str("# HELP tar_uptime_seconds Seconds since start\n# TYPE tar_uptime_seconds counter\n");
     out.push_str(&format!("tar_uptime_seconds {}\n", (chrono::Utc::now() - state.started_at).num_seconds()));
+    out.push_str(&state.rate_limits.metrics());
     Ok(([(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")], out))
 }
 

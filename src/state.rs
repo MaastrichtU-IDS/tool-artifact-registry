@@ -27,6 +27,9 @@ pub struct AppState {
     /// Fetched API descriptions, by URL. In memory and per process: it is a cache of somebody
     /// else's document, so losing it on restart costs one fetch.
     pub api_doc_cache: crate::api::apidocs::DocCache,
+    /// Rate limiters (`crate::ratelimit`). Here rather than on the router, which is rebuilt per
+    /// MCP tool call and per test harness.
+    pub rate_limits: crate::ratelimit::RateLimits,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub version: &'static str,
 }
@@ -50,6 +53,7 @@ impl AppState {
 
     pub fn from_parts(config: Config, store: Arc<dyn GraphStore>, ops: Ops) -> Self {
         let timeout = config.peer_resolve_timeout;
+        let rate_limits = crate::ratelimit::RateLimits::new(config.rate_limit.clone());
         Self {
             jwt: JwtVerifier::new(timeout),
             // A registry that cannot parse its own shapes would accept anything, so this
@@ -67,6 +71,7 @@ impl AppState {
             ops,
             config,
             api_doc_cache: Default::default(),
+            rate_limits,
             started_at: chrono::Utc::now(),
             version: env!("CARGO_PKG_VERSION"),
         }

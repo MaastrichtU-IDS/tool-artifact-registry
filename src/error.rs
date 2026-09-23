@@ -4,7 +4,7 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AppError {
     pub status: StatusCode,
     /// RFC 9457 `type` — a URI reference identifying the problem class.
@@ -49,6 +49,10 @@ impl AppError {
     }
     pub fn gone(d: impl Into<String>) -> Self {
         Self::new(StatusCode::GONE, "tombstoned", "Record is tombstoned").detail(d)
+    }
+    /// Over a rate limit (`src/ratelimit.rs`). The middleware adds `Retry-After`.
+    pub fn too_many_requests(d: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, "rate-limited", "Too many requests").detail(d)
     }
     /// An upstream the registry depends on failed. Distinct from `internal` because the fault
     /// is somebody else's server and the caller can usually see that from the message.

@@ -728,7 +728,7 @@ Full screen inventory, routes, component list, API contracts per screen, and sta
 |---|---|---|
 | Q1 | Do we mint DOIs for artifacts or software releases? | Requires DataCite membership and cost. Would sit as an overlay on the UUIDv7 IRIs (D2), not a replacement. Blocks nothing in v1. |
 | Q2 | When do we add cryptographically signed advertisements? | Rejected for v1 (D8) on key-distribution cost. Becomes important the moment a peer registry we do not operate can influence our lineage view. |
-| Q3 | Retention and GC for stale peer stubs. | Currently TTL-refreshed forever. Do stubs for a peer that has been unreachable for 90 days get dropped, tombstoned, or kept? |
+| Q3 | Retention and GC for stale peer stubs. | **Answered: kept and flagged stale** after 90 days without contact, per peer; never dropped, so nothing citing them dangles. See [Peer stubs](2026-09-24-peer-stubs.md). |
 | Q4 | Multi-tenancy inside one registry. | Out of scope for v1 (§1.2). Confirm no IDS use case needs it before that ossifies — retrofitting tenancy onto named graphs is expensive. |
 | Q5 | Should `Capability` eventually be a SHACL shape rather than an `ArtifactType` chip? | Far more precise matchmaking ("consumes graphs conforming to *this* shape"). Natural v2, and `shacl-manager` already has the machinery. |
 | Q6 | Is SHACL write-validation blocking or advisory? | **Answered in the prototype: severity decides.** `sh:Violation` blocks with `422`; `sh:Warning` is recorded and never blocks, which is how "no licence declared" and "no distribution" are handled. `TAR_SHACL_VALIDATE_WRITES=false` downgrades violations to warnings for an estate that prefers a half-described artifact to a rejected one. |

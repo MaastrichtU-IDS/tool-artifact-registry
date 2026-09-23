@@ -59,9 +59,17 @@ into local data. That separation is what lets the registry apply its own rules t
 records and not to a peer's: peer data does not pass through a write handler at all, so the
 [vocabulary rule](../vocabulary/terms.md#federation-is-untouched-by-this-rule) never sees it.
 
-A resolved stub is cached for `TAR_PEER_RESOLVE_TTL`, default 24 hours. `GET
+A resolved stub is refreshed every `TAR_PEER_RESOLVE_TTL`, default 24 hours. `GET
 /api/v1/resolve?iri=…` dereferences one on demand, and `&refresh=true` forces a re-fetch. The
 background resolver ticks every 30 seconds and backs off on failure.
+
+A stub keeps the record and what it owns (its blank nodes, distributions and checksums), in the
+vocabularies the registry reads. Other records in the peer's document are not cached with it.
+
+Every fetch records whether the peer answered. A peer that has not answered in **90 days** is
+**stale**: its records stay cached and keep resolving, so nothing here that cites them breaks,
+but their origin carries `"stale": true` and the UI marks them "stale". The first successful
+contact clears it.
 
 An unresolved record renders as the bare IRI marked "not resolved yet", with its origin chip —
 never as a skeleton, because a skeleton promises content that may never arrive.

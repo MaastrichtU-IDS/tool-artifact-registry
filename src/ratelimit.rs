@@ -96,12 +96,12 @@ pub fn classify(method: &Method, path: &str, query: Option<&str>) -> Option<Clas
 }
 
 /// A search that starts a fan-out (`federated=true`) or is one leg of somebody else's (carries
-/// a `fed_id`). Matched on whole parameters, so `q=federated=true` is a plain search.
+/// a `fed_id`). Matched on whole parameters, so `q=federated=true` is a plain search, and
+/// decoded first, as the search handler's extractor decodes them: otherwise `federated=%74rue`
+/// would fan out while being charged as a plain read.
 fn is_federated(query: Option<&str>) -> bool {
-    query.unwrap_or("").split('&').any(|pair| {
-        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        (k == "federated" && v == "true") || k == "fed_id"
-    })
+    url::form_urlencoded::parse(query.unwrap_or("").as_bytes())
+        .any(|(k, v)| (k == "federated" && v == "true") || k == "fed_id")
 }
 
 // ------------------------------------------------------------------------------- limits
@@ -307,7 +307,12 @@ impl RateLimitConfig {
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self> {
         let mut c = Self::default();
         if let Some(v) = get("TAR_RATE_LIMIT_ENABLED") {
-            c.enabled = matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
+            // Strict, unlike other switches: a typo here would silently remove every limit.
+            c.enabled = match v.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" | "on" => true,
+                "0" | "false" | "no" | "off" => false,
+                other => bail!("TAR_RATE_LIMIT_ENABLED: {other:?} is not true or false"),
+            };
         }
         if let Some(v) = get("TAR_TRUSTED_PROXIES") {
             c.trusted_proxies = v
@@ -519,10 +524,15 @@ pub async fn middleware(State(state): State<Arc<AppState>>, mut req: Request, ne
                 None => Ok(Principal::anonymous()),
                 Some(raw) => {
                     if limits.config().enabled {
-                        if let Some(wait) = limits.auth_blocked(ip) {
+                        if let (Some(wait), Some(limit)) = (limits.auth_blocked(ip), limits.config().auth_fail) {
                             limits.note_auth_fail_rejection();
-                            let detail = "authentication refused for this address: too many failed credentials";
-                            return too_many(wait, detail.into());
+                            let detail = format!(
+                                "authentication refused for this address: too many failed credentials \
+                                 (auth_fail limit: {limit})"
+                            );
+                            let mut resp = too_many(wait, detail);
+                            set_ratelimit_headers(resp.headers_mut(), "auth_fail", limit, 0);
+                            return resp;
                         }
                     }
                     let result = crate::auth::authenticate(&state, &raw).await;
@@ -556,12 +566,12 @@ pub async fn middleware(State(state): State<Arc<AppState>>, mut req: Request, ne
         Decision::Exempt => next.run(req).await,
         Decision::Limited { limit, retry_after, detail } => {
             let mut resp = too_many(retry_after, detail);
-            set_ratelimit_headers(resp.headers_mut(), class, limit, 0);
+            set_ratelimit_headers(resp.headers_mut(), class.name(), limit, 0);
             resp
         }
         Decision::Allowed { limit, remaining } => {
             let mut resp = next.run(req).await;
-            set_ratelimit_headers(resp.headers_mut(), class, limit, remaining);
+            set_ratelimit_headers(resp.headers_mut(), class.name(), limit, remaining);
             resp
         }
     }
@@ -583,10 +593,9 @@ fn too_many(retry_after: Duration, detail: String) -> Response {
 
 /// `draft-ietf-httpapi-ratelimit-headers`: the policy (quota per 60-second window) and what is
 /// left of it, with `t` the seconds until the burst is fully replenished.
-fn set_ratelimit_headers(headers: &mut HeaderMap, class: Class, limit: Limit, remaining: u32) {
+fn set_ratelimit_headers(headers: &mut HeaderMap, name: &str, limit: Limit, remaining: u32) {
     let spent = u64::from(limit.burst.get().saturating_sub(remaining));
     let reset = (spent * 60).div_ceil(u64::from(limit.per_minute.get()));
-    let name = class.name();
     if let Ok(v) = HeaderValue::from_str(&format!("\"{name}\";q={};w=60", limit.per_minute)) {
         headers.insert(RATELIMIT_POLICY, v);
     }
@@ -650,6 +659,9 @@ mod tests {
         assert_eq!(c("q=x&federated=false"), Some(Class::Read));
         assert_eq!(c("q=federated=true"), Some(Class::Read));
         assert_eq!(c("q=x"), Some(Class::Read));
+        // Decoded, as the handler decodes them.
+        assert_eq!(c("q=x&federated=%74rue"), Some(Class::Federated));
+        assert_eq!(c("q=x&fed%5Fid=abc"), Some(Class::Federated));
     }
 
     #[test]
@@ -766,6 +778,7 @@ mod tests {
             ("TAR_RATE_LIMIT_MCP", "1:1/1"),
             ("TAR_TRUSTED_PROXIES", "10.0.0.0/40"),
             ("TAR_RATE_LIMIT_AUTH_FAIL", "5"),
+            ("TAR_RATE_LIMIT_ENABLED", "flase"),
         ] {
             let err = RateLimitConfig::from_lookup(lookup(&[(k, v)])).unwrap_err();
             assert!(format!("{err:#}").contains(k), "{k}={v}: {err:#}");

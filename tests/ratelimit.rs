@@ -169,6 +169,8 @@ async fn random_credentials_from_one_address_are_refused_before_they_are_checked
     assert_eq!(s, TOO_MANY, "{body}");
     assert!(headers.contains_key("retry-after"));
     assert!(body["detail"].as_str().unwrap().contains("authentication"), "{body}");
+    assert_eq!(headers["ratelimit-policy"], "\"auth_fail\";q=1;w=60", "{headers:?}");
+    assert_eq!(headers["ratelimit"], "\"auth_fail\";r=0;t=120", "{headers:?}");
     // Reading without a credential is still fine from there, and other addresses may still try.
     assert_eq!(h.get(from, "/api/v1/software").await, StatusCode::OK);
     let (s, _, _) = h.send("198.51.100.8", "GET", "/api/v1/whoami", Some("tar_guess_x"), None, &[]).await;

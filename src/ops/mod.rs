@@ -302,6 +302,12 @@ impl Ops {
 
     // ------------------------------------------------------- resolve queue
 
+    /// Whether this IRI is a stub the resolver keeps: queued, resolved or failing.
+    pub async fn is_tracked(&self, iri: &str) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM resolve_queue WHERE iri = ?").bind(iri).fetch_optional(&self.pool).await?;
+        Ok(row.is_some())
+    }
+
     pub async fn queue_resolve(&self, iri: &str, peer_id: Option<&str>) -> Result<()> {
         sqlx::query(
             "INSERT INTO resolve_queue (iri, peer_id, status, next_attempt_at)

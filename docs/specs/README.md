@@ -16,6 +16,7 @@ say what else was considered.
 | [Federated search propagation](2026-08-31-federated-search-propagation.md) | Live fan-out across a graph of registries without looping. |
 | [Rate limiting](2026-09-23-rate-limiting.md) | Answers Q8: cost classes, keying on the verified principal, and finding the client behind a proxy. |
 | [Changing the base IRI](2026-09-23-base-iri-rebase.md) | Answers Q9: renaming the registry's own records, and answering for the old IRIs afterwards. |
+| [Repository liveness](2026-09-24-repository-liveness.md) | Stars, forks and last push for the signal bar: a paced GitHub poller, kept in SQLite and out of the graph. |
 
 The [frontend handoff](../design-handoff.md) is the corresponding document for the UI, including
 the questions it left open and the answers they got.

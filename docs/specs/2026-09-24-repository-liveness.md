@@ -5,7 +5,7 @@
 | **Status** | Implemented |
 | **Date** | 2026-09-24 |
 | **Spec** | [`2026-08-30-tool-artifact-registry-design.md`](2026-08-30-tool-artifact-registry-design.md) — §10.5 `TAR_FORGE_POLL_INTERVAL`; handoff §9 |
-| **Code** | `src/domain/forge.rs`, `src/ops/mod.rs`, `migrations/0005_repository_stats.sql`, `src/api/software.rs`, `src/config.rs`, `src/main.rs`, `frontend/src/routes/SoftwareDetail.tsx`, `tests/repository_stats.rs` |
+| **Code** | `src/domain/forge.rs`, `src/ops/mod.rs`, `src/model.rs`, `migrations/0005_repository_stats.sql`, `src/api/software.rs`, `src/config.rs`, `src/main.rs`, `frontend/src/routes/SoftwareDetail.tsx`, `tests/repository_stats.rs` |
 
 ---
 
@@ -138,9 +138,10 @@ floor and spread.
 - a poll stores stats for a GitHub-hosted record, and `GET /software/{id}` returns them;
 - a record hosted elsewhere is never fetched, and has no `repository_stats`;
 - a forge error is recorded and the previous numbers are kept;
-- a record whose repository changed does not show the old repository's numbers.
+- a record whose repository changed does not show the old repository's numbers;
+- a record polled within the interval is not fetched again, so a restart costs nothing.
 
-**Frontend** (`frontend/src/routes/softwaredetail.test.tsx`): the cells show the numbers when
+**Frontend** (`frontend/src/routes/routes.test.tsx`): the cells show the numbers when
 present, and are absent when `repository_stats` is.
 
 ---

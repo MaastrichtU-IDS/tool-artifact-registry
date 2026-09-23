@@ -2,6 +2,10 @@ apiVersion: v1
 kind: Service
 metadata:
   name: tar
+  # What the optional ServiceMonitor selects on. Not the kustomize `labels` in kustomization.yaml:
+  # those are decorative, and a ServiceMonitor should not depend on decoration.
+  labels:
+    app.kubernetes.io/name: tool-artifact-registry
 spec:
   selector:
     app.kubernetes.io/name: tool-artifact-registry

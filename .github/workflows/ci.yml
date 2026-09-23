@@ -1,7 +1,7 @@
 # The test suite, on every push and every pull request.
 #
-# Two independent jobs — Rust and the UI — because they share nothing and a broken component
-# test should not sit behind the Rust build waiting for a turn.
+# Three independent jobs — Rust, the UI and the Kubernetes manifests — because they share
+# nothing and a broken component test should not sit behind the Rust build waiting for a turn.
 #
 # **Neither job needs the network or a service.** The end-to-end suite runs against an
 # in-memory Oxigraph and an in-memory SQLite; `TAR_TEST_SPARQL_ENDPOINT` is the opt-in that
@@ -138,3 +138,27 @@ jobs:
 
       - name: vitest
         run: npx vitest run
+
+  # The Kubernetes manifests render, with and without the optional ServiceMonitor, so a broken
+  # manifest fails here rather than in someone's `kubectl apply -k`. This checks that they
+  # assemble, not that a cluster would accept every field — that needs a cluster. `kubectl`, with
+  # kustomize built in, is already on the hosted runner.
+  manifests:
+    name: manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: kubectl kustomize (base)
+        run: kubectl kustomize deploy/kubernetes > /dev/null
+
+      # The component is enabled the way an operator enables it — in the base kustomization — on
+      # a copy, so it takes the base's namespace and labels exactly as it would in a real apply.
+      - name: kubectl kustomize (with the ServiceMonitor component)
+        run: |
+          dir=$(mktemp -d)
+          cp -r deploy/kubernetes/. "$dir"
+          printf 'components:\n  - components/servicemonitor\n' >> "$dir/kustomization.yaml"
+          kubectl kustomize "$dir" > "$dir/rendered.yaml"
+          grep -q '^kind: ServiceMonitor$' "$dir/rendered.yaml"

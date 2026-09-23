@@ -43,6 +43,16 @@ enum Command {
     },
     /// Print the effective configuration, with secrets redacted.
     Config,
+    /// Rename this registry's records from an old base IRI to the current `TAR_BASE_IRI`.
+    /// Run with the registry stopped, after a backup (design note: base IRI rebase).
+    Rebase {
+        /// The base the records are under now.
+        #[arg(long)]
+        from: String,
+        /// Count what would change and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -79,9 +89,26 @@ async fn main() -> Result<()> {
             println!("loaded {n} quads");
             Ok(())
         }
+        Command::Rebase { from, dry_run } => {
+            let state = boot().await?;
+            let report = tar::rebase::run(&state, &from, dry_run).await?;
+            let verb = if dry_run { "would rewrite" } else { "rewrote" };
+            if report.is_empty() {
+                println!("nothing under {from} — already rebased, or the wrong base");
+            } else {
+                println!("{verb} {:>7}  statements in the local graph", report.statements);
+                for (column, n) in &report.rows {
+                    println!("{verb} {n:>7}  {column}");
+                }
+            }
+            Ok(())
+        }
         Command::Config => {
             let c = Config::from_env()?;
             println!("base_iri              {}", c.base_iri);
+            if !c.previous_base_iris.is_empty() {
+                println!("previous_base_iris    {}", c.previous_base_iris.join(", "));
+            }
             println!("data_dir              {}", c.data_dir);
             match &c.sparql_backend {
                 Some(b) => println!("graph store           external SPARQL endpoint — {}", b.describe()),
@@ -127,6 +154,15 @@ async fn serve() -> Result<()> {
     let state = boot().await?;
     let listen = state.config.listen.clone();
 
+    match tar::rebase::stray_base(&state) {
+        Ok(Some(old)) => tracing::warn!(
+            "records in the store are under {old}, not TAR_BASE_IRI {}; if the registry moved, \
+             stop it and run `tar rebase --from {old}`",
+            state.config.base_iri
+        ),
+        Ok(None) => {}
+        Err(e) => tracing::warn!("could not check the store for records under another base: {e:#}"),
+    }
     if state.config.root_token.is_none() {
         tracing::warn!(
             "TAR_ROOT_TOKEN is unset — no bootstrap admin exists, so nothing can be registered \

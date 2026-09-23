@@ -156,6 +156,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .layer(axum::middleware::from_fn_with_state(state.clone(), require_read_access))
         // Outside `require_read_access`, so a closed registry's refusals are rate-limited too.
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::ratelimit::middleware))
+        // Outermost of the three: a request to a host this registry used to have is redirected
+        // before anything is charged for it, and an old IRI is translated before any handler
+        // or limiter reads the request.
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::rebase::middleware))
         .layer(DefaultBodyLimit::max(limit))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .layer(TraceLayer::new_for_http())

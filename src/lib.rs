@@ -20,6 +20,7 @@ pub mod ns;
 pub mod ops;
 pub mod ratelimit;
 pub mod rdf;
+pub mod rebase;
 pub mod seed;
 pub mod shacl;
 pub mod state;

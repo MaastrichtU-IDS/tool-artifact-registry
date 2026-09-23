@@ -84,6 +84,15 @@ impl GraphStore for OxigraphStore {
 
     fn apply(&self, tx: GraphTx) -> Result<()> {
         let mut t = self.store.start_transaction()?;
+        for graph in &tx.clear_graphs {
+            let g = Self::subject_ref(graph)?;
+            let doomed: Vec<Quad> = t
+                .quads_for_pattern(None, None, None, Some(GraphNameRef::NamedNode(g.as_ref())))
+                .collect::<Result<Vec<_>, _>>()?;
+            for q in doomed {
+                t.remove(q.as_ref());
+            }
+        }
         for (subject, graph) in &tx.delete_subjects {
             let s = Self::subject_ref(subject)?;
             let g = Self::subject_ref(graph)?;

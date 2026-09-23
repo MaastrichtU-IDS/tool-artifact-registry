@@ -22,6 +22,7 @@ pub async fn well_known(State(state): State<Arc<AppState>>) -> AppResult<impl In
         "title": cfg.title,
         "operator": cfg.operator,
         "base_iri": cfg.base_iri,
+        "previous_base_iris": cfg.previous_base_iris,
         "software": "tool-artifact-registry",
         "software_version": state.version,
         "public_read": cfg.public_read,

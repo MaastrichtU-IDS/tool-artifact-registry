@@ -10,6 +10,9 @@ use std::time::Duration;
 #[derive(Clone, Debug)]
 pub struct Config {
     pub base_iri: String,
+    /// Bases this registry used to have (`TAR_PREVIOUS_BASE_IRIS`). Requests to them are
+    /// redirected and IRIs under them translated; see `crate::rebase`.
+    pub previous_base_iris: Vec<String>,
     pub data_dir: String,
     pub listen: String,
     pub public_read: bool,
@@ -241,6 +244,15 @@ impl Config {
         if !(base_iri.starts_with("http://") || base_iri.starts_with("https://")) {
             bail!("TAR_BASE_IRI must be an http(s) URL, got {base_iri:?}");
         }
+        let previous_base_iris: Vec<String> = env("TAR_PREVIOUS_BASE_IRIS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        for old in &previous_base_iris {
+            crate::rebase::check_bases(old, &base_iri).context("TAR_PREVIOUS_BASE_IRIS")?;
+        }
 
         let root_token = env("TAR_ROOT_TOKEN");
         if let Some(t) = &root_token {
@@ -269,6 +281,7 @@ impl Config {
 
         Ok(Self {
             base_iri,
+            previous_base_iris,
             data_dir: env("TAR_DATA_DIR").unwrap_or_else(|| "./data".into()),
             listen: env("TAR_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into()),
             public_read: env_bool("TAR_PUBLIC_READ", true),
@@ -299,6 +312,7 @@ impl Config {
     pub fn for_test(base_iri: &str) -> Self {
         Self {
             base_iri: base_iri.trim_end_matches('/').to_string(),
+            previous_base_iris: Vec::new(),
             data_dir: "memory".into(),
             listen: "127.0.0.1:0".into(),
             public_read: true,

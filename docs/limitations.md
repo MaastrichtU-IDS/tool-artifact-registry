@@ -134,7 +134,7 @@ replaces DNS, not identity.
 There was no scope for subscribing, so a consumer that only wanted webhooks had to be given a
 credential that could also advertise. `subscribe:artifacts` now exists: a deployment token with
 only that scope manages the deployment's subscriptions and is refused everything else, including
-the deployment's own token endpoints. The scope adds a narrower way in and takes nothing away,
+the deployment's own token endpoints and its record (edit, capability, self-announcement). The scope adds a narrower way in and takes nothing away,
 so the owning deployment's other credentials, curators and admins manage subscriptions exactly
 as before. See [Subscriptions](api/subscriptions.md).
 

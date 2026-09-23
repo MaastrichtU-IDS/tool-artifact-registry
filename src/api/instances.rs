@@ -304,7 +304,7 @@ pub async fn patch(
 ) -> AppResult<impl IntoResponse> {
     let iri = ids::iri_for(state.base(), Kind::Instance, &id);
     // A deployment may maintain its own record; anyone else needs curator.
-    if principal.instance_iri.as_deref() != Some(iri.as_str()) {
+    if !principal.acts_for_instance(&iri) {
         principal.require_curator()?;
     }
     if !ids::is_local(state.base(), &iri) {
@@ -405,7 +405,7 @@ pub async fn put_capability(
     Json(input): Json<CapabilityIn>,
 ) -> AppResult<impl IntoResponse> {
     let iri = ids::iri_for(state.base(), Kind::Instance, &id);
-    if principal.instance_iri.as_deref() != Some(iri.as_str()) {
+    if !principal.acts_for_instance(&iri) {
         principal.require_curator()?;
     }
     super::software::put_capability_on(&state, &principal, &iri, &input, "instance").await
@@ -429,6 +429,10 @@ pub async fn announce_self(
     Json(input): Json<SelfAnnounceIn>,
 ) -> AppResult<impl IntoResponse> {
     principal.require_authenticated()?;
+    // Announcing rewrites the deployment's record, which a subscribe-only credential may not.
+    if principal.is_subscribe_only() {
+        return Err(AppError::forbidden("a subscribe:artifacts credential cannot announce a deployment"));
+    }
     let client_id = match principal.credential {
         crate::auth::CredentialKind::OidcWorkload | crate::auth::CredentialKind::LocalToken => {
             principal.subject.clone()

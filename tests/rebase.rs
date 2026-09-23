@@ -102,20 +102,16 @@ async fn a_rebased_registry_answers_under_the_new_base_and_for_the_old_one() {
         )
         .await;
     let token = tok["token"].as_str().unwrap().to_string();
-    let produced = old
-        .post(
-            "/api/v1/advertise/produced",
-            &token,
-            json!({"run": {"external_key": "ci/1", "status": "success"},
-                   "artifacts": [{"title": "report", "conforms_to": "http://edamontology.org/data_2048",
-                                  "distributions": [{"download_url": "https://mover.example.org/r.ttl"}]}]}),
-        )
-        .await;
+    let produced_body = json!({"run": {"external_key": "ci/1", "status": "success"},
+                               "artifacts": [{"title": "report", "conforms_to": "http://edamontology.org/data_2048",
+                                              "distributions": [{"download_url": "https://mover.example.org/r.ttl"}]}]});
+    let produced = old.post("/api/v1/advertise/produced", &token, produced_body.clone()).await;
     let old_artifact = produced["artifacts"][0].as_str().unwrap().to_string();
     assert!(old_artifact.starts_with(&format!("{OLD}/artifact/")), "{old_artifact}");
 
     // The registry restarts under the new base. Before the rebase it can tell something is off.
     let new = open(NEW, &[OLD], store.clone(), ops.clone());
+    let bundles_before = new.state.store.dump_nquads(None).unwrap();
     assert_eq!(tar::rebase::stray_base(&new.state).unwrap().as_deref(), Some(OLD));
 
     // A dry run counts and writes nothing.
@@ -123,10 +119,13 @@ async fn a_rebased_registry_answers_under_the_new_base_and_for_the_old_one() {
     assert!(dry.statements > 0, "{dry:?}");
     assert!(dry.rows.iter().any(|(c, _)| c == "api_tokens.instance_iri"), "{dry:?}");
     assert!(new.local_graph().contains(OLD), "a dry run must not write");
+    assert_eq!(new.state.store.dump_nquads(None).unwrap(), bundles_before, "nothing at all");
 
     let done = tar::rebase::run(&new.state, OLD, false).await.unwrap();
     assert_eq!(done.statements, dry.statements);
     assert_eq!(done.rows, dry.rows);
+    assert!(done.rows.iter().any(|(c, _)| c == "advertise_idem.idem_key"), "{done:?}");
+
     let g = new.local_graph();
     let left: Vec<&str> = g.lines().filter(|l| l.contains(OLD)).collect();
     assert!(left.is_empty(), "every IRI under the old base is renamed: {left:#?}");
@@ -147,6 +146,12 @@ async fn a_rebased_registry_answers_under_the_new_base_and_for_the_old_one() {
     let (s, me, _) = new.send("GET", "/api/v1/whoami", Some(&token), None, None).await;
     assert_eq!(s, StatusCode::OK, "{me}");
     assert_eq!(me["instance"], format!("{NEW}/instance/{instance_id}"), "{me}");
+
+    // A retry of the pre-move advertisement is still recognised as one.
+    let (s, retried, _) =
+        new.send("POST", "/api/v1/advertise/produced", Some(&token), Some(produced_body.clone()), None).await;
+    assert_eq!(s, StatusCode::OK, "{retried}");
+    assert_eq!(retried["created"], false, "{retried}");
 
     // A pipeline still citing the old IRI is translated, not left dangling.
     let consumed = new

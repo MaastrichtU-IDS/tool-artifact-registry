@@ -64,7 +64,10 @@ one. It runs against a **stopped** registry, like `restore`:
    ```
 
    Running it again is safe. If it is interrupted, a second run finishes the job, and on a
-   finished store it changes nothing.
+   finished store it changes nothing. Before writing, it saves the local graph as it was to
+   `rebase-before-<time>.nq` in `TAR_DATA_DIR`. With an external graph store that does not run
+   an update request as one transaction, that file is how you recover from a failure halfway
+   through: `tar restore --nquads` it, then rebase again.
 5. Keep the old name answering. If its DNS can point at the same service, add the old host to
    the ingress (or proxy) and the registry answers it with a `308` to the same path under the
    new base. If it points somewhere else, that server redirects, e.g. in nginx

@@ -37,7 +37,7 @@ I measured this against a seeded store (12,398 quads) and read the schema:
 | Other bundle graphs, `<urn:tar:shapes>` | Nothing | — |
 | `<urn:tar:peer:*>` | A peer's statements, which may cite our records | Left alone: it is the peer's data, refreshed from the peer |
 | Literals, anywhere | None found | — |
-| Ops DB | `api_tokens.instance_iri`, `.software_iri`; `subscriptions.instance_iri`, `.filter` (JSON); `subscription_deliveries.artifact_iri`, `.run_iri`, `.payload` (JSON); `run_keys.instance_iri`, `.run_iri`; `artifact_keys.artifact_iri`; `advertise_idem.run_iri`, `.artifact_iri`; `audit_log.target` | **Must be rewritten**, or a deployment's token stops mapping to its Instance |
+| Ops DB | `api_tokens.instance_iri`, `.software_iri`; `subscriptions.instance_iri`, `.filter` (JSON); `subscription_deliveries.artifact_iri`, `.run_iri`, `.payload` (JSON); `run_keys.instance_iri`, `.run_iri`; `artifact_keys.artifact_iri`; `advertise_idem.idem_key` (`run|artifact|role`), `.run_iri`, `.artifact_iri`; `audit_log.target` | **Must be rewritten**, or a deployment's token stops mapping to its Instance |
 
 The ops DB is what makes a hand-edited dump insufficient. A token bound to
 `https://old/instance/…` authenticates as an Instance that no longer exists, and every
@@ -61,17 +61,26 @@ single-writer. It renames everything under `<old>/` to the same path under the c
   leaves the graph untouched.
 - **Ops DB.** One SQLite transaction. IRI columns are rewritten by prefix. The two JSON
   columns get a string replace of `"<old>/` with `"<new>/`, which only matches an IRI where a
-  JSON string begins.
+  JSON string begins. The advertisement idempotency key embeds both IRIs, so every `<old>/` in
+  it is renamed. Left stale, a retried advertisement after the move would be applied twice.
 - **Order and reruns.** The graph goes first, then the ops DB. Each step only touches values
   that still carry the old prefix, so if the command dies between the two, running it again
   finishes the job. A second run on a finished store changes nothing, and says so.
-- **`--dry-run`** counts what would change and writes nothing.
+- **`--dry-run`** counts what would change and writes nothing. That is why the command does not
+  boot the way `serve` does: the boot-time vocabulary reload rewrites the bundle graphs as soon
+  as the base changes. The next `serve` does that reload instead.
+- **A snapshot first.** Before writing, the local graph as it was is saved to
+  `{TAR_DATA_DIR}/rebase-before-{time}.nq`. An external endpoint is not guaranteed to run the
+  clear and the insert of one request as a unit (limitations §16). If the insert fails after
+  the clear, the error names the file, and `tar restore --nquads` followed by a second rebase
+  recovers.
 - It refuses when `<old>` equals the new base, when `<old>` is not an `http(s)` URL, and when
   one base is a prefix of the other (`https://x.org` → `https://x.org/registry`), because a
   second run would then rewrite the new IRIs again.
 
-It does not take a backup for you. The docs say to take one first (`/admin/dump` while running,
-or a volume snapshot), as they already do for upgrades.
+The snapshot covers the graph and nothing else, so it does not replace a backup. The docs say
+to take one first (`/admin/dump` while running, or a volume snapshot), as they already do for
+upgrades.
 
 ---
 

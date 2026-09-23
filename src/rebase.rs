@@ -15,7 +15,7 @@ use axum::extract::{Request, State};
 use axum::http::{header, HeaderValue, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use oxigraph::io::{RdfFormat, RdfParser};
+use oxigraph::io::{RdfFormat, RdfParser, RdfSerializer};
 use oxigraph::model::{GraphName, NamedNode, NamedOrBlankNode, Quad, Term};
 use std::sync::Arc;
 
@@ -78,6 +78,9 @@ pub struct Report {
     pub statements: usize,
     /// `(table.column, rows)`, only the columns that had any.
     pub rows: Vec<(String, u64)>,
+    /// The local graph as it was before the rewrite, as N-Quads, when there is a data
+    /// directory to keep it in.
+    pub snapshot: Option<std::path::PathBuf>,
 }
 
 impl Report {
@@ -86,23 +89,37 @@ impl Report {
     }
 }
 
-/// Columns in the ops database that hold this registry's own IRIs. `true` marks a JSON column,
-/// rewritten wherever a string starts with the old base rather than by whole-value prefix.
-/// Peers' bases, the resolve queue and federated query ids are other registries' IRIs.
-const OPS_COLUMNS: [(&str, &str, bool); 13] = [
-    ("api_tokens", "instance_iri", false),
-    ("api_tokens", "software_iri", false),
-    ("subscriptions", "instance_iri", false),
-    ("subscriptions", "filter", true),
-    ("subscription_deliveries", "artifact_iri", false),
-    ("subscription_deliveries", "run_iri", false),
-    ("subscription_deliveries", "payload", true),
-    ("run_keys", "instance_iri", false),
-    ("run_keys", "run_iri", false),
-    ("artifact_keys", "artifact_iri", false),
-    ("advertise_idem", "run_iri", false),
-    ("advertise_idem", "artifact_iri", false),
-    ("audit_log", "target", false),
+/// How an ops column holds IRIs.
+#[derive(Clone, Copy)]
+enum Holds {
+    /// The whole value is one IRI.
+    Iri,
+    /// JSON: renamed wherever a string starts with the old base.
+    Json,
+    /// IRIs joined with other text, as `run|artifact|role` in an idempotency key: renamed
+    /// wherever `<old>/` occurs.
+    Joined,
+}
+
+/// Columns in the ops database that hold this registry's own IRIs. Peers' bases, the resolve
+/// queue and federated query ids are other registries' IRIs.
+const OPS_COLUMNS: [(&str, &str, Holds); 14] = [
+    ("api_tokens", "instance_iri", Holds::Iri),
+    ("api_tokens", "software_iri", Holds::Iri),
+    ("subscriptions", "instance_iri", Holds::Iri),
+    ("subscriptions", "filter", Holds::Json),
+    ("subscription_deliveries", "artifact_iri", Holds::Iri),
+    ("subscription_deliveries", "run_iri", Holds::Iri),
+    ("subscription_deliveries", "payload", Holds::Json),
+    ("run_keys", "instance_iri", Holds::Iri),
+    ("run_keys", "run_iri", Holds::Iri),
+    ("artifact_keys", "artifact_iri", Holds::Iri),
+    // The key is `run_iri|artifact_iri|role` (`Ops::claim_advertisement`); left stale, a
+    // retried advertisement after the move would miss it and be applied twice.
+    ("advertise_idem", "idem_key", Holds::Joined),
+    ("advertise_idem", "run_iri", Holds::Iri),
+    ("advertise_idem", "artifact_iri", Holds::Iri),
+    ("audit_log", "target", Holds::Iri),
 ];
 
 /// Rename everything under `old` to the current base. Graph first, then the ops database, each
@@ -118,26 +135,38 @@ pub async fn run(state: &AppState, old: &str, dry_run: bool) -> Result<Report> {
     // inserting the result in one transaction: a failure leaves it as it was.
     let local = NamedNode::new(crate::ns::G_LOCAL)?;
     let dump = state.store.dump_nquads(Some(crate::ns::G_LOCAL))?;
-    let mut quads = Vec::new();
+    let (mut before, mut quads) = (Vec::new(), Vec::new());
     for q in RdfParser::from_format(RdfFormat::NTriples).for_slice(dump.as_bytes()) {
         let q = q.context("reading the local graph")?;
+        before.push(Quad::new(q.subject.clone(), q.predicate.clone(), q.object.clone(), local.clone()));
         let (rewritten, changed) = rewrite_quad(q, old, new, &local);
         report.statements += usize::from(changed);
         quads.push(rewritten);
     }
     if report.statements > 0 && !dry_run {
+        // Kept before anything is written. An external endpoint may run the clear and the
+        // insert of one request separately (limitations §16); if the insert then fails, this
+        // file is the graph, and `tar restore` puts it back.
+        report.snapshot = snapshot(&state.config.data_dir, &before)?;
         let mut tx = GraphTx::new();
         tx.clear_graphs.push(crate::ns::G_LOCAL.to_string());
         tx.extend(quads);
-        state.store.apply(tx).context("writing the rebased local graph")?;
+        state.store.apply(tx).with_context(|| match &report.snapshot {
+            Some(p) => format!(
+                "writing the rebased local graph; if it is now missing or partial, restore it with \
+                 `tar restore --nquads {}` and run the rebase again",
+                p.display()
+            ),
+            None => "writing the rebased local graph".into(),
+        })?;
     }
 
     // The ops database.
     let (old_prefix, new_prefix) = (format!("{old}/"), format!("{new}/"));
     let (old_json, new_json) = (format!("\"{old}/"), format!("\"{new}/"));
     let mut db = state.ops.pool().begin().await?;
-    for (table, column, json) in OPS_COLUMNS {
-        let (count, update) = if json {
+    for (table, column, holds) in OPS_COLUMNS {
+        let (count, update) = if !matches!(holds, Holds::Iri) {
             (
                 format!("SELECT COUNT(*) FROM {table} WHERE instr({column}, ?1) > 0"),
                 format!("UPDATE {table} SET {column} = replace({column}, ?1, ?2) WHERE instr({column}, ?1) > 0"),
@@ -152,7 +181,10 @@ pub async fn run(state: &AppState, old: &str, dry_run: bool) -> Result<Report> {
                 ),
             )
         };
-        let (from, to) = if json { (&old_json, &new_json) } else { (&old_prefix, &new_prefix) };
+        let (from, to) = match holds {
+            Holds::Json => (&old_json, &new_json),
+            Holds::Iri | Holds::Joined => (&old_prefix, &new_prefix),
+        };
         let n: i64 = sqlx::query_scalar(&count).bind(from).fetch_one(&mut *db).await?;
         if n == 0 {
             continue;
@@ -168,6 +200,22 @@ pub async fn run(state: &AppState, old: &str, dry_run: bool) -> Result<Report> {
         db.commit().await?;
     }
     Ok(report)
+}
+
+/// Write `quads` to `{data_dir}/rebase-before-{time}.nq`. Nothing for an in-memory store, which
+/// a failed write loses either way.
+fn snapshot(data_dir: &str, quads: &[Quad]) -> Result<Option<std::path::PathBuf>> {
+    if data_dir == "memory" {
+        return Ok(None);
+    }
+    let path = std::path::Path::new(data_dir)
+        .join(format!("rebase-before-{}.nq", chrono::Utc::now().format("%Y%m%dT%H%M%SZ")));
+    let mut out = RdfSerializer::from_format(RdfFormat::NQuads).for_writer(Vec::new());
+    for q in quads {
+        out.serialize_quad(q)?;
+    }
+    std::fs::write(&path, out.finish()?).with_context(|| format!("writing {}", path.display()))?;
+    Ok(Some(path))
 }
 
 fn rewrite_quad(q: Quad, old: &str, new: &str, graph: &NamedNode) -> (Quad, bool) {

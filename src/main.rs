@@ -90,7 +90,9 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Rebase { from, dry_run } => {
-            let state = boot().await?;
+            // Not `boot()`: its vocabulary reload rewrites the bundle graphs whenever the base
+            // has changed, and a dry run must write nothing. The next `serve` reloads them.
+            let state = AppState::new(Config::from_env()?).await?;
             let report = tar::rebase::run(&state, &from, dry_run).await?;
             let verb = if dry_run { "would rewrite" } else { "rewrote" };
             if report.is_empty() {
@@ -99,6 +101,9 @@ async fn main() -> Result<()> {
                 println!("{verb} {:>7}  statements in the local graph", report.statements);
                 for (column, n) in &report.rows {
                     println!("{verb} {n:>7}  {column}");
+                }
+                if let Some(p) = &report.snapshot {
+                    println!("the local graph as it was is in {}", p.display());
                 }
             }
             Ok(())

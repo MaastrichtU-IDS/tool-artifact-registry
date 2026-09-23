@@ -63,12 +63,16 @@ pub async fn test_store() -> Arc<dyn GraphStore> {
 ///
 /// It wraps whichever backend the suite is running against, so the same assertions hold over
 /// HTTP to Fuseki, where a write is a request and a query is a round trip.
+// Each test binary compiles `common` on its own, and only some of them count calls; the rest
+// would warn that this is unused.
+#[allow(dead_code)]
 pub struct CountingStore {
     inner: Arc<dyn GraphStore>,
     calls: std::sync::Mutex<Calls>,
 }
 
 #[derive(Debug, Default, Clone)]
+#[allow(dead_code)] // see `CountingStore`
 pub struct Calls {
     /// Every SELECT, verbatim — so a test can assert what was *not* asked.
     pub selects: Vec<String>,
@@ -81,6 +85,7 @@ pub struct Calls {
     pub drops: Vec<String>,
 }
 
+#[allow(dead_code)] // see `CountingStore`
 impl Calls {
     /// Anything that changes the store.
     pub fn writes(&self) -> usize {
@@ -93,6 +98,7 @@ impl Calls {
     }
 }
 
+#[allow(dead_code)] // see `CountingStore`
 impl CountingStore {
     pub fn wrap(inner: Arc<dyn GraphStore>) -> Arc<Self> {
         Arc::new(Self { inner, calls: std::sync::Mutex::new(Calls::default()) })

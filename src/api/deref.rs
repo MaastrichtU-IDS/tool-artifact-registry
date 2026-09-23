@@ -198,7 +198,7 @@ pub async fn deref_generic(
                      of it.\n\n```turtle\n{ttl}```\n"
                 ));
             }
-            Ok(serialize(&quads, if repr == Repr::Json { Repr::Turtle } else { repr }, state.base())?)
+            serialize(&quads, if repr == Repr::Json { Repr::Turtle } else { repr }, state.base())
         }
     })
     .await?;

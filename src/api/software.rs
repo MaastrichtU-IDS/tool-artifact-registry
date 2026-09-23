@@ -156,7 +156,7 @@ pub async fn get(
     if let Some(r) = &sw.code_repository {
         sp = sp.item(r, None);
     }
-    Ok(resource_response(&state, &headers, &iri, &sw, sp, Repr::Json).await?)
+    resource_response(&state, &headers, &iri, &sw, sp, Repr::Json).await
 }
 
 /// Refuse a registration binding that could never authorise anybody.

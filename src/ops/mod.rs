@@ -18,6 +18,14 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 
+/// Whom a token acts for: one deployment, or a software record's auto-registration key. One
+/// value rather than two optional IRIs and a kind string, which could disagree.
+#[derive(Debug, Clone, Copy)]
+pub enum TokenSubject<'a> {
+    Instance(&'a str),
+    Software(&'a str),
+}
+
 #[derive(Clone)]
 pub struct Ops {
     pool: SqlitePool,
@@ -86,14 +94,16 @@ impl Ops {
     /// Mint a token. The plaintext is returned exactly once — it is never stored (handoff §5.8).
     pub async fn mint_token(
         &self,
-        instance_iri: Option<&str>,
-        software_iri: Option<&str>,
-        subject_kind: &str,
+        subject: TokenSubject<'_>,
         scopes: &[String],
         label: Option<&str>,
         created_by: Option<&str>,
         ttl: Option<ChronoDuration>,
     ) -> Result<(TokenRecord, String)> {
+        let (instance_iri, software_iri, subject_kind) = match subject {
+            TokenSubject::Instance(iri) => (Some(iri), None, "instance"),
+            TokenSubject::Software(iri) => (None, Some(iri), "software"),
+        };
         let id = uuid::Uuid::now_v7().to_string();
         // Random, not a slice of the UUID: two tokens minted in the same millisecond share
         // the UUIDv7 timestamp prefix, and the prefix is the lookup key.
@@ -475,9 +485,7 @@ mod tests {
         let ops = Ops::open(":memory:").await.unwrap();
         let (rec, plaintext) = ops
             .mint_token(
-                Some("https://r/instance/1"),
-                None,
-                "instance",
+                TokenSubject::Instance("https://r/instance/1"),
                 &["advertise:produce".into()],
                 Some("ci"),
                 None,

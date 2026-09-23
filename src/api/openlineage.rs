@@ -190,7 +190,7 @@ async fn map_dataset(
     let input = ArtifactIn {
         title: Some(if name.is_empty() { external_key.clone() } else { name.to_string() }),
         description: Some(format!("Ingested from an OpenLineage {role} dataset in namespace {namespace}")),
-        conforms_to: facets.get("schema").and_then(|_| Some("https://w3id.org/tar/ns#TabularDataset".to_string())),
+        conforms_to: facets.get("schema").map(|_| "https://w3id.org/tar/ns#TabularDataset".to_string()),
         external_key: Some(external_key.clone()),
         distributions: if has_access { vec![distribution] } else { Vec::new() },
         ..Default::default()

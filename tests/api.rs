@@ -1654,7 +1654,7 @@ async fn an_artifact_title_never_becomes_a_selectable_artifact_type() {
     assert_eq!(hits["items"].as_array().unwrap().len(), 0, "nor in the picker: {hits}");
 
     // The type it actually conforms to is listed, because something declares itself as it.
-    assert!(labels.iter().any(|l| *l == "Report"), "the EDAM type in use should be listed: {labels:?}");
+    assert!(labels.contains(&"Report"), "the EDAM type in use should be listed: {labels:?}");
 }
 
 #[tokio::test]

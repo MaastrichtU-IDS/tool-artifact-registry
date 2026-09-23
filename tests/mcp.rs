@@ -664,7 +664,7 @@ async fn the_enumerations_match_the_shapes_the_registry_validates_against() {
     let e = &r["structuredContent"];
     assert!(e["software_kinds"]["values"]["workflow"].is_string());
     assert_eq!(e["run_status"]["values"], json!(["success", "failed", "running", "aborted"]));
-    assert_eq!(e["availability"]["values"]["metadata-only"].as_str().unwrap().contains("not obtainable"), true);
+    assert!(e["availability"]["values"]["metadata-only"].as_str().unwrap().contains("not obtainable"));
     assert!(e["scopes"]["values"]["advertise:produce"].is_string());
     // These are the values SHACL will actually accept — proven by using one and by the
     // rejection test below.

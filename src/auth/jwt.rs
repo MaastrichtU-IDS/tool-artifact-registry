@@ -493,32 +493,6 @@ SELECT ?i ?label ?iss (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scopes) 
     })
     .await
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reads_dotted_claim_paths() {
-        let v = serde_json::json!({"realm_access": {"roles": ["curator", "offline_access"]}});
-        assert_eq!(string_list(claim_path(&v, "realm_access.roles").unwrap()), vec!["curator", "offline_access"]);
-        assert!(claim_path(&v, "resource_access.tar.roles").is_none());
-    }
-
-    #[test]
-    fn scope_claim_accepts_string_or_array() {
-        assert_eq!(string_list(&serde_json::json!("a b c")), vec!["a", "b", "c"]);
-        assert_eq!(string_list(&serde_json::json!(["a", "b"])), vec!["a", "b"]);
-    }
-
-    #[test]
-    fn reads_issuer_without_verifying() {
-        // header.payload.signature, payload = {"iss":"https://kc/realms/ids"}
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"iss":"https://kc/realms/ids/"}"#);
-        let token = format!("aaa.{payload}.bbb");
-        assert_eq!(unverified_issuer(&token).as_deref(), Some("https://kc/realms/ids"));
-    }
-}
 pub use jsonwebtoken;
 
 /// Find the Software that names one of these OIDC client ids as a registration client
@@ -636,4 +610,30 @@ SELECT ?i ?label ?sw ?iss (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scop
         }))
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_dotted_claim_paths() {
+        let v = serde_json::json!({"realm_access": {"roles": ["curator", "offline_access"]}});
+        assert_eq!(string_list(claim_path(&v, "realm_access.roles").unwrap()), vec!["curator", "offline_access"]);
+        assert!(claim_path(&v, "resource_access.tar.roles").is_none());
+    }
+
+    #[test]
+    fn scope_claim_accepts_string_or_array() {
+        assert_eq!(string_list(&serde_json::json!("a b c")), vec!["a", "b", "c"]);
+        assert_eq!(string_list(&serde_json::json!(["a", "b"])), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn reads_issuer_without_verifying() {
+        // header.payload.signature, payload = {"iss":"https://kc/realms/ids"}
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"iss":"https://kc/realms/ids/"}"#);
+        let token = format!("aaa.{payload}.bbb");
+        assert_eq!(unverified_issuer(&token).as_deref(), Some("https://kc/realms/ids"));
+    }
 }

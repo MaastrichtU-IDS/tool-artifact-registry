@@ -121,7 +121,7 @@ pub async fn get(
     if let Some(o) = &inst.operator {
         sp = sp.author(&o.iri);
     }
-    Ok(resource_response(&state, &headers, &iri, &inst, sp, Repr::Json).await?)
+    resource_response(&state, &headers, &iri, &inst, sp, Repr::Json).await
 }
 
 /// Reject an endpoint on an instance of software that cannot be hosted.
@@ -713,14 +713,14 @@ fn find_self_registered(state: &AppState, subject: &str, key: &str) -> Option<St
         r#"{p}
 SELECT ?i WHERE {{
   GRAPH <{g}> {{
-    ?i tar:selfRegisteredBy {subject} ; tar:instanceKey {key} .
+    ?i tar:selfRegisteredBy "{subject}" ; tar:instanceKey "{key}" .
   }}
   FILTER NOT EXISTS {{ GRAPH ?tg {{ ?i tar:tombstoned true }} }}
 }} LIMIT 1"#,
         p = ns::PREFIXES,
         g = ns::G_LOCAL,
-        subject = format!("\"{}\"", super::escape_literal(subject)),
-        key = format!("\"{}\"", super::escape_literal(key)),
+        subject = super::escape_literal(subject),
+        key = super::escape_literal(key),
     );
     state.store.select(&q).ok()?.rows.first()?.iri("i")
 }

@@ -72,10 +72,13 @@ loosened to get renewal.
 A registry API token has no refresh token to renew with, so nothing changes for it: a `401`
 still means sign in again, exactly as before.
 
-## 6. Federated search is not deduplicated
+## 6. ~~Federated search is not deduplicated~~ — closed
 
-Fan-out is live, and results are not deduplicated across peers beyond the origin chip. Two peers
-that both cache a stub of the same third-party record produce two rows.
+Copies of one record that arrive from several peers are now one row, keyed on the IRI and
+merged only at the registry where the search started. The home registry's copy wins, otherwise
+the freshest cache, and the others are listed in `also_from`. A peer's cached copy of a third
+registry's record was also being presented as live from that peer; it now keeps its home
+attribution. See [propagation §9](specs/2026-08-31-federated-search-propagation.md#9-merging-copies-of-one-record).
 
 ## 7. ~~Peer resolution caches more than it needs to~~ — closed
 

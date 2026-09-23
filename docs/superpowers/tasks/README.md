@@ -19,7 +19,7 @@ brainstorming flow, get the design approved, and write a spec in `docs/specs/` b
 | 02 | [Clear the clippy warnings](02-clippy-cleanup.md) | Bounded · **done** on `bounded-tasks` | CI advisory step |
 | 03 | [Peer stub retention, and caching only a stub](03-peer-stub-retention.md) | Needs design · **done** on `peer-stubs` | spec Q3, limitations #7 |
 | 04 | [Repository liveness metrics](04-repo-liveness-metrics.md) | Needs design · **decided** | limitations #4, handoff §9 |
-| 05 | [Deduplicate federated search results](05-federated-dedup.md) | Needs design · **decided** | limitations #6 |
+| 05 | [Deduplicate federated search results](05-federated-dedup.md) | Needs design · **done** on `federated-dedup` | limitations #6 |
 | 06 | [A `subscribe:*` scope](06-subscribe-scope.md) | Bounded · **done** on `bounded-tasks` | limitations #14 |
 | 07 | [Helm chart and ServiceMonitor, or drop the promise](07-helm-chart.md) | Needs decision · **decided** | spec §10.3 |
 

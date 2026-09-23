@@ -113,8 +113,14 @@ Every response says which peers answered, which timed out and which failed. A fe
 where half the federation was down should not look like a federated search that found half as
 much.
 
-Results are not deduplicated across peers beyond the origin chip, and the keyset ordering
-interleaves imperfectly across origins. Both are in [Limitations](../limitations.md).
+A record that several registries return, because they all cache it or all reach it, is **one
+row**. The registry you searched picks the copy from the record's home registry if that
+registry answered, otherwise the most recently cached copy, and lists the others in
+`also_from` ("also from: A, B" in the UI). A cached copy keeps its home registry as its origin,
+so it is never presented as the live record. The merge happens only where the search started,
+so every copy is considered. See [propagation §9](../specs/2026-08-31-federated-search-propagation.md#9-merging-copies-of-one-record).
+
+The keyset ordering interleaves imperfectly across origins; see [Limitations](../limitations.md).
 
 ## What federation does not give you
 

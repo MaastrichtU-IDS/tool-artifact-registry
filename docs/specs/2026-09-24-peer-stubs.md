@@ -85,8 +85,21 @@ field, so the boundary is drawn in two places instead:
 model, restated. The two rules above remove what was actually over-cached: other records, and
 other vocabularies.
 
-The stub is written in one transaction (replace the subject, insert the trimmed quads), where
-before it was a delete followed by a separate load.
+The stub is written as one `GraphTx` (replace the subject, insert the trimmed quads), where
+before it was a delete followed by a separate load. The embedded store applies that as one
+transaction. On an external endpoint it is one SPARQL Update request, and it is atomic only if
+the endpoint runs a request as one (limitations §16).
+
+Ownership is followed no deeper than the external backend's delete follows it
+(`queries::DEFAULT_DEPTH`, four levels), so on either backend a refresh removes everything the
+previous fetch wrote.
+
+**Trimming what the old resolver left.** The old resolver loaded the whole document, so a peer
+graph can hold other records the document described. On each refresh, every other named subject
+in the fresh document is removed from the peer graph, unless it is a stub the resolver tracks in
+its own right, which its own refresh keeps. Every stub is tracked once it has been fetched, so
+one resolved through `/resolve` directly is not mistaken for a leftover. A leftover the peer has
+since removed from the document is not seen, and stays.
 
 ---
 
@@ -99,6 +112,9 @@ before it was a delete followed by a separate load.
   to `added_at`; a resolved entry whose TTL has run out is due again, and one that has not is not
   (the old query returned neither); a contact is recorded, and a failure sets the error without
   moving `last_seen_at`.
+- **End-to-end** (`tests/api.rs`, `a_refresh_trims_a_legacy_peer_graph_and_counts_the_record_once`):
+  a peer graph holding a whole legacy document keeps only the record after a refresh, and two
+  refreshes leave the cached count where it was.
 - **Frontend** (`chips.test.tsx`): a stale origin says so in words.
 
 ---

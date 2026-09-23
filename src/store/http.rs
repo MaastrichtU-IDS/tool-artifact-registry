@@ -215,6 +215,9 @@ impl GraphStore for HttpSparqlStore {
             return Ok(());
         }
         let mut ops: Vec<String> = Vec::new();
+        for graph in &tx.clear_graphs {
+            ops.push(format!("CLEAR SILENT GRAPH {}", queries::iri(graph)?));
+        }
         for (subject, graph) in &tx.delete_subjects {
             let g = queries::iri(graph)?;
             // A pattern delete, not `DELETE DATA`: the closure runs through blank nodes and

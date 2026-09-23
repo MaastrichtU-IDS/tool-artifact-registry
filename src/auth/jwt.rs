@@ -219,7 +219,14 @@ pub async fn authenticate_jwt(state: &Arc<AppState>, token: &str) -> AppResult<P
     validation.set_issuer(&[issuer.as_str()]);
     match (&cfg.audience, cfg.require_audience) {
         (Some(aud), true) => {
-            validation.set_audience(&[aud.as_str()]);
+            // An audience defaulted from the base also accepts the bases this registry used to
+            // have, so tokens keep working while the identity provider's audience mapper
+            // catches up with a move. An audience set explicitly is taken as given.
+            let mut accepted = vec![aud.as_str()];
+            if *aud == state.config.base_iri {
+                accepted.extend(state.config.previous_base_iris.iter().map(String::as_str));
+            }
+            validation.set_audience(&accepted);
             // `set_audience` alone checks the claim *only if the token carries one*: the
             // library's own note is "Validation only happens if `aud` claim is present".
             // A token minted by a trusted issuer for a different service, with no audience,

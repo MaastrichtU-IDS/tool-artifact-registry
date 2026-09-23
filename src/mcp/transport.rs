@@ -90,7 +90,13 @@ fn unauthorized(state: &AppState, id: &Value, detail: &str) -> Response {
         .into_response()
 }
 
-pub async fn endpoint(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
+pub async fn endpoint(
+    State(state): State<Arc<AppState>>,
+    ctx: Option<axum::Extension<crate::ratelimit::ClientContext>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let ctx = ctx.map(|axum::Extension(c)| c);
     let cfg = McpConfig::from_env();
     if !cfg.enabled {
         return json_response(
@@ -157,7 +163,7 @@ pub async fn endpoint(State(state): State<Arc<AppState>>, headers: HeaderMap, bo
             let token = h.split_once(' ').filter(|(s, _)| s.eq_ignore_ascii_case("bearer")).map(|(_, t)| t.trim());
             match token {
                 None => Principal::anonymous(),
-                Some(t) => match crate::auth::authenticate(&state, t).await {
+                Some(t) => match authenticate_once(&state, ctx.as_ref(), t).await {
                     Ok(p) => p,
                     Err(e) => {
                         return unauthorized(
@@ -222,7 +228,11 @@ pub async fn endpoint(State(state): State<Arc<AppState>>, headers: HeaderMap, bo
                 );
             }
             let args = req.params.get("arguments").cloned().unwrap_or(json!({}));
-            let outcome = super::call::call(&state, &principal, raw_auth.as_deref(), name, &args, cfg.read_only).await;
+            let run = super::call::call(&state, &principal, raw_auth.as_deref(), name, &args, cfg.read_only);
+            let outcome = match ctx.clone() {
+                Some(c) => crate::ratelimit::FORWARDED.scope(c, run).await,
+                None => run.await,
+            };
 
             let mut result = json!({
                 "content": [{ "type": "text", "text": outcome.text }],
@@ -459,5 +469,18 @@ mod tests {
         assert!(origin_allowed(&s, &HeaderMap::new()));
         assert!(origin_allowed(&s, &headers(&[("origin", "https://reg.test.example")])));
         assert!(!origin_allowed(&s, &headers(&[("origin", "https://evil.example")])));
+    }
+}
+
+/// The middleware has already authenticated this request to know whom to charge; reuse its
+/// answer. Without it (a router built without the layer), authenticate here as before.
+async fn authenticate_once(
+    state: &Arc<AppState>,
+    ctx: Option<&crate::ratelimit::ClientContext>,
+    token: &str,
+) -> crate::error::AppResult<Principal> {
+    match ctx {
+        Some(c) => c.principal.clone(),
+        None => crate::auth::authenticate(state, token).await,
     }
 }

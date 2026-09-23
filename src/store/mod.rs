@@ -83,6 +83,10 @@ pub struct GraphTx {
     /// be replaced rather than accumulated. A run advertised as `running` and later as
     /// `success` must end up with one status, not both.
     pub delete_properties: Vec<(String, String, String)>,
+    /// Graphs emptied before anything else in the transaction, for a rewrite that replaces a
+    /// whole graph at once (`tar rebase`). Blank nodes nobody points at go too, which a
+    /// per-subject delete would miss.
+    pub clear_graphs: Vec<String>,
 }
 
 impl GraphTx {
@@ -107,7 +111,10 @@ impl GraphTx {
         self
     }
     pub fn is_empty(&self) -> bool {
-        self.insert.is_empty() && self.delete_subjects.is_empty() && self.delete_properties.is_empty()
+        self.insert.is_empty()
+            && self.delete_subjects.is_empty()
+            && self.delete_properties.is_empty()
+            && self.clear_graphs.is_empty()
     }
 }
 

@@ -28,8 +28,8 @@ statement is in is what distinguishes this registry's records from a peer's cach
 format that dropped it would silently merge the two. See [Named
 graphs](../identifiers.md#named-graphs).
 
-A dump is also the honest way to migrate to a new base IRI, in that it shows you exactly how
-many identifiers you are about to invalidate. The registry will not rewrite them for you.
+Take one before moving the registry to a new base IRI. The move itself is `tar rebase`, in
+[Moving to a new base IRI](deployment.md#moving-to-a-new-base-iri).
 
 `GET /admin/dump` serves the same thing over HTTP, for admins.
 

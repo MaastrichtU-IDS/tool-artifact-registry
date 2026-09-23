@@ -195,13 +195,19 @@ impl FromRequestParts<Arc<AppState>> for Principal {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &Arc<AppState>) -> Result<Self, Self::Rejection> {
-        let Some(raw) = bearer(parts) else { return Ok(Principal::anonymous()) };
+        // The rate-limit middleware has already authenticated this request once, to know whom
+        // to charge; doing it again here would double the cost of every credential check.
+        if let Some(ctx) = parts.extensions.get::<crate::ratelimit::ClientContext>() {
+            return ctx.principal.clone();
+        }
+        let Some(raw) = bearer(&parts.headers) else { return Ok(Principal::anonymous()) };
         authenticate(state, &raw).await
     }
 }
 
-fn bearer(parts: &Parts) -> Option<String> {
-    let h = parts.headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
+/// The bearer credential in an `Authorization` header, if there is one.
+pub fn bearer(headers: &axum::http::HeaderMap) -> Option<String> {
+    let h = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
     let (scheme, value) = h.split_once(' ')?;
     scheme.eq_ignore_ascii_case("bearer").then(|| value.trim().to_string())
 }

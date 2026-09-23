@@ -43,6 +43,16 @@ enum Command {
     },
     /// Print the effective configuration, with secrets redacted.
     Config,
+    /// Rename this registry's records from an old base IRI to the current `TAR_BASE_IRI`.
+    /// Run with the registry stopped, after a backup (design note: base IRI rebase).
+    Rebase {
+        /// The base the records are under now.
+        #[arg(long)]
+        from: String,
+        /// Count what would change and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -79,9 +89,31 @@ async fn main() -> Result<()> {
             println!("loaded {n} quads");
             Ok(())
         }
+        Command::Rebase { from, dry_run } => {
+            // Not `boot()`: its vocabulary reload rewrites the bundle graphs whenever the base
+            // has changed, and a dry run must write nothing. The next `serve` reloads them.
+            let state = AppState::new(Config::from_env()?).await?;
+            let report = tar::rebase::run(&state, &from, dry_run).await?;
+            let verb = if dry_run { "would rewrite" } else { "rewrote" };
+            if report.is_empty() {
+                println!("nothing under {from} — already rebased, or the wrong base");
+            } else {
+                println!("{verb} {:>7}  statements in the local graph", report.statements);
+                for (column, n) in &report.rows {
+                    println!("{verb} {n:>7}  {column}");
+                }
+                if let Some(p) = &report.snapshot {
+                    println!("the local graph as it was is in {}", p.display());
+                }
+            }
+            Ok(())
+        }
         Command::Config => {
             let c = Config::from_env()?;
             println!("base_iri              {}", c.base_iri);
+            if !c.previous_base_iris.is_empty() {
+                println!("previous_base_iris    {}", c.previous_base_iris.join(", "));
+            }
             println!("data_dir              {}", c.data_dir);
             match &c.sparql_backend {
                 Some(b) => println!("graph store           external SPARQL endpoint — {}", b.describe()),
@@ -99,6 +131,16 @@ async fn main() -> Result<()> {
             println!("workload issuers      {}", c.oidc.workload_issuers.join(", "));
             println!("oidc client claim     {}", c.oidc.client_claim);
             println!("peer resolve          {} (ttl {:?})", c.peer_resolve_enabled, c.peer_resolve_ttl);
+            let rl = &c.rate_limit;
+            let side = |l: Option<tar::ratelimit::Limit>| l.map_or_else(|| "off".to_string(), |l| l.to_string());
+            println!("rate_limit            {}", if rl.enabled { "on" } else { "off" });
+            let proxies: Vec<String> = rl.trusted_proxies.iter().map(ToString::to_string).collect();
+            println!("trusted_proxies       {}", if proxies.is_empty() { "(none)".into() } else { proxies.join(", ") });
+            for class in tar::ratelimit::Class::ALL {
+                let l = rl.limits(class);
+                println!("rate_limit.{:<11}anon {} · authed {}", class.name(), side(l.anon), side(l.authed));
+            }
+            println!("rate_limit.auth_fail  {}", side(rl.auth_fail));
             Ok(())
         }
     }
@@ -117,6 +159,15 @@ async fn serve() -> Result<()> {
     let state = boot().await?;
     let listen = state.config.listen.clone();
 
+    match tar::rebase::stray_base(&state) {
+        Ok(Some(old)) => tracing::warn!(
+            "records in the store are under {old}, not TAR_BASE_IRI {}; if the registry moved, \
+             stop it and run `tar rebase --from {old}`",
+            state.config.base_iri
+        ),
+        Ok(None) => {}
+        Err(e) => tracing::warn!("could not check the store for records under another base: {e:#}"),
+    }
     if state.config.root_token.is_none() {
         tracing::warn!(
             "TAR_ROOT_TOKEN is unset — no bootstrap admin exists, so nothing can be registered \
@@ -136,12 +187,18 @@ async fn serve() -> Result<()> {
     // Webhook delivery, off the request path for the same reason peer resolution is: nothing a
     // subscriber's endpoint does may be felt by the deployment that advertised.
     tokio::spawn(api::subscriptions::delivery_loop(state.clone()));
+    if state.config.rate_limit.enabled {
+        tokio::spawn(tar::ratelimit::retain_loop(state.clone()));
+    }
 
     let app = tar::app(state.clone());
     let listener = tokio::net::TcpListener::bind(&listen).await.with_context(|| format!("binding {listen}"))?;
     let addr = listener.local_addr()?;
     tracing::info!(%addr, base_iri = %state.config.base_iri, "tool-artifact-registry listening");
-    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await.context("server error")?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .context("server error")?;
     Ok(())
 }
 

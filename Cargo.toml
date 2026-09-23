@@ -18,6 +18,9 @@ base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures = "0.3"
+# Keyed GCRA rate limiters for `src/ratelimit.rs`. In-memory is enough: the registry runs as one
+# replica, because Oxigraph is single-writer.
+governor = "0.10"
 hex = "0.4"
 jsonwebtoken = "9"
 mime = "0.3"

@@ -122,6 +122,8 @@ src/
   store/        GraphStore trait, portable SPARQL, embedded Oxigraph and remote-endpoint backends
   ops/          SQLite: tokens, peers, audit, federation, subscriptions, idempotency
   health.rs     background liveness probing of deployment endpoints
+  ratelimit.rs  rate limits by cost class, and finding the real client behind a proxy
+  rebase.rs     moving to a new base IRI, and answering for the old one afterwards
   shacl.rs      write validation and sh:ValidationReport generation
   negotiate.rs  content negotiation and FAIR Signposting
   llms.rs       the llms.txt index

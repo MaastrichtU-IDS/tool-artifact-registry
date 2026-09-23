@@ -21,11 +21,11 @@ It is the only universally required setting, and the only one you cannot change 
 
 Every identifier this registry mints is built from it. A record registered while
 `TAR_BASE_IRI` is `https://registry.example.org` is called
-`https://registry.example.org/software/01a05d4c-…` — permanently, in the graph, in every
-response, in every peer that has cross-linked to it, and in every file anyone has exported.
-Change the base IRI afterwards and those identifiers do not move: they stay in the store,
-pointing at a host that no longer answers for them. Nothing rewrites them. `tar dump` will show
-you how many you invalidated, and that is all the help there is.
+`https://registry.example.org/software/01a05d4c-…` in the graph, in every response, in every
+peer that has cross-linked to it, and in every file anyone has exported. The registry's own
+copies can be renamed later (see [Moving to a new base IRI](#moving-to-a-new-base-iri)).
+Everyone else's cannot, and they depend on the old host redirecting for as long as those copies
+exist.
 
 So, before first boot:
 
@@ -40,9 +40,48 @@ So, before first boot:
 
 The registry refuses to start without it, and refuses anything that is not an `http(s)` URL.
 
-If you must change it, treat it as a migration and not a config edit: dump, decide what the old
-identifiers should do — a redirect from the old host is the only thing that keeps them working —
-and restore into a registry that has never been anything else.
+If you must change it, treat it as a migration and not a config edit. Changing only the
+variable leaves every record under the old base, and the registry says so in its boot log.
+
+### Moving to a new base IRI
+
+`tar rebase` renames this registry's records, and every reference to them in its own stores
+(including the Instance each deployment's token is bound to), from the old base to the current
+one. It runs against a **stopped** registry, like `restore`:
+
+1. Take a backup: `GET /admin/dump` while running, or a volume snapshot.
+2. Stop the registry.
+3. Set `TAR_BASE_IRI` to the new base, and `TAR_PREVIOUS_BASE_IRIS` to the old one.
+4. Rebase, looking first:
+
+   ```console
+   $ tar rebase --from https://old.example.org --dry-run
+   would rewrite    1026  statements in the local graph
+   would rewrite       3  api_tokens.instance_iri
+   $ tar rebase --from https://old.example.org
+   rewrote    1026  statements in the local graph
+   rewrote       3  api_tokens.instance_iri
+   ```
+
+   Running it again is safe. If it is interrupted, a second run finishes the job, and on a
+   finished store it changes nothing.
+5. Keep the old name answering. If its DNS can point at the same service, add the old host to
+   the ingress (or proxy) and the registry answers it with a `308` to the same path under the
+   new base. If it points somewhere else, that server redirects, e.g. in nginx
+   `return 308 https://new.example.org$request_uri;`.
+6. Update the certificate, and the identity provider's audience mapper to the new base. While
+   `TAR_OIDC_AUDIENCE` is unset, tokens for the old base are still accepted, so nobody is locked
+   out in between.
+7. Start the registry.
+
+With `TAR_PREVIOUS_BASE_IRIS` set, an old IRI a client sends — in a query string, or in a JSON,
+SPARQL or form body — is translated to the new one before any handler sees it. A pipeline still
+citing an artifact by its old IRI therefore links to the renamed record rather than to nothing.
+`/.well-known/tar-registry` lists the previous bases.
+
+Peers are not told. A peer that registered the old base keeps using it, and the redirect keeps
+that working. The design, and what was left out, is in [Changing the base
+IRI](../specs/2026-09-23-base-iri-rebase.md).
 
 ## A single container
 

@@ -15,6 +15,7 @@ say what else was considered.
 | [Artifact subscriptions](2026-08-31-artifact-subscriptions.md) | Filters, delivery, retries, and the security argument for refusing private webhook targets. |
 | [Federated search propagation](2026-08-31-federated-search-propagation.md) | Live fan-out across a graph of registries without looping. |
 | [Rate limiting](2026-09-23-rate-limiting.md) | Answers Q8: cost classes, keying on the verified principal, and finding the client behind a proxy. |
+| [Changing the base IRI](2026-09-23-base-iri-rebase.md) | Answers Q9: renaming the registry's own records, and answering for the old IRIs afterwards. |
 
 The [frontend handoff](../design-handoff.md) is the corresponding document for the UI, including
 the questions it left open and the answers they got.

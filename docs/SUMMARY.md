@@ -51,4 +51,5 @@
   - [Artifact subscriptions](specs/2026-08-31-artifact-subscriptions.md)
   - [Federated search propagation](specs/2026-08-31-federated-search-propagation.md)
   - [Rate limiting](specs/2026-09-23-rate-limiting.md)
+  - [Changing the base IRI](specs/2026-09-23-base-iri-rebase.md)
 - [Frontend handoff](design-handoff.md)

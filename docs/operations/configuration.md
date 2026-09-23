@@ -13,6 +13,7 @@ land in a real deployment — a container, compose, or a cluster — see [Deploy
 | Variable | Default | |
 |---|---|---|
 | `TAR_BASE_IRI` | — | **Required.** The `http(s)` URL the registry is reachable at. Becomes part of every identifier it mints, permanently. |
+| `TAR_PREVIOUS_BASE_IRIS` | — | Comma-separated bases this registry used to have. Requests to them are redirected (`308`), old IRIs a client sends are translated, and tokens minted for them are still accepted. See [Moving to a new base IRI](deployment.md#moving-to-a-new-base-iri). |
 | `TAR_LISTEN` | `0.0.0.0:8080` | |
 | `TAR_DATA_DIR` | `./data` | The graph store and the SQLite database. `memory` for an ephemeral store. |
 | `TAR_STATIC_DIR` | `frontend/dist` if it exists | The built UI. Unset and with no such directory, the registry serves the API only. |

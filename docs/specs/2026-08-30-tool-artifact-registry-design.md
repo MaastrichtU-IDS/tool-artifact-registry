@@ -670,7 +670,7 @@ the image; Traefik for ingress and TLS.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `TAR_BASE_IRI` | *(required)* | The only mandatory setting — IRIs cannot be minted without it. Changing it after data exists requires a documented rebase migration. |
+| `TAR_BASE_IRI` | *(required)* | The only mandatory setting — IRIs cannot be minted without it. Changing it after data exists is `tar rebase` ([Changing the base IRI](2026-09-23-base-iri-rebase.md)). |
 | `TAR_ROOT_TOKEN` | *(required on first boot)* | Refuses empty/default |
 | `TAR_DATA_DIR` | `/data` | |
 | `TAR_LISTEN` | `0.0.0.0:8080` | |
@@ -734,7 +734,7 @@ Full screen inventory, routes, component list, API contracts per screen, and sta
 | Q6 | Is SHACL write-validation blocking or advisory? | **Answered in the prototype: severity decides.** `sh:Violation` blocks with `422`; `sh:Warning` is recorded and never blocks, which is how "no licence declared" and "no distribution" are handled. `TAR_SHACL_VALIDATE_WRITES=false` downgrades violations to warnings for an estate that prefers a half-described artifact to a rejected one. |
 | Q7 | Project licence and repository home. | Assumed Apache-2.0 under `MaastrichtU-IDS`, matching siblings. Confirm. |
 | Q8 | Rate limiting and abuse controls for a public instance. | **Answered: in-registry limits by cost class**, keyed on the verified principal or the real client address — see [Rate limiting](2026-09-23-rate-limiting.md). |
-| Q9 | `TAR_BASE_IRI` change after data exists. | A rebase migration is named in §10.5 but not specified. Needed before the first production deployment moves domain. |
+| Q9 | `TAR_BASE_IRI` change after data exists. | **Answered: `tar rebase` plus `TAR_PREVIOUS_BASE_IRIS`**. Renames the registry's own records offline, and keeps answering for the old IRIs by redirect and input translation — see [Changing the base IRI](2026-09-23-base-iri-rebase.md). |
 
 ---
 

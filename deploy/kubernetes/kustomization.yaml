@@ -33,6 +33,12 @@ resources:
   - service.yaml
   - ingress.yaml
 
+# Optional pieces, off by default. `servicemonitor` has a Prometheus Operator scrape /metrics;
+# it needs the operator's CRDs installed, so enabling it on a cluster without them fails the
+# whole apply.
+# components:
+#   - components/servicemonitor
+
 # Decorative only. `includeSelectors: false` keeps these out of the Deployment's and Service's
 # selectors, which are declared in the manifests themselves — a selector is immutable once
 # applied, and one assembled by a tool is one you cannot change later without deleting the

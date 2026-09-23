@@ -351,14 +351,16 @@ pub fn merge_copies(hits: Vec<FedSearchHit>, me: &str) -> Vec<FedSearchHit> {
 }
 
 /// Higher is better: the home registry's own copy, then freshness, then directness.
-fn rank(h: &FedSearchHit) -> (bool, i64, std::cmp::Reverse<u32>) {
+fn rank(h: &FedSearchHit) -> (bool, Option<chrono::DateTime<Utc>>, std::cmp::Reverse<u32>) {
     let o = &h.hit.origin;
     let home = o.kind == "local" || o.resolve_status.as_deref() == Some("live");
+    // Whole timestamps, not seconds: two caches refreshed in the same second are still ordered.
+    // `None` (never cached, or unreadable) sorts below every time.
     let cached = o
         .cached_at
         .as_deref()
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-        .map_or(i64::MIN, |t| t.timestamp());
+        .map(|t| t.with_timezone(&Utc));
     (home, cached, std::cmp::Reverse(h.hops))
 }
 
@@ -565,6 +567,22 @@ mod tests {
             "https://me.example",
         );
         assert_eq!(merged[0].via.as_deref(), Some("https://b.example"), "equally fresh: nearer wins");
+        let merged = merge_copies(
+            vec![
+                copy(
+                    serde_json::json!({"kind": "peer", "cached_at": "2026-09-01T00:00:00.100Z"}),
+                    1,
+                    Some("https://b.example"),
+                ),
+                copy(
+                    serde_json::json!({"kind": "peer", "cached_at": "2026-09-01T00:00:00.900Z"}),
+                    2,
+                    Some("https://c.example"),
+                ),
+            ],
+            "https://me.example",
+        );
+        assert_eq!(merged[0].via.as_deref(), Some("https://c.example"), "within one second, still the fresher");
     }
 
     #[tokio::test]

@@ -269,6 +269,10 @@ pub struct FedSearchHit {
     /// The *directly configured* peer this hit entered through. `None` for local hits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    /// Other registries this record also came through, merged into this row by the origin
+    /// registry (see [`merge_copies`]). Empty everywhere else.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also_from: Vec<String>,
 }
 
 fn default_local_reach() -> String {
@@ -277,13 +281,16 @@ fn default_local_reach() -> String {
 
 impl FedSearchHit {
     pub fn local(hit: SearchHit) -> Self {
-        Self { hit, reach: reach::LOCAL.into(), hops: 0, via: None }
+        Self { hit, reach: reach::LOCAL.into(), hops: 0, via: None, also_from: Vec::new() }
     }
 
     /// Re-attribute a hit that arrived in a peer's response, from that peer's point of view
     /// to ours: one more hop, entered through `direct_peer`.
     pub fn relayed(mut self, direct_peer: &crate::ops::PeerRecord) -> Self {
-        let was_local_to_peer = self.hops == 0;
+        // Minted there only if the peer says it is its own. A 0-hop hit can also be the peer's
+        // cached copy of a third registry's record, and that must keep its home attribution
+        // rather than be shown as live from the peer.
+        let was_local_to_peer = self.hops == 0 && self.hit.origin.kind == "local";
         self.hops = self.hops.saturating_add(1);
         self.reach = if self.hops == 1 { reach::DIRECT.into() } else { reach::INDIRECT.into() };
         self.via = Some(direct_peer.base_iri.clone());
@@ -310,6 +317,49 @@ impl FedSearchHit {
         }
         self
     }
+}
+
+/// One row per record, at the registry that started the search (propagation spec §9). The
+/// home registry's copy wins; otherwise the most recently cached one, then the fewest hops.
+/// The copies it beat are named in `also_from`, never dropped silently. Order is the order
+/// records first arrived in; the caller sorts by score afterwards.
+pub fn merge_copies(hits: Vec<FedSearchHit>, me: &str) -> Vec<FedSearchHit> {
+    let mut order: Vec<String> = Vec::new();
+    let mut copies: std::collections::HashMap<String, Vec<FedSearchHit>> = std::collections::HashMap::new();
+    for h in hits {
+        let group = copies.entry(h.hit.iri.clone()).or_default();
+        if group.is_empty() {
+            order.push(h.hit.iri.clone());
+        }
+        group.push(h);
+    }
+    order
+        .into_iter()
+        .filter_map(|iri| {
+            let mut group = copies.remove(&iri)?;
+            let best = (0..group.len()).max_by_key(|&i| rank(&group[i]))?;
+            let mut winner = group.swap_remove(best);
+            let source = |h: &FedSearchHit| h.via.clone().unwrap_or_else(|| me.to_string());
+            let mine = source(&winner);
+            let mut also: Vec<String> = group.iter().map(source).filter(|s| *s != mine).collect();
+            also.sort();
+            also.dedup();
+            winner.also_from = also;
+            Some(winner)
+        })
+        .collect()
+}
+
+/// Higher is better: the home registry's own copy, then freshness, then directness.
+fn rank(h: &FedSearchHit) -> (bool, i64, std::cmp::Reverse<u32>) {
+    let o = &h.hit.origin;
+    let home = o.kind == "local" || o.resolve_status.as_deref() == Some("live");
+    let cached = o
+        .cached_at
+        .as_deref()
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .map_or(i64::MIN, |t| t.timestamp());
+    (home, cached, std::cmp::Reverse(h.hops))
 }
 
 /// `PeerSearchStatus` plus how the peer was reached. Same field names as the model type, so
@@ -471,6 +521,51 @@ pub fn parse_path(raw: Option<&str>, cap: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn copy(origin: serde_json::Value, hops: u32, via: Option<&str>) -> FedSearchHit {
+        let hit: SearchHit = serde_json::from_value(serde_json::json!({
+            "iri": "https://home.example/software/1", "entity_type": "software",
+            "title": "t", "origin": origin, "score": 1.0
+        }))
+        .unwrap();
+        FedSearchHit { hit, reach: reach::DIRECT.into(), hops, via: via.map(str::to_string), also_from: vec![] }
+    }
+
+    #[test]
+    fn the_home_copy_wins_over_a_nearer_cache_and_the_rest_are_named() {
+        let merged = merge_copies(
+            vec![
+                // Our own cached stub: nearest, but a cache.
+                copy(serde_json::json!({"kind": "peer", "cached_at": "2026-09-20T00:00:00Z"}), 0, None),
+                copy(serde_json::json!({"kind": "peer", "resolve_status": "live"}), 1, Some("https://home.example")),
+                copy(
+                    serde_json::json!({"kind": "peer", "cached_at": "2026-09-23T00:00:00Z"}),
+                    1,
+                    Some("https://c.example"),
+                ),
+            ],
+            "https://me.example",
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].via.as_deref(), Some("https://home.example"));
+        assert_eq!(merged[0].also_from, ["https://c.example", "https://me.example"]);
+    }
+
+    #[test]
+    fn without_the_home_copy_the_freshest_cache_wins_then_the_nearest() {
+        let old = serde_json::json!({"kind": "peer", "cached_at": "2026-01-01T00:00:00Z"});
+        let new = serde_json::json!({"kind": "peer", "cached_at": "2026-09-01T00:00:00Z"});
+        let merged = merge_copies(
+            vec![copy(old.clone(), 1, Some("https://b.example")), copy(new.clone(), 2, Some("https://c.example"))],
+            "https://me.example",
+        );
+        assert_eq!(merged[0].via.as_deref(), Some("https://c.example"), "fresher beats nearer");
+        let merged = merge_copies(
+            vec![copy(new.clone(), 2, Some("https://c.example")), copy(new, 1, Some("https://b.example"))],
+            "https://me.example",
+        );
+        assert_eq!(merged[0].via.as_deref(), Some("https://b.example"), "equally fresh: nearer wins");
+    }
 
     #[tokio::test]
     async fn a_query_id_can_only_be_claimed_once() {

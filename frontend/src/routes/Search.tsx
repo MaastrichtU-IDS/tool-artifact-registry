@@ -11,7 +11,7 @@ import type { PeerSearchStatus, SearchHit } from '../lib/types'
  *  how far it came: a hit from a peer the operator chose to trust is not the same evidence
  *  as one relayed to us by that peer from a registry we have never heard of. */
 type Reach = 'local' | 'direct' | 'indirect'
-type FedHit = SearchHit & { reach?: Reach; hops?: number; via?: string }
+type FedHit = SearchHit & { reach?: Reach; hops?: number; via?: string; also_from?: string[] }
 type FedPeer = Omit<PeerSearchStatus, 'status'> & {
   status: 'ok' | 'timeout' | 'error' | 'already_handled' | 'skipped'
   reach?: Reach
@@ -188,6 +188,8 @@ function HitRow({ hit, basePath }: { hit: FedHit; basePath: string }) {
         </span>
       </div>
       {hit.snippet && <p>{hit.snippet}</p>}
+      {/* Other registries returned this record too; the row shows the best copy, not the only one. */}
+      {hit.also_from && hit.also_from.length > 0 && <p className="hint">also from: {hit.also_from.join(', ')}</p>}
     </>
   )
   // A federated hit lives at its home registry; it is never presented as one of ours.

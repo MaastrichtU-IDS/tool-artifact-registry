@@ -1465,6 +1465,98 @@ async fn a_peer_cannot_flood_us_with_results() {
     assert_eq!(r["partial"], true, "a peer we could not read makes the answer partial");
 }
 
+/// A stub peer that answers every search with the same hits, so a test can decide exactly
+/// which copies of a record arrive and how each is attributed.
+async fn spawn_canned_peer(title: &'static str, hits: impl Fn(&str) -> Vec<Value> + Send + Sync + 'static) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let (wk, hits) = (base.clone(), Arc::new(hits(&base)));
+    let app = axum::Router::new()
+        .route(
+            "/.well-known/tar-registry",
+            axum::routing::get(move || {
+                let wk = wk.clone();
+                async move { axum::Json(json!({"base_iri": wk, "title": title, "peers": []})) }
+            }),
+        )
+        .route(
+            "/api/v1/search",
+            axum::routing::get(move || {
+                let hits = hits.clone();
+                async move {
+                    axum::Json(json!({"query": "q", "hits": *hits, "total": hits.len(), "partial": false, "peers": []}))
+                }
+            }),
+        );
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    base
+}
+
+async fn add_peer(node: &FedNode, peer: &str) {
+    let (status, body) = node.h.post("/api/v1/peers", ROOT, json!({"base_url": peer, "announce": false})).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+/// Limitations #6 and propagation spec §9: several copies of one record are one row, from its
+/// home registry when it answered, else from the freshest cache — and only at the origin.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_record_returned_by_several_peers_is_one_row_from_its_home() {
+    let record = |home: &str| format!("{home}/software/01a0-dedup");
+    let row = |iri: String, origin: Value| json!({"iri": iri, "entity_type": "software", "title": "dedup target", "origin": origin, "score": 0.5});
+    let home = spawn_canned_peer("home", move |me| vec![row(record(me), json!({"kind": "local"}))]).await;
+    let cache = |cached_at: &'static str| {
+        let home = home.clone();
+        move |_: &str| {
+            vec![row(
+                record(&home),
+                json!({"kind": "peer", "peer_base_iri": home.clone(), "cached_at": cached_at, "resolve_status": "ok"}),
+            )]
+        }
+    };
+    let fresh = spawn_canned_peer("fresh cache", cache("2026-09-23T00:00:00Z")).await;
+    let old = spawn_canned_peer("old cache", cache("2026-01-01T00:00:00Z")).await;
+    let rows = |r: &Value| -> Vec<Value> {
+        r["hits"].as_array().unwrap().iter().filter(|h| h["title"] == "dedup target").cloned().collect()
+    };
+
+    // With the home registry among the answers, its copy is the row.
+    let a = spawn_registry("A", "alpha").await;
+    for p in [&home, &fresh, &old] {
+        add_peer(&a, p).await;
+    }
+    let (status, r) = a.h.get("/api/v1/search?q=dedup&federated=true").await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    let found = rows(&r);
+    assert_eq!(found.len(), 1, "one record, one row: {r}");
+    assert_eq!(found[0]["via"], home.as_str(), "{r}");
+    assert_eq!(found[0]["origin"]["resolve_status"], "live");
+    let mut also: Vec<&str> = found[0]["also_from"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    also.sort();
+    let mut expected = vec![fresh.as_str(), old.as_str()];
+    expected.sort();
+    assert_eq!(also, expected, "the caches it beat are named, not dropped");
+
+    // Without it, the fresher cache wins — still attributed to the home registry, not as live.
+    let b = spawn_registry("B", "beta").await;
+    for p in [&fresh, &old] {
+        add_peer(&b, p).await;
+    }
+    let (_, r) = b.h.get("/api/v1/search?q=dedup&federated=true").await;
+    let found = rows(&r);
+    assert_eq!(found.len(), 1, "{r}");
+    assert_eq!(found[0]["via"], fresh.as_str(), "{r}");
+    assert_eq!(found[0]["origin"]["peer_base_iri"], home.as_str(), "a cache is not the record's home: {r}");
+    assert_ne!(found[0]["origin"]["resolve_status"], "live", "{r}");
+
+    // Asked as a relay, A merges nothing: the origin decides, with every copy in hand.
+    let (status, r) =
+        a.h.get("/api/v1/search?q=dedup&federated=true&fed_id=q-dedup-relay-1&fed_hops=1&fed_origin=http%3A%2F%2Forigin.invalid").await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    assert_eq!(rows(&r).len(), 3, "a relay passes every copy on: {r}");
+}
+
 /// A stub that speaks just enough of the protocol to be added as a peer, and then answers
 /// every search with `hits` results whose titles are `title_len` characters long.
 async fn spawn_hostile_peer(hits: usize, title_len: usize) -> String {

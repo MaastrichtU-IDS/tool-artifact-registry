@@ -19,7 +19,6 @@ use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -317,24 +316,10 @@ pub async fn search(
         }
     }
 
-    // Two paths can deliver the same record (B and C both peer with D). Keep the most direct
-    // copy — fewest hops is the strongest evidence — and count it once.
-    let mut best: HashMap<(String, String), FedSearchHit> = HashMap::new();
-    let mut order: Vec<(String, String)> = Vec::new();
-    for h in hits {
-        let key = (h.hit.iri.clone(), h.hit.entity_type.clone());
-        match best.get(&key) {
-            Some(existing) if existing.hops <= h.hops => {}
-            Some(_) => {
-                best.insert(key, h);
-            }
-            None => {
-                order.push(key.clone());
-                best.insert(key, h);
-            }
-        }
-    }
-    let mut hits: Vec<FedSearchHit> = order.into_iter().filter_map(|k| best.remove(&k)).collect();
+    // Several routes, and several caches, can deliver the same record. The registry that
+    // started the search merges them into one row; a relay passes every copy on, so that the
+    // choice is made once, with every copy in hand (propagation spec §9).
+    let mut hits = if is_relayed_leg { hits } else { crate::ops::federation::merge_copies(hits, &me) };
     hits.sort_by(|a, b| b.hit.score.partial_cmp(&a.hit.score).unwrap_or(std::cmp::Ordering::Equal));
     if hits.len() > fed.max_total_hits {
         hits.truncate(fed.max_total_hits);

@@ -5,7 +5,7 @@
 | **Status** | Implemented |
 | **Date** | 2026-09-23 |
 | **Spec** | [`2026-08-30-tool-artifact-registry-design.md`](2026-08-30-tool-artifact-registry-design.md) — answers Q8 |
-| **Code** | `src/ratelimit.rs`, `src/auth/mod.rs`, `src/api/mod.rs`, `src/mcp/call.rs`, `src/main.rs`, `tests/ratelimit.rs` |
+| **Code** | `src/ratelimit.rs`, `src/auth/mod.rs`, `src/api/mod.rs`, `src/mcp/call.rs`, `src/mcp/transport.rs`, `src/main.rs`, `tests/ratelimit.rs` |
 
 ---
 
@@ -108,7 +108,7 @@ as a dependency.
 ### 4.2 Authenticate once
 
 The `Principal` extractor currently authenticates inside each handler, so middleware does not
-know who is calling. A new middleware, `resolve_client`, runs before the limiter:
+know who is calling. A new middleware, `ratelimit::middleware`, resolves the client before it charges anything:
 
 1. Determine the client IP (§4.1).
 2. If a bearer credential is present **and** the IP's `auth_fail` bucket has capacity, call
@@ -128,7 +128,9 @@ extractor authenticates as it does today.
 MCP tools dispatch through `api::router(...).oneshot(req)` in-process (`src/mcp/call.rs`). Those
 inner requests pass through the same middleware and have no socket address.
 
-`call.rs` copies the outer request's `ClientContext` into each inner request's extensions. The
+The MCP transport runs each tool call inside a Tokio task-local holding the outer request's
+`ClientContext` (`ratelimit::FORWARDED`), and `call.rs` copies it into each inner request's
+extensions — a task-local rather than a parameter, so none of `rest()`'s callers change. The
 middleware then uses it rather than resolving again, and charges the inner request under **its
 own class** to the same key — a SPARQL query issued through MCP costs `sparql`, not merely
 `mcp`. The outer `/mcp` request is charged under `mcp`. Extensions cannot be set over HTTP, so
@@ -168,7 +170,7 @@ bounded under IP churn.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `TAR_RATE_LIMIT_ENABLED` | `true` | `false` removes the limiter entirely. `resolve_client` still runs. |
+| `TAR_RATE_LIMIT_ENABLED` | `true` | `false` removes the limiter entirely. Client resolution still runs. |
 | `TAR_TRUSTED_PROXIES` | unset | Comma-separated CIDRs. Required behind Traefik, nginx or an ingress, or every request is keyed to the proxy. |
 | `TAR_RATE_LIMIT_<CLASS>` | table in §3 | `<anon>/<authed>`, each `rate:burst` per minute. E.g. `TAR_RATE_LIMIT_SPARQL=30:10/120:30`. A side may be `off`. Classes: `READ`, `WRITE`, `SPARQL`, `FEDERATED`, `MCP`, `OUTBOUND`; `AUTH_FAIL` takes one side only. |
 
@@ -194,7 +196,7 @@ parsing, including rejection of malformed values.
 - a SPARQL query issued through MCP spends the `sparql` bucket.
 
 `Config::for_test` disables the limiter, so the existing suites' assertions do not change — but
-`resolve_client` still runs in every one of them, so the authenticate-once path is exercised by
+client resolution still runs in every one of them, so the authenticate-once path is exercised by
 all 292 existing tests, not only by the new ones.
 
 ---

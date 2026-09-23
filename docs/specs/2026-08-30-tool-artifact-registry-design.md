@@ -653,11 +653,16 @@ volumes: { tar-data: }
 
 One service. That is the whole minimal install (req. 6).
 
-### 10.3 Helm
+### 10.3 Kubernetes
 
-Chart at `deploy/helm/tool-artifact-registry`: Deployment (**1 replica — Oxigraph is
-single-writer**, `strategy: Recreate`), RWO PVC, Service, Ingress, ConfigMap, Secret,
-ServiceMonitor. Probes on `/healthz` and `/readyz`.
+Kustomize at `deploy/kubernetes/`: Deployment (**1 replica — Oxigraph is single-writer**,
+`strategy: Recreate`), RWO PVC, Service, Ingress, generated ConfigMap; the Secret is created out
+of band. Probes on `/healthz` and `/readyz`. A ServiceMonitor scraping `/metrics` is an optional
+Kustomize component, off by default because it needs the Prometheus Operator's CRDs.
+
+**Kustomize only, no Helm chart** (amended 2026-09-24). A chart alongside the Kustomize set would
+be a second set of manifests to keep correct, and the ids3 deployment (§10.4) uses Kustomize and
+ArgoCD anyway. See [Deployment manifests](2026-09-24-deployment-manifests.md).
 
 ### 10.4 ids3
 
@@ -728,7 +733,7 @@ Full screen inventory, routes, component list, API contracts per screen, and sta
 |---|---|---|
 | Q1 | Do we mint DOIs for artifacts or software releases? | Requires DataCite membership and cost. Would sit as an overlay on the UUIDv7 IRIs (D2), not a replacement. Blocks nothing in v1. |
 | Q2 | When do we add cryptographically signed advertisements? | Rejected for v1 (D8) on key-distribution cost. Becomes important the moment a peer registry we do not operate can influence our lineage view. |
-| Q3 | Retention and GC for stale peer stubs. | Currently TTL-refreshed forever. Do stubs for a peer that has been unreachable for 90 days get dropped, tombstoned, or kept? |
+| Q3 | Retention and GC for stale peer stubs. | **Answered: kept and flagged stale** after 90 days without contact, per peer; never dropped, so nothing citing them dangles. See [Peer stubs](2026-09-24-peer-stubs.md). |
 | Q4 | Multi-tenancy inside one registry. | Out of scope for v1 (§1.2). Confirm no IDS use case needs it before that ossifies — retrofitting tenancy onto named graphs is expensive. |
 | Q5 | Should `Capability` eventually be a SHACL shape rather than an `ArtifactType` chip? | Far more precise matchmaking ("consumes graphs conforming to *this* shape"). Natural v2, and `shacl-manager` already has the machinery. |
 | Q6 | Is SHACL write-validation blocking or advisory? | **Answered in the prototype: severity decides.** `sh:Violation` blocks with `422`; `sh:Warning` is recorded and never blocks, which is how "no licence declared" and "no distribution" are handled. `TAR_SHACL_VALIDATE_WRITES=false` downgrades violations to warnings for an estate that prefers a half-described artifact to a rejected one. |

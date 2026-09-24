@@ -42,11 +42,19 @@ citable. A record still reads as one document, because `describe` returns them w
 `prov:qualifiedAssociation`. Every list and count query would otherwise be a two-hop join
 through a reified node.
 
-## 4. Repository liveness metrics are not implemented
+## 4. ~~Repository liveness metrics are not implemented~~ — closed
 
-Repository *sync* is — a record can keep named fields in step with its source repository. What
-is missing is the liveness signal the design asked for: stars, forks, last commit. The UI
-degrades by omitting those cells rather than rendering zeros.
+A background poller now fetches stars, forks and last push for every local software record
+hosted on GitHub, every `TAR_FORGE_POLL_INTERVAL` (default `24h`), through the same client and
+`TAR_FORGE_TOKEN` as sync, paced to stay inside GitHub's rate limit. The numbers are kept in
+SQLite, not the graph, so neither `/sparql` nor a peer sees them; the software JSON carries them
+as `repository_stats`, and the signal bar shows them. A failed fetch keeps the previous numbers
+and records the error beside them.
+
+Records hosted anywhere else, and records not polled yet, still have no numbers, and the UI still
+omits those cells rather than rendering zeros. Liveness numbers are GitHub-only, as repository
+sync already is: a GitLab repository gets neither. See the
+[design note](specs/2026-09-24-repository-liveness.md).
 
 ## 5. ~~Human sign-in has no token refresh~~ — closed
 

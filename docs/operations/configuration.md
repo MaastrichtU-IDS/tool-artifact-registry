@@ -161,7 +161,8 @@ See [The hosted MCP server](../mcp.md).
 
 | Variable | Default | |
 |---|---|---|
-| `TAR_FORGE_TOKEN` | — | Registry-wide forge token for reading private repositories. |
+| `TAR_FORGE_TOKEN` | — | Registry-wide GitHub token, used by sync and by the repository-stats poller. Unset means anonymous: public repositories only, and GitHub's 60 requests/hour instead of 5,000, so the poller paces itself to one request every two minutes rather than every two seconds. |
+| `TAR_FORGE_POLL_INTERVAL` | `24h` | How often stars, forks and last push are refreshed for each local software record with a GitHub repository. The poller wakes at least hourly and fetches only records that are due. The numbers stay in SQLite and are never published to the graph. |
 | `TAR_APIDOC_ALLOW_PRIVATE` | `true` | Fetch API description documents from private addresses. |
 
 ## Build-time

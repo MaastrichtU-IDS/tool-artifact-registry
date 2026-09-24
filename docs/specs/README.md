@@ -18,6 +18,7 @@ say what else was considered.
 | [Changing the base IRI](2026-09-23-base-iri-rebase.md) | Answers Q9: renaming the registry's own records, and answering for the old IRIs afterwards. |
 | [Deployment manifests](2026-09-24-deployment-manifests.md) | Amends §10.3: Kustomize only, no Helm chart, and an optional ServiceMonitor. |
 | [Peer stubs](2026-09-24-peer-stubs.md) | Answers Q3: when a quiet peer's records are flagged stale, and what a cached stub keeps. |
+| [Repository liveness](2026-09-24-repository-liveness.md) | Stars, forks and last push for the signal bar: a paced GitHub poller, kept in SQLite and out of the graph. |
 
 The [frontend handoff](../design-handoff.md) is the corresponding document for the UI, including
 the questions it left open and the answers they got.

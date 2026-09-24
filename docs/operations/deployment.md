@@ -127,7 +127,7 @@ Everything that matters is under `/data`, and nothing that matters is anywhere e
 | Under `/data` | |
 |---|---|
 | the graph store | Every record — software, releases, deployments, runs, artifacts, minted vocabulary terms, cached peer stubs. |
-| a SQLite database | Hashed API tokens, peers, the audit log, federation cursors, idempotency keys, subscriptions and their delivery queues. |
+| a SQLite database | Hashed API tokens, peers, the audit log, federation cursors, idempotency keys, subscriptions and their delivery queues, and repository stats. |
 
 Back up the volume and you have backed up both. Lose it and you have lost every issued token and
 the audit log even if the graph lives in an external store — only the *graph* moves when you set

@@ -276,6 +276,7 @@ pub fn software_from_props(ctx: &Ctx, iri: &str, p: &Props) -> Software {
             })
         }),
         latest_release: None,
+        repository_stats: None,
         instance_count: 0,
         release_count: 0,
         runs_30d: 0,

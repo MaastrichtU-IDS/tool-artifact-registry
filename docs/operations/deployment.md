@@ -127,7 +127,7 @@ Everything that matters is under `/data`, and nothing that matters is anywhere e
 | Under `/data` | |
 |---|---|
 | the graph store | Every record — software, releases, deployments, runs, artifacts, minted vocabulary terms, cached peer stubs. |
-| a SQLite database | Hashed API tokens, peers, the audit log, federation cursors, idempotency keys, subscriptions and their delivery queues. |
+| a SQLite database | Hashed API tokens, peers, the audit log, federation cursors, idempotency keys, subscriptions and their delivery queues, and repository stats. |
 
 Back up the volume and you have backed up both. Lose it and you have lost every issued token and
 the audit log even if the graph lives in an external store — only the *graph* moves when you set
@@ -311,6 +311,42 @@ The registry rate-limits per client address, and behind an ingress every request
 the controller's pods. List their network in `TAR_TRUSTED_PROXIES` (commented out in
 `kustomization.yaml`), or every client shares the proxy's bucket and the first busy minute
 locks out everyone.
+
+### Scraping `/metrics`
+
+A ServiceMonitor for the Prometheus Operator ships as an optional kustomize component, off by
+default. It needs the operator's CRDs: on a cluster without them, applying a ServiceMonitor fails
+the whole `kubectl apply -k`, which is why it is not in the base. Enable it by uncommenting the
+`components:` entry in `deploy/kubernetes/kustomization.yaml`:
+
+```yaml
+components:
+  - components/servicemonitor
+```
+
+and check it renders:
+
+```console
+$ kubectl kustomize deploy/kubernetes | grep -A1 '^kind: ServiceMonitor'
+kind: ServiceMonitor
+metadata:
+```
+
+It selects the Service by `app.kubernetes.io/name: tool-artifact-registry`, scrapes the `http`
+port at `/metrics` every 60 seconds, and needs no credential — `/metrics` is open whatever
+`TAR_PUBLIC_READ` says. Each scrape counts the whole graph, which is why the interval is longer
+than the operator's default. kube-prometheus-stack only picks up ServiceMonitors carrying its
+`release` label unless configured otherwise; if yours does, add that label in
+`components/servicemonitor/servicemonitor.yaml`.
+
+CI renders the manifests with and without the component, so a change that stops them assembling
+fails the build.
+
+### ids3
+
+The IDS deployment is not in this repository. Its Kustomize overlay and ArgoCD Application live
+in the services repository, under `services/ids3/projects/tool-artifact-registry/`. This
+repository ships only the generic base and its optional components.
 
 ## The published image
 

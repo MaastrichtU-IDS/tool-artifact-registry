@@ -7,7 +7,7 @@ Two stores under `TAR_DATA_DIR`:
 | | Holds |
 |---|---|
 | The graph store | Every record: software, releases, deployments, runs, artifacts, vocabulary, cached peer stubs. |
-| A SQLite database | Hashed API tokens, peers, the audit log, federation cursors, idempotency keys, subscriptions and their delivery queues. |
+| A SQLite database | Hashed API tokens, peers, the audit log, federation cursors, idempotency keys, subscriptions and their delivery queues, and repository stats. |
 
 They are separate on purpose. The graph is the catalogue and is meant to be dumped, diffed and
 reloaded; the SQLite side is operational bookkeeping that is mostly reconstructible and contains

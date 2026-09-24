@@ -305,6 +305,32 @@ pub struct SyncStatus {
     pub last_changed: Vec<String>,
 }
 
+/// Stars, forks and last push of a record's GitHub repository, as the forge poller last saw
+/// them. Operational data from SQLite, never the graph (design note: repository liveness).
+///
+/// Served only once a fetch has succeeded, so every count present is a real one.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct RepositoryStats {
+    /// The `owner/name` these numbers belong to, compared with the record's current repository
+    /// before they are shown.
+    #[serde(skip)]
+    pub repo: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stars: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forks: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_commit_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<String>,
+    /// When the poller last tried, successful or not. Decides whether a record is due.
+    #[serde(skip)]
+    pub checked_at: String,
+    /// Why the latest attempt failed, when it did: the reason the numbers may be stale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
 /// Fields a forge can supply. Anything outside this list is always the curator's.
 pub const SYNCABLE_FIELDS: [&str; 9] =
     ["tagline", "description", "readme", "homepage", "license", "keywords", "maturity", "releases", "image"];
@@ -381,6 +407,9 @@ pub struct Software {
     pub sync: Option<SyncStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_release: Option<Release>,
+    /// Filled by the detail endpoint only. Absent until the forge poller has numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository_stats: Option<RepositoryStats>,
     pub instance_count: i64,
     pub release_count: i64,
     /// Runs across every Instance of this Software in the last 30 days (handoff §4.1).

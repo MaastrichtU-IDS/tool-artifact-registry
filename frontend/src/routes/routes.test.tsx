@@ -159,6 +159,38 @@ describe('SoftwareDetail', () => {
     expect(screen.getByRole('link', { name: /What consumes SHACL validation report/ })).toBeInTheDocument()
   })
 
+  it('shows repository stars, forks and last push when the registry knows them', async () => {
+    vi.stubGlobal('fetch', stubFetch({
+      '/api/v1/software/01a/releases': emptyPage(),
+      '/api/v1/instances': emptyPage(),
+      '/api/v1/software/01a': {
+        ...software,
+        repository_stats: { stars: 42, forks: 7, last_commit_at: '2026-09-20T10:00:00Z', fetched_at: '2026-09-24T03:00:00Z' },
+      },
+    }))
+    const { container } = renderAt('/software/01a', <SoftwareDetail />, '/software/:id')
+    await screen.findByRole('heading', { name: 'shacl-manager' })
+    const cell = (label: string) =>
+      [...container.querySelectorAll('.signal')].find((c) => c.querySelector('.label')?.textContent === label)
+    expect(cell('Stars')?.querySelector('.value')?.textContent).toBe('42')
+    expect(cell('Forks')?.querySelector('.value')?.textContent).toBe('7')
+    expect(cell('Last push')?.querySelector('time')).toHaveAttribute('datetime', '2026-09-20T10:00:00Z')
+  })
+
+  it('omits the repository cells, rather than showing zeros, when the numbers are unknown', async () => {
+    vi.stubGlobal('fetch', stubFetch({
+      '/api/v1/software/01a/releases': emptyPage(),
+      '/api/v1/instances': emptyPage(),
+      '/api/v1/software/01a': software,
+    }))
+    renderAt('/software/01a', <SoftwareDetail />, '/software/:id')
+    await screen.findByRole('heading', { name: 'shacl-manager' })
+    expect(screen.getByText('Releases')).toBeInTheDocument()
+    for (const label of ['Stars', 'Forks', 'Last push']) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument()
+    }
+  })
+
   it('offers no edit affordance at all on a record cached from a peer', async () => {
     vi.stubGlobal('fetch', stubFetch({
       '/api/v1/software/09z/releases': emptyPage(),

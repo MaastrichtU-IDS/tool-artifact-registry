@@ -35,6 +35,7 @@ export default function SoftwareDetail() {
   const s = sw.data
   const foreign = s.origin.kind === 'peer'
   const cap = s.capability
+  const rs = s.repository_stats
 
   return (
     <>
@@ -74,6 +75,12 @@ export default function SoftwareDetail() {
               { label: 'Runs / 30d', value: <Link to={`/runs?software=${s.id}`}>{s.runs_30d}</Link> },
               { label: 'Releases', value: s.release_count },
               { label: 'Latest', value: s.latest_release?.version ?? '—', unknown: !s.latest_release },
+              // Repository liveness is left out, cell by cell, whenever it is unknown: a
+              // record hosted off GitHub, or one not polled yet, would otherwise read as a
+              // dead project with zero stars (handoff §9).
+              ...(rs?.stars != null ? [{ label: 'Stars', value: rs.stars }] : []),
+              ...(rs?.forks != null ? [{ label: 'Forks', value: rs.forks }] : []),
+              ...(rs?.last_commit_at ? [{ label: 'Last push', value: <RelativeTime iso={rs.last_commit_at} /> }] : []),
             ]}
           />
 

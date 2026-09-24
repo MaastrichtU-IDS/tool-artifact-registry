@@ -539,6 +539,10 @@ async fn a_subscribe_only_token_manages_subscriptions_and_nothing_else() {
         ("GET", format!("/api/v1/instances/{}/subscriptions", theirs.id), None),
         ("POST", format!("/api/v1/instances/{}/tokens", mine.id), Some(json!({"scopes": ["advertise:produce"]}))),
         ("GET", format!("/api/v1/instances/{}/tokens", mine.id), None),
+        // Nor the deployment's own record, which carries its allowed scopes.
+        ("PATCH", format!("/api/v1/instances/{}", mine.id), Some(json!({"label": "hijacked"}))),
+        ("PUT", format!("/api/v1/instances/{}/capability", mine.id), Some(json!({"consumes": [], "produces": []}))),
+        ("PUT", "/api/v1/instances/self".to_string(), Some(json!({"label": "self", "software": sw}))),
     ];
     for (method, uri, body) in refused {
         let (status, body) = h.req(method, &uri, Some(&narrow), body).await;

@@ -141,11 +141,20 @@ pub async fn get(
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::iri_for(state.base(), Kind::Software, &id);
-    let sw = super::blocking({
+    let mut sw = super::blocking({
         let iri = iri.clone();
         move || dom::load_software(&ctx, &iri)
     })
     .await?;
+    // Only numbers from a successful fetch, and only for the repository the record names now:
+    // after a curator changes the link, the old repository's stars describe another project.
+    let repo = crate::domain::forge::repo_of(sw.sync.as_ref().map(|s| s.repo.as_str()), sw.code_repository.as_deref());
+    sw.repository_stats = state
+        .ops
+        .repository_stats(&iri)
+        .await
+        .map_err(AppError::from)?
+        .filter(|s| s.fetched_at.is_some() && Some(&s.repo) == repo.as_ref());
     let mut sp = Signposting::new(&iri).collection(&format!("{}/api/v1/software", state.base()));
     if let Some(l) = &sw.license {
         sp = sp.license(l);

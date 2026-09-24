@@ -33,12 +33,9 @@ fn may_manage(principal: &Principal, instance_iri: &str) -> AppResult<()> {
     if principal.is_admin() || principal.is_curator() {
         return Ok(());
     }
-    if principal.instance_iri.as_deref() == Some(instance_iri) {
-        // Otherwise a subscribe-only credential could mint itself a wider one, or revoke the
-        // deployment's advertising tokens, and the narrow scope would narrow nothing.
-        if principal.is_subscribe_only() {
-            return Err(AppError::forbidden("a subscribe:artifacts credential cannot manage tokens"));
-        }
+    // Not a subscribe-only credential: it could mint itself a wider one, or revoke the
+    // deployment's advertising tokens, and the narrow scope would narrow nothing.
+    if principal.acts_for_instance(instance_iri) {
         return Ok(());
     }
     Err(AppError::forbidden("only the instance owner, a curator or an admin may manage these tokens"))

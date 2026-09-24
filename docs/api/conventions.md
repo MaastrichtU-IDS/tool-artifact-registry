@@ -44,7 +44,7 @@ credentials.
 | `register:software` | register and update software |
 | `register:instance` | register deployments |
 | `read:private` | read records that are not publicly readable |
-| `subscribe:artifacts` | manage the deployment's own [subscriptions](subscriptions.md), and nothing else — not even its tokens |
+| `subscribe:artifacts` | manage the deployment's own [subscriptions](subscriptions.md), and nothing else — not its tokens, and not its record |
 | `admin:*` | everything |
 
 ## Errors

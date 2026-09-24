@@ -6,6 +6,7 @@
 | **Date** | 2026-08-31 |
 | **Extends** | [design §7.7, §7.8, §9.6](2026-08-30-tool-artifact-registry-design.md) — D9 (cross-link plus lazy resolve, opt-in peers) is unchanged |
 | **Code** | `src/api/search.rs`, `src/ops/federation.rs`, `migrations/0002_federation.sql` |
+| **Amended** | 2026-09-24 — §9, merging copies of one record (limitations #6) |
 
 ## 1. What changed
 
@@ -150,7 +151,7 @@ bounded rather than passing for a complete sweep.
 | **Fan-out amplification** | Peers per query capped at 12 (`TAR_FEDERATED_SEARCH_MAX_PEERS`); the excess is reported as `skipped`, not hidden. |
 | **Seen-id table growth** | TTL sweep plus a hard row cap, both on the write path. No background task to own or to fail silently. |
 | **Injection / log spam via `fed_id`** | The id is validated, never sanitised — rewriting it would break the sender's own deduplication — and every SQL parameter is bound. |
-| **Duplicate records from two routes** | Merged on `(iri, entity_type)`, keeping the copy with the fewest hops: the most direct evidence wins. |
+| **Duplicate records from two routes** | Merged on the IRI at the origin registry, the home registry's copy first (§9). |
 
 Two residual risks, stated rather than hidden:
 
@@ -205,3 +206,38 @@ well-known handshake, so the cycle is a genuine one across sockets rather than a
   truncated; one returning megabytes is refused unread.
 - `src/ops/federation.rs` unit tests cover the claim primitive, TTL sweep and row cap, id
   validation, path parsing, and the hop clamp.
+
+## 9. Merging copies of one record
+
+*Added 2026-09-24, closing limitations #6, with the user's decisions.*
+
+The merge above was keyed on `(iri, entity_type)`, kept the copy with the fewest hops, and ran
+at every hop. Measured against what a row should say, that got three things wrong:
+
+1. **Fewest hops is not the best copy.** Our own cached stub of a record is 0 hops away, and
+   the record's home registry answering live is 1 hop. The stub won.
+2. **A peer's cached copy was presented as the record itself.** `relayed` treated anything that
+   was 0 hops at the peer as minted there. That includes the peer's cached stubs of a third
+   registry's records, which were then shown as "live from B" when they were B's copy of D's
+   record.
+3. **Merging at every hop** decided the winner before the origin had seen every copy.
+
+Now:
+
+| | |
+|---|---|
+| **Key** | The record's IRI. It is one record wherever it was cached. |
+| **Winner** | The **home registry's copy** if one arrived. That is a copy this registry minted (`origin.kind` `local`), or one relayed by the peer that minted it (`resolve_status` `live`). Otherwise the **most recently cached** copy (`origin.cached_at`), with fewest hops breaking a tie. |
+| **The others** | Not dropped silently: the winning row gains `also_from`, the registries the other copies came through (a direct peer's base IRI, or this registry for its own cached copy). The UI shows it as "also from: A, B". |
+| **Where** | **Only at the origin registry.** A relayed leg (`fed_id` present) passes every copy through, so the origin decides with every copy in hand. Relays still cap what they forward (§6). |
+
+`relayed` now treats a hit as the peer's own only when the peer called it `local`. A cached copy
+keeps the home attribution the peer gave it, loses the peer's `peer_id` (an id in their table,
+not ours), and keeps its `cached_at`, which is what freshness is judged on.
+
+**Tests.** `a_record_returned_by_several_peers_is_one_row_from_its_home` (in `tests/api.rs`) uses
+three canned peers: the home registry and two caches of different ages. With the home present,
+it wins and `also_from` names the caches. Without it, the fresher cache wins, still attributed
+to the home registry and not marked live. Asked as a relayed leg, the same registry returns
+every copy unmerged. Unit tests in `src/ops/federation.rs` cover the ranking.
+

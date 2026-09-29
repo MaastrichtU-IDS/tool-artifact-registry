@@ -22,9 +22,8 @@ however powerful: being trusted is not the same as being the thing that ran.
 2. **Always send an `external_key` on each artifact**, such as `<run key>/report`. A retry with
    the same keys is then recognised as a retry (`"created": false`), even if other fields
    changed.
-3. **Get it right before you send it.** An artifact cannot be edited or withdrawn after it is
-   advertised, and re-advertising with the same keys keeps the first version. Validate your
-   payload in a test job first.
+3. **Re-advertising does not update.** A retry with the same keys keeps the first version. To
+   fix a mistake, [correct the artifact](#correct-or-withdraw-an-artifact) instead.
 4. **Advertise late.** Post when you know the outcome, with `status` `success` or `failed`. A
    run posted as `running` and never updated stays "running".
 5. **Say when the bytes are not obtainable.** Set `availability` on the distribution to
@@ -138,7 +137,10 @@ credential is bound to, so it is safe to call on **every start**:
  "release": "<the release's id, from step 2>"}
 ```
 
-Name the release by its **id**. The `version` string alone does not link a release.
+Name the release by its **id**, or send `"version": "2.2.0"` and the registry links the release
+of your software with that version. A version with no release registered changes nothing, so
+register releases first ([step 2](register.md#releases)). A release id that does not exist is
+refused, not stored as a link to nothing.
 
 ### On Kubernetes
 
@@ -149,6 +151,36 @@ or the identity provider is unreachable, it says so in the log and lets the serv
 ```yaml
 {{#include ../../examples/providers/kubernetes-announce.yaml}}
 ```
+
+## Correct or withdraw an artifact
+
+The deployment that advertised an artifact, or a curator, can fix how it is described:
+
+```bash
+curl -X PATCH https://registry.example.org/api/v1/artifacts/$ARTIFACT_ID \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"title": "Validation report for job 1234",
+       "distributions": [{"download_url": "https://validator.example.org/reports/1234.ttl",
+                          "media_type": "text/turtle", "availability": "restricted",
+                          "access_request_url": "https://validator.example.org/access"}]}'
+```
+
+`title`, `description`, `license`, `keywords` and `distributions` can change; send only the
+ones you mean to. `distributions` replaces them all, and availability is set per distribution.
+An empty `description` or `license` removes it. The type (`conforms_to`) and the lineage
+cannot change, and naming them is refused rather than ignored.
+
+To withdraw one, for instance a report published by mistake or a download URL that must not be
+shared:
+
+```bash
+curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+  https://registry.example.org/api/v1/artifacts/$ARTIFACT_ID
+```
+
+A withdrawn artifact is not erased. Its page keeps answering, marked withdrawn, so anything that
+points at it does not break, but lists, search and subscriptions stop offering it. It cannot be
+edited afterwards.
 
 ## See what you advertised
 

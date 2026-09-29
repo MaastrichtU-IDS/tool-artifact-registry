@@ -61,6 +61,14 @@ tar:SoftwareShape a sh:NodeShape ;
 # of the service endpoint, including its operations, parameters", with OpenAPI as its worked
 # example. dct:conformsTo names which specification, so a consumer that has never seen this
 # registry still knows what it is being handed.
+# A licence is an http(s) IRI, on every kind of record. `sh:nodeKind sh:IRI` alone let a bare
+# `CC-BY-4.0` through as a relative IRI, which the record then could not read back: the write
+# succeeded and the licence silently vanished.
+tar:LicenceShape a sh:NodeShape ;
+    sh:targetSubjectsOf dct:license ;
+    sh:property [ sh:path dct:license ; sh:pattern "^https?://" ;
+                  sh:message "license must be an SPDX IRI such as https://spdx.org/licenses/Apache-2.0" ] .
+
 tar:ApiDocShape a sh:NodeShape ;
     sh:targetObjectsOf dcat:endpointDescription ;
     sh:property [ sh:path tar:apiFormat ; sh:maxCount 1 ; sh:datatype xsd:string ;
@@ -182,8 +190,12 @@ tar:RunShape a sh:NodeShape ;
                   sh:message "run.started_at must be an RFC 3339 timestamp" ] ;
     sh:property [ sh:path prov:endedAtTime ; sh:maxCount 1 ; sh:datatype xsd:dateTime ;
                   sh:message "run.ended_at must be an RFC 3339 timestamp" ] ;
-    sh:property [ sh:path prov:endedAtTime ; sh:minExclusive 0 ;
-                  sh:lessThan prov:startedAtTime ; sh:severity sh:Warning ;
+    # On the start, pointing at the end: "started at or before it ended". The earlier form sat on
+    # the end with `sh:lessThan prov:startedAtTime`, which asks for the end to come *first*, and a
+    # `sh:minExclusive 0` comparing a timestamp with an integer — so every correct run carried
+    # this warning and a wrong one could not be told apart.
+    sh:property [ sh:path prov:startedAtTime ; sh:lessThanOrEquals prov:endedAtTime ;
+                  sh:severity sh:Warning ;
                   sh:message "a run should not end before it starts" ] ;
     sh:property [ sh:path tar:status ; sh:in ( "success" "failed" "running" "aborted" ) ;
                   sh:message "status must be one of success, failed, running, aborted" ] ;

@@ -378,6 +378,39 @@ mod tests {
         shapes().validate_quads(&quads)
     }
 
+    /// A bare licence name used to pass as a relative IRI and then vanish from the record.
+    #[test]
+    fn a_licence_must_be_an_http_iri_on_every_kind_of_record() {
+        let bare = |r: Report| r.findings.iter().any(|f| f.message.starts_with("license must be an SPDX IRI"));
+        let sw = |l: &str| software(SoftwareIn { name: "x".into(), license: Some(l.into()), ..Default::default() });
+        let art = |l: &str| artifact(ArtifactIn { title: Some("x".into()), license: Some(l.into()), ..Default::default() });
+        assert!(bare(sw("MIT")) && bare(art("CC-BY-4.0")));
+        assert!(!bare(sw("https://spdx.org/licenses/MIT")) && !bare(art("https://spdx.org/licenses/CC-BY-4.0")));
+    }
+
+    /// A correct run is not warned about, and one that ends before it starts is. The rule used
+    /// to be written backwards, so every run with an end time was flagged and a wrong one could
+    /// not be told apart.
+    #[test]
+    fn only_a_run_that_ends_before_it_starts_is_warned_about() {
+        let run = |started: &str, ended: &str| {
+            let input = RunIn {
+                status: Some("success".into()),
+                started_at: Some(started.into()),
+                ended_at: Some(ended.into()),
+                ..Default::default()
+            };
+            let quads = rundom::run_quads(&format!("{BASE}/run/x"), &input, &format!("{BASE}/instance/i"), "urn:test");
+            shapes().validate_quads(&quads)
+        };
+        let warned = |r: &Report| r.findings.iter().any(|f| f.message.contains("end before it starts"));
+        assert!(!warned(&run("2026-09-29T10:00:00Z", "2026-09-29T10:02:00Z")), "a normal run");
+        assert!(!warned(&run("2026-09-29T10:00:00Z", "2026-09-29T10:00:00Z")), "an instant run");
+        let backwards = run("2026-09-29T10:02:00Z", "2026-09-29T10:00:00Z");
+        assert!(warned(&backwards), "{:?}", backwards.findings);
+        assert_eq!(backwards.findings.iter().filter(|f| f.message.contains("end before it starts")).count(), 1);
+    }
+
     #[test]
     fn the_shipped_shapes_parse() {
         let s = shapes();

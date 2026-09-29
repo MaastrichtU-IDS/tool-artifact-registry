@@ -88,9 +88,16 @@ class Registry:
         """Create or update this deployment's own record. Safe to call on every start."""
         return self.request("PUT", "/api/v1/instances/self", record)
 
-    def advertise(self, role: str, run: dict, artifacts: list[dict]) -> dict:
-        """`role` is "produced" or "consumed". Idempotent on the run's and artifacts' external keys."""
-        return self.request("POST", f"/api/v1/advertise/{role}", {"run": run, "artifacts": artifacts})
+    def advertise(self, role: str, run: dict, artifacts: list[dict], instance_key: str | None = None) -> dict:
+        """`role` is "produced" or "consumed". Idempotent on the run's and artifacts' external keys.
+
+        `instance_key` is only for a credential shared by several self-registered deployments:
+        the key the deployment that ran this announced itself with.
+        """
+        body = {"run": run, "artifacts": artifacts}
+        if instance_key:
+            body["instance_key"] = instance_key
+        return self.request("POST", f"/api/v1/advertise/{role}", body)
 
 
 def _main(argv: list[str]) -> int:

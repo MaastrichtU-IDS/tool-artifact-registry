@@ -11,8 +11,11 @@ Both take the same body — one run, and the artifacts it touched — and both c
 does not exist yet, so a job that produces and consumes makes two calls and gets one run.
 
 The credential must act as a deployment and carry `advertise:produce` or `advertise:consume`.
-The deployment comes from the credential; there is no field for it. See [How a tool
-authenticates](authentication.md).
+The deployment comes from the credential. The one exception is a shared registration
+credential (a software key, or a client in `registration_clients`), which registered several
+deployments itself: it names the one that ran with `instance_key`, the key that deployment
+[announced with](deployments.md#instance_key). Any other credential's `instance_key` is ignored.
+See [How a tool authenticates](authentication.md).
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
@@ -199,6 +202,19 @@ version of an adapter: it does not pretend the mapping is total, and it does not
 what it could not place.
 
 The artifact type the adapter assigns is a term like any other, held to the same rule.
+
+## Correcting and withdrawing
+
+```
+PATCH  /api/v1/artifacts/{id}     title, description, license, keywords, distributions
+DELETE /api/v1/artifacts/{id}     withdraw (tombstone)
+```
+
+Allowed to the deployment whose run generated the artifact (for one no run generated, the
+credential that first presented it) and to curators. The type and the lineage are not
+editable: naming `conforms_to` or `was_derived_from` is refused, not silently ignored. A
+withdrawn artifact keeps resolving, with `tombstoned: true`, and drops out of lists, search and
+subscriptions; editing it is a `410`.
 
 ## Reading it back
 

@@ -47,7 +47,9 @@ fn where_body(base: &str, f: &InstanceFilter) -> String {
         w.push_str(&format!("\nGRAPH ?g {{ ?s tar:instanceOf <{iri}> }}"));
     }
     if let Some(r) = f.release.as_deref().filter(|v| !v.is_empty()) {
-        let iri = ids::iri_for(base, Kind::Release, r);
+        // Unchecked, a value here is spliced into the query. A reference that is not one
+        // matches nothing, which is the honest answer to a filter on it.
+        let iri = ids::reference(base, Kind::Release, r).unwrap_or_else(|_| format!("{base}/release/-invalid-"));
         w.push_str(&format!("\nGRAPH ?g {{ ?s tar:runsRelease <{iri}> }}"));
     }
     if let Some(o) = f.operator.as_deref().filter(|v| !v.is_empty()) {
@@ -152,13 +154,27 @@ fn check_deployable(state: &AppState, software: Option<&str>, input: &InstanceIn
     Ok(())
 }
 
+/// A release a deployment says it runs: a well-formed reference to one that exists. A link to
+/// a release nobody registered is a link to nothing, and it would sit on the record looking
+/// like a fact.
+pub(crate) fn release_ref(state: &AppState, value: &str) -> AppResult<String> {
+    let iri = ids::reference(state.base(), Kind::Release, value)?;
+    if !state.store.exists(&iri).map_err(AppError::from)? {
+        return Err(AppError::bad_request(format!(
+            "no release {iri}; register it first with POST /api/v1/software/{{id}}/releases, or send \
+             \"version\" to link the release with that version"
+        )));
+    }
+    Ok(iri)
+}
+
 fn resolve_software_for(state: &AppState, input: &InstanceIn) -> AppResult<Option<String>> {
     if let Some(sw) = input.software.as_deref().filter(|v| !v.is_empty()) {
         return Ok(Some(ids::iri_for(state.base(), Kind::Software, sw)));
     }
     // Derive from the Release when only that was given.
-    if let Some(r) = input.release.as_deref().filter(|v| !v.is_empty()) {
-        let iri = ids::iri_for(state.base(), Kind::Release, r);
+    if let Some(r) = input.release.as_deref() {
+        let iri = release_ref(state, r)?;
         let quads = state.store.describe(&iri).map_err(AppError::from)?;
         return Ok(Props::from_quads(&iri, &quads).iri(ns::DCT, "isVersionOf"));
     }
@@ -199,15 +215,15 @@ pub async fn create(
             _ => input.software = Some(bound.to_string()),
         }
     }
-    if let Some(r) = input.release.clone() {
-        input.release = Some(ids::iri_for(state.base(), Kind::Release, &r));
-    }
     let iri = ids::mint(state.base(), Kind::Instance);
     let subject = principal.subject.clone();
     let label = input.label.clone();
     super::blocking({
         let (state, iri) = (state.clone(), iri.clone());
         move || {
+            if let Some(r) = input.release.clone() {
+                input.release = Some(release_ref(&state, &r)?);
+            }
             let software = resolve_software_for(&state, &input)?;
             check_deployable(&state, software.as_deref(), &input)?;
             let quads = dom::instance_quads(state.base(), &iri, &input, &subject, software.as_deref());
@@ -343,7 +359,11 @@ pub async fn patch(
             if let Some(owner) = current.self_registered_by.as_deref() {
                 if caller_instance.as_deref() != Some(iri.as_str()) {
                     return Err(AppError::forbidden(format!(
-                        "this deployment maintains its own record — it was registered by {owner}, and                          re-states these fields every time it announces itself, so an edit made here                          would be overwritten without warning. The deployment changes them at                          PUT /api/v1/instances/self. To stop it, withdraw the record or revoke the                          credential it registered with."
+                        "this deployment maintains its own record — it was registered by {owner}, and \
+                         re-states these fields every time it announces itself, so an edit made here \
+                         would be overwritten without warning. The deployment changes them at \
+                         PUT /api/v1/instances/self. To stop it, withdraw the record or revoke the \
+                         credential it registered with."
                     )));
                 }
             }
@@ -363,7 +383,7 @@ pub async fn patch(
                 input.software = Some(ids::iri_for(state.base(), Kind::Software, &sw));
             }
             if let Some(r) = input.release.clone() {
-                input.release = Some(ids::iri_for(state.base(), Kind::Release, &r));
+                input.release = Some(release_ref(&state, &r)?);
             }
             let software = resolve_software_for(&state, &input)?;
             check_deployable(&state, software.as_deref(), &input)?;
@@ -486,7 +506,8 @@ pub async fn announce_self(
             move || {
                 let current = dom::load_instance(&ctx, &iri)?;
                 let mut merged = instance_in_from(&current);
-                apply_announcement(&mut merged, &input, state.base());
+                apply_announcement(&mut merged, &input);
+                resolve_announced_release(&state, &mut merged, &input)?;
                 shacl::enforce_write(
                     &state,
                     &dom::instance_quads(state.base(), &iri, &merged, &subject, merged.software.as_deref()),
@@ -574,7 +595,7 @@ pub async fn announce_self(
         allowed_scopes: vec!["advertise:produce".into(), "advertise:consume".into()],
         ..Default::default()
     };
-    apply_announcement(&mut fresh, &input, state.base());
+    apply_announcement(&mut fresh, &input);
     // `apply_announcement` copies `software` from the payload; put the authorised value back,
     // so a credential bound to one application cannot register a deployment of another by
     // naming it twice.
@@ -589,6 +610,8 @@ pub async fn announce_self(
         let (state, iri, fresh, subject, now) =
             (state.clone(), iri.clone(), fresh, principal.subject.clone(), now.clone());
         move || {
+            let mut fresh = fresh;
+            resolve_announced_release(&state, &mut fresh, &input)?;
             let resolved = resolve_software_for(&state, &fresh)?;
             check_deployable(&state, resolved.as_deref(), &fresh)?;
             let quads = dom::instance_quads(state.base(), &iri, &fresh, &subject, resolved.as_deref());
@@ -622,15 +645,12 @@ pub async fn announce_self(
 
 /// Copy the fields a deployment is allowed to say about itself. Everything absent is left as
 /// it stands, so announcing an endpoint does not erase the jurisdiction a curator set.
-fn apply_announcement(target: &mut InstanceIn, input: &SelfAnnounceIn, base: &str) {
+fn apply_announcement(target: &mut InstanceIn, input: &SelfAnnounceIn) {
     if let Some(v) = &input.label {
         target.label = v.clone();
     }
     if let Some(v) = &input.software {
-        target.software = Some(ids::iri_for(base, Kind::Software, v));
-    }
-    if let Some(v) = &input.release {
-        target.release = Some(ids::iri_for(base, Kind::Release, v));
+        target.software = Some(v.clone());
     }
     for (from, to) in [
         (&input.endpoint_url, &mut target.endpoint_url),
@@ -647,6 +667,40 @@ fn apply_announcement(target: &mut InstanceIn, input: &SelfAnnounceIn, base: &st
     if input.capability.is_some() {
         target.capability = input.capability.clone();
     }
+}
+
+/// Which release an announcement says the deployment runs. `release` names one outright and
+/// must exist. `version` is what a deployment usually knows about itself, so it is matched
+/// against the software's releases and links the one with that version. A version with no
+/// release registered changes nothing: the record keeps whatever release it had, rather than
+/// losing it to a deployment that is ahead of its catalogue entry.
+fn resolve_announced_release(state: &AppState, target: &mut InstanceIn, input: &SelfAnnounceIn) -> AppResult<()> {
+    if let Some(sw) = target.software.clone() {
+        target.software = Some(ids::reference(state.base(), Kind::Software, &sw)?);
+    }
+    if let Some(r) = &input.release {
+        target.release = Some(release_ref(state, r)?);
+    } else if let (Some(v), Some(sw)) =
+        (input.version.as_deref().map(str::trim).filter(|v| !v.is_empty()), &target.software)
+    {
+        let q = format!(
+            r#"{p}
+SELECT ?r WHERE {{
+  GRAPH <{g}> {{ ?r dct:isVersionOf {sw} ; schema:softwareVersion "{v}" }}
+  FILTER NOT EXISTS {{ GRAPH ?tg {{ ?r tar:tombstoned true }} }}
+}} LIMIT 2"#,
+            p = ns::PREFIXES,
+            g = ns::G_LOCAL,
+            sw = crate::store::queries::iri(sw).map_err(|e| AppError::bad_request(e.to_string()))?,
+            v = super::escape_literal(v),
+        );
+        let rows = state.store.select(&q).map_err(AppError::from)?.rows;
+        // Two releases with one version is a catalogue problem; linking either would be a guess.
+        if let [only] = rows.as_slice() {
+            target.release = only.iri("r");
+        }
+    }
+    Ok(())
 }
 
 /// Record that we heard from this deployment. For one with no endpoint — a CLI, a desktop
@@ -727,4 +781,72 @@ SELECT ?i WHERE {{
         key = super::escape_literal(key),
     );
     state.store.select(&q).ok()?.rows.first()?.iri("i")
+}
+
+/// A deployment a shared registration credential created for itself, and may therefore
+/// advertise for.
+pub(crate) struct OwnDeployment {
+    pub iri: String,
+    pub allowed_scopes: Vec<String>,
+}
+
+/// Which deployment a shared registration credential — an auto-registration key, or an OIDC
+/// client a software lists in `registration_clients` — is acting for.
+///
+/// Such a credential is shared by every deployment of the application, so it carries no
+/// deployment of its own. But it registered each of them, under the `instance_key` it
+/// announced with, so naming that key grants it nothing it did not already have: it could
+/// announce as any of them. With one registered deployment no key is needed; with several and
+/// no key the registry refuses rather than attribute a run to the wrong one.
+///
+/// Matched on subject *and* issuer: a client id is only unique within one identity provider.
+pub(crate) fn own_deployment(state: &AppState, principal: &Principal, key: Option<&str>) -> AppResult<OwnDeployment> {
+    let q = format!(
+        r#"{p}
+SELECT ?i ?key ?iss (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scopes) WHERE {{
+  GRAPH <{g}> {{
+    ?i tar:selfRegisteredBy "{subject}" .
+    OPTIONAL {{ ?i tar:instanceKey ?key }}
+    OPTIONAL {{ ?i tar:selfRegisteredIssuer ?iss }}
+    OPTIONAL {{ ?i tar:allowedScope ?scope }}
+  }}
+  FILTER NOT EXISTS {{ GRAPH ?tg {{ ?i tar:tombstoned true }} }}
+}} GROUP BY ?i ?key ?iss"#,
+        p = ns::PREFIXES,
+        g = ns::G_LOCAL,
+        subject = super::escape_literal(&principal.subject),
+    );
+    let rows = state.store.select(&q).map_err(AppError::from)?.rows;
+    let mine: Vec<_> = rows.iter().filter(|r| r.str("iss") == principal.issuer).collect();
+    let chosen: Vec<_> = match key {
+        Some(k) => mine.iter().filter(|r| r.str("key").as_deref() == Some(k)).collect(),
+        None => mine.iter().collect(),
+    };
+    match (chosen.as_slice(), key) {
+        ([one], _) => Ok(OwnDeployment {
+            iri: one.iri("i").ok_or_else(|| AppError::internal("self-registered deployment without an IRI"))?,
+            allowed_scopes: one
+                .str("scopes")
+                .map(|s| s.split_whitespace().map(str::to_string).collect())
+                .unwrap_or_default(),
+        }),
+        ([], Some(k)) => Err(AppError::forbidden(format!(
+            "this credential has registered no deployment with instance_key {k:?}; announce it first \
+             with PUT /api/v1/instances/self"
+        ))),
+        ([], None) => Err(AppError::forbidden(
+            "this credential does not act as an Instance; a shared registration credential must \
+             first announce its deployment with PUT /api/v1/instances/self, then advertise",
+        )),
+        (many, _) => {
+            let mut keys: Vec<String> = many.iter().filter_map(|r| r.str("key")).collect();
+            keys.sort();
+            Err(AppError::forbidden(format!(
+                "this credential registered {} deployments; say which one ran this with \
+                 \"instance_key\" (one of: {})",
+                many.len(),
+                keys.join(", ")
+            )))
+        }
+    }
 }

@@ -95,7 +95,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/artifacts", get(artifacts::list).post(artifacts::create))
         // Must precede /artifacts/{id}: `identify` is a function, not a record.
         .route("/artifacts/identify", post(artifacts::identify).get(artifacts::identify_get))
-        .route("/artifacts/{id}", get(artifacts::get))
+        .route("/artifacts/{id}", get(artifacts::get).patch(artifacts::patch).delete(artifacts::withdraw))
         .route("/artifacts/{id}/lineage", get(artifacts::lineage))
         .route("/runs", get(runs::list))
         .route("/runs/{id}", get(runs::get))

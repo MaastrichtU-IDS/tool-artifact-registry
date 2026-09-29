@@ -92,6 +92,27 @@ pub fn iri_for(base_iri: &str, kind: Kind, id: &str) -> String {
     format!("{}/{}/{}", base_iri.trim_end_matches('/'), kind.segment(), id)
 }
 
+/// A reference to a record as a client wrote it — a bare id this registry minted, or a full
+/// IRI — checked before it is used.
+///
+/// `iri_for` cannot fail, so the empty string became `{base}/release/`, a link to nothing, and a
+/// value with `>` or a space in it would be spliced into a query. This refuses both: a bare id
+/// must be one path segment of plain characters, and the result must be a valid IRI.
+pub fn reference(base_iri: &str, kind: Kind, value: &str) -> crate::error::AppResult<String> {
+    let v = value.trim();
+    let bad = |why: &str| crate::error::AppError::bad_request(format!("{} reference {value:?} {why}", kind.api_name()));
+    if v.is_empty() {
+        return Err(bad("is empty"));
+    }
+    let is_iri = v.starts_with("http://") || v.starts_with("https://");
+    if !is_iri && !v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~')) {
+        return Err(bad("is neither an id nor an http(s) IRI"));
+    }
+    let iri = iri_for(base_iri, kind, v);
+    oxigraph::model::NamedNode::new(&iri).map_err(|e| bad(&format!("is not a valid IRI: {e}")))?;
+    Ok(iri)
+}
+
 /// The local id of an IRI minted by this registry, if it is one.
 pub fn local_id(base_iri: &str, iri: &str) -> Option<(Kind, String)> {
     let rest = iri.strip_prefix(base_iri.trim_end_matches('/'))?.strip_prefix('/')?;

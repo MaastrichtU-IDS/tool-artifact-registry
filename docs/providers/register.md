@@ -196,13 +196,21 @@ guide takes `TAR_TOKEN` in place of the client id and secret.
 
 If deployments come and go (per cluster, per customer, per branch), creating each by hand does
 not scale. [Self-registration](../api/deployments.md#self-registering) lets the program create
-its own records. Two limits to know before choosing it:
+its own records, all with one shared credential (a software key, or a client listed in the
+software's `registration_clients`).
 
-- A deployment that registered itself with a **software token** cannot then advertise with that
-  same token. It needs a deployment token or its own client as well.
-- A client shared through `registration_clients` can advertise only while it has registered
-  exactly **one** deployment. With several, the registry cannot tell which one ran a job, and
-  refuses rather than guess.
+Each deployment announces itself under its own `instance_key` (a cluster name, a hostname), and
+names that key again when it advertises:
 
-For a handful of long-lived deployments, one client each, as above, is simpler and has neither
-limit.
+```json
+{"instance_key": "cluster-a",
+ "run": {"external_key": "job/77", "status": "success"},
+ "artifacts": [ … ]}
+```
+
+The shared credential registered every one of these deployments, so naming the key gives it
+nothing it did not already have. With only one deployment registered, the key can be left out;
+with several, an advertisement without it is refused rather than attributed to the wrong one.
+
+For a handful of long-lived deployments, one client each, as above, is simpler: no keys to
+keep apart.

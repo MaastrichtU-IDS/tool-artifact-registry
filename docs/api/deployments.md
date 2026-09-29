@@ -75,12 +75,19 @@ The first call creates the record; every call after it updates that same one. It
 because it is meant to be run unconditionally at startup — announcing is not something a
 deployment should have to remember whether it has already done.
 
+`version` links the software's release with that version, when one is registered; a version
+with none changes nothing. `release` names one by id instead, and must exist.
+
 ### `instance_key`
 
 What tells two deployments sharing one credential apart. Without it, one key would mean one
 deployment, and a second replica would overwrite the first one's record instead of making its
 own. Anything stable per deployment works: a cluster name, a hostname, a pod's stable
 identifier.
+
+It is also how the shared credential advertises afterwards: an advertisement carrying
+`"instance_key": "prod-cluster"` is recorded as that deployment's run. With a single deployment
+registered the key may be left out; with several, it is required.
 
 ### The credential decides which software
 

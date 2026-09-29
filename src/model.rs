@@ -1075,6 +1075,11 @@ pub struct AdvertiseIn {
     pub run: RunIn,
     #[serde(default)]
     pub artifacts: Vec<ArtifactIn>,
+    /// Which of its deployments a *shared* registration credential is advertising for: the
+    /// `instance_key` that deployment announced itself with. Not needed, and ignored, when the
+    /// credential is one deployment's own — the deployment always comes from the credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

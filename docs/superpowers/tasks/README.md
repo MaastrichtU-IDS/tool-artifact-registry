@@ -22,6 +22,7 @@ brainstorming flow, get the design approved, and write a spec in `docs/specs/` b
 | 05 | [Deduplicate federated search results](05-federated-dedup.md) | Needs design · **done** | limitations #6 |
 | 06 | [A `subscribe:*` scope](06-subscribe-scope.md) | Bounded · **done** | limitations #14 |
 | 07 | [Helm chart and ServiceMonitor, or drop the promise](07-helm-chart.md) | Needs decision · **done** | spec §10.3 |
+| 08 | [Fix the pre-deploy audit findings](08-pre-deploy-audit.md) | Bounded · **parked** | audit 2026-09-28 |
 
 Suggested order: 01 and 02 (small, independent), then 03, 06, 05, 04, 07.
 

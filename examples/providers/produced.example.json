@@ -1,0 +1,24 @@
+{
+  "run": {
+    "external_key": "ci/1234/attempt-1",
+    "status": "success",
+    "started_at": "2026-09-29T10:00:00Z",
+    "ended_at": "2026-09-29T10:02:00Z"
+  },
+  "artifacts": [
+    {
+      "external_key": "ci/1234/report",
+      "title": "Validation report for job 1234",
+      "conforms_to": "https://registry.example.org/type/shacl-validation-report",
+      "license": "https://spdx.org/licenses/CC-BY-4.0",
+      "distributions": [
+        {
+          "download_url": "https://validator.example.org/reports/1234.ttl",
+          "media_type": "text/turtle",
+          "availability": "restricted",
+          "access_request_url": "https://validator.example.org/access"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+# Advertise what a CI job produced, as the deployment the job belongs to.
+#
+# Copy the `advertise` step into your own workflow, after the step that produces the file.
+# Set these in the repository (Settings → Secrets and variables → Actions):
+#
+#   vars.TAR_URL              the registry, e.g. https://registry.example.org
+#   vars.TAR_TOKEN_URL        your identity provider's token endpoint
+#   vars.TAR_ARTIFACT_TYPE    the artifact type IRI, from GET /api/v1/vocab/search?branch=data&q=…
+#   secrets.TAR_CLIENT_ID     the deployment's client id
+#   secrets.TAR_CLIENT_SECRET its secret
+#
+# The external keys come from the run id and attempt, so each attempt is one run and a retried
+# step inside it updates that run instead of recording a second. Drop `run_attempt` from RUN_KEY
+# if you would rather have a re-run replace the first attempt's record.
+name: validate-and-advertise
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Your job. It leaves the file it produced in report.ttl.
+      - name: Produce the report
+        run: echo '<> a <https://example.org/Report> .' > report.ttl
+
+      - name: Advertise the report to the registry
+        env:
+          TAR_URL: ${{ vars.TAR_URL }}
+          TAR_TOKEN_URL: ${{ vars.TAR_TOKEN_URL }}
+          TAR_ARTIFACT_TYPE: ${{ vars.TAR_ARTIFACT_TYPE }}
+          TAR_CLIENT_ID: ${{ secrets.TAR_CLIENT_ID }}
+          TAR_CLIENT_SECRET: ${{ secrets.TAR_CLIENT_SECRET }}
+          RUN_KEY: gh/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}
+        run: |
+          set -eu
+          # The digest makes the record findable by its bytes: GET /api/v1/artifacts?content=ni:///…
+          SHA=$(sha256sum report.ttl | cut -d' ' -f1)
+          cat > payload.json <<EOF
+          {
+            "run": {"external_key": "$RUN_KEY", "status": "success",
+                    "ended_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"},
+            "artifacts": [{
+              "external_key": "$RUN_KEY/report",
+              "title": "Validation report for ${{ github.repository }}@${{ github.sha }}",
+              "conforms_to": "$TAR_ARTIFACT_TYPE",
+              "distributions": [{
+                "download_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                "media_type": "text/turtle",
+                "checksum": {"algorithm": "sha256", "value": "$SHA"}
+              }]
+            }]
+          }
+          EOF
+          TOKEN=$(curl -fsS -u "$TAR_CLIENT_ID:$TAR_CLIENT_SECRET" -d grant_type=client_credentials \
+            "$TAR_TOKEN_URL" | jq -r .access_token)
+          curl -sS --fail-with-body --retry 3 -X POST "${TAR_URL%/}/api/v1/advertise/produced" \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            --data-binary @payload.json

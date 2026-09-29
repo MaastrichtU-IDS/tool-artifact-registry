@@ -78,6 +78,7 @@ in [Limitations](limitations.md) rather than left for you to discover.
 
 - [The model](model.md) — the four layers and why runs belong to a deployment.
 - [Getting started](getting-started.md) — a registry running locally in a few commands.
+- [Guide for service providers](providers/README.md) — if you run a tool and want it in here.
 - [Conventions](api/conventions.md) — then the API chapter for whatever you are trying to do.
 - [Agent-facing surfaces](agents/surfaces.md) — if the client is a language model.
 

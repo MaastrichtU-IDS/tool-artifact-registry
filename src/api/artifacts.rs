@@ -156,6 +156,203 @@ pub async fn get(
     resource_response(&state, &headers, &iri, &artifact, sp, Repr::Json).await
 }
 
+/// What may be corrected on an advertised artifact: how it is described and where its bytes
+/// are, not its history. The type, its lineage and the run that made it are evidence the
+/// registry recorded, so they are not editable here; an unknown field is refused rather than
+/// silently ignored, so a request to change one of them fails loudly.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactPatch {
+    #[serde(default)]
+    title: Option<String>,
+    /// An empty string removes it.
+    #[serde(default)]
+    description: Option<String>,
+    /// An SPDX IRI; an empty string removes it.
+    #[serde(default)]
+    license: Option<String>,
+    #[serde(default)]
+    keywords: Option<Vec<String>>,
+    /// Replaces every distribution. Availability is per distribution, so this is also how it
+    /// changes.
+    #[serde(default)]
+    distributions: Option<Vec<DistributionIn>>,
+}
+
+/// Who may change or withdraw an artifact: a curator, or the deployment that advertised it.
+/// That is the deployment whose run generated it; for one no run here generated (an input a
+/// consumer described, or one registered directly) it is the credential that first presented
+/// it, which the registry wrote into `prov:wasAttributedTo` itself.
+fn may_change(state: &AppState, principal: &Principal, props: &Props) -> AppResult<()> {
+    if principal.is_curator() {
+        return Ok(());
+    }
+    let owns = match (&principal.instance_iri, props.iri(ns::PROV, "wasGeneratedBy")) {
+        (Some(deployment), Some(run)) => {
+            let q = format!(
+                "{p}\nASK {{ GRAPH ?g {{ {run} prov:wasAssociatedWith {d} }} }}",
+                p = ns::PREFIXES,
+                run = crate::store::queries::iri(&run).map_err(AppError::from)?,
+                d = crate::store::queries::iri(deployment).map_err(AppError::from)?,
+            );
+            state.store.ask(&q).map_err(AppError::from)?
+        }
+        (Some(_), None) => props.iri(ns::PROV, "wasAttributedTo").as_deref() == Some(principal.subject.as_str()),
+        (None, _) => false,
+    };
+    if owns {
+        return Ok(());
+    }
+    Err(AppError::forbidden(
+        "only the deployment that advertised this artifact, or a curator, may change or withdraw it",
+    ))
+}
+
+/// The artifact as stored, if this registry is authoritative for it and it is still current.
+fn editable(state: &AppState, iri: &str) -> AppResult<(Vec<oxigraph::model::Quad>, Props)> {
+    let quads = state.store.describe(iri).map_err(AppError::from)?;
+    if quads.is_empty() {
+        return Err(AppError::not_found(format!("no artifact at {iri}")));
+    }
+    let props = Props::from_quads(iri, &quads);
+    if props.graph.as_deref() != Some(ns::G_LOCAL) {
+        return Err(AppError::forbidden("this registry is not authoritative for that artifact (spec §9.7)"));
+    }
+    if props.bool(ns::TAR, "tombstoned").unwrap_or(false) {
+        return Err(AppError::gone(format!("{iri} was withdrawn; it cannot be changed")));
+    }
+    Ok((quads, props))
+}
+
+/// `PATCH /api/v1/artifacts/{id}`: correct an advertised artifact's description.
+pub async fn patch(
+    State(state): State<Arc<AppState>>,
+    principal: Principal,
+    Path(id): Path<String>,
+    Json(patch): Json<ArtifactPatch>,
+) -> AppResult<impl IntoResponse> {
+    principal.require_authenticated()?;
+    let iri = ids::reference(state.base(), Kind::Artifact, &id)?;
+    let ctx = Ctx::new(&state).await?;
+    let artifact = super::blocking({
+        let (state, principal, iri) = (state.clone(), principal.clone(), iri.clone());
+        move || {
+            let (current, props) = editable(&state, &iri)?;
+            may_change(&state, &principal, &props)?;
+            let pred = |ns_: &str, local: &str| format!("{ns_}{local}");
+            let mut replaced = vec![pred(ns::DCT, "modified")];
+            let mut n = crate::rdf::Node::local(&iri);
+            n.datetime(ns::DCT, "modified", &chrono::Utc::now().to_rfc3339());
+            if let Some(t) = &patch.title {
+                replaced.push(pred(ns::DCT, "title"));
+                n.text(ns::DCT, "title", t);
+            }
+            if let Some(d) = &patch.description {
+                replaced.push(pred(ns::DCT, "description"));
+                if !d.trim().is_empty() {
+                    n.text(ns::DCT, "description", d);
+                }
+            }
+            if let Some(l) = &patch.license {
+                replaced.push(pred(ns::DCT, "license"));
+                if !l.trim().is_empty() {
+                    n.link(ns::DCT, "license", l);
+                }
+            }
+            if let Some(k) = &patch.keywords {
+                replaced.push(pred(ns::DCAT, "keyword"));
+                replaced.push(pred(ns::DCAT, "theme"));
+                let (keywords, themes) = crate::domain::keywords::normalise(state.base(), k);
+                n.texts(ns::DCAT, "keyword", &keywords);
+                n.links(ns::DCAT, "theme", &themes);
+            }
+            let mut new_quads = Vec::new();
+            let old_distributions = props.iris(ns::DCAT, "distribution");
+            if let Some(ds) = &patch.distributions {
+                replaced.push(pred(ns::DCAT, "distribution"));
+                for d in ds {
+                    let d_iri = ids::mint(state.base(), Kind::Distribution);
+                    new_quads.extend(dom::distribution_quads(&d_iri, d));
+                    n.link(ns::DCAT, "distribution", &d_iri);
+                }
+            }
+            new_quads.extend(n.finish());
+            // Validate the record as it will be, not the patch on its own: a shape can
+            // constrain the combination.
+            let mut candidate: Vec<_> = current
+                .into_iter()
+                .filter(|q| {
+                    let about_it =
+                        matches!(&q.subject, oxigraph::model::NamedOrBlankNode::NamedNode(s) if s.as_str() == iri);
+                    !(about_it && replaced.iter().any(|p| p == q.predicate.as_str()))
+                })
+                .collect();
+            candidate.extend(new_quads.iter().cloned());
+            shacl::enforce_write(&state, &candidate)?;
+            let mut tx = GraphTx::new();
+            for p in &replaced {
+                tx.replace_property(&iri, p, ns::G_LOCAL);
+            }
+            if patch.distributions.is_some() {
+                for d in &old_distributions {
+                    tx.replace_subject(d, ns::G_LOCAL);
+                }
+            }
+            tx.extend(new_quads);
+            state.store.apply(tx).map_err(AppError::from)?;
+            dom::load_artifact(&ctx, &iri)
+        }
+    })
+    .await?;
+    let _ = state
+        .ops
+        .audit(Some(&principal.subject), principal.actor_kind(), "artifact.update", Some(&iri), None, None)
+        .await;
+    Ok(Json(artifact))
+}
+
+/// `DELETE /api/v1/artifacts/{id}`: withdraw an artifact. It is tombstoned, not erased: its IRI
+/// keeps resolving, marked withdrawn, so lineage that points at it does not dangle and anyone
+/// who cited it learns what happened. Lists, search and subscriptions stop offering it.
+///
+/// The attribution is left alone. Who withdrew it goes to the audit log; writing it into
+/// `prov:wasAttributedTo` would make the withdrawer look like the advertiser.
+pub async fn withdraw(
+    State(state): State<Arc<AppState>>,
+    principal: Principal,
+    Path(id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    principal.require_authenticated()?;
+    let iri = ids::reference(state.base(), Kind::Artifact, &id)?;
+    let withdrawn = super::blocking({
+        let (state, principal, iri) = (state.clone(), principal.clone(), iri.clone());
+        move || {
+            let (_, props) = match editable(&state, &iri) {
+                // Already withdrawn: saying so again is not an error.
+                Err(e) if e.status == StatusCode::GONE => return Ok(false),
+                other => other?,
+            };
+            may_change(&state, &principal, &props)?;
+            let mut n = crate::rdf::Node::local(&iri);
+            n.boolean(ns::TAR, "tombstoned", true);
+            n.datetime(ns::TAR, "tombstonedAt", &chrono::Utc::now().to_rfc3339());
+            n.link(ns::ADMS, "status", &format!("{}WITHDRAWN", ns::EU_DATASET_STATUS));
+            let mut tx = GraphTx::new();
+            tx.extend(n.finish());
+            state.store.apply(tx).map_err(AppError::from)?;
+            Ok(true)
+        }
+    })
+    .await?;
+    if withdrawn {
+        let _ = state
+            .ops
+            .audit(Some(&principal.subject), principal.actor_kind(), "artifact.withdraw", Some(&iri), None, None)
+            .await;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Direct artifact registration (spec §7.5). Advertising through `/advertise/*` is the usual
 /// path; this exists for a curator recording an artifact that predates the registry.
 pub async fn create(

@@ -394,6 +394,7 @@ fn local_hits(ctx: &Ctx, q: &str, only: Option<&str>, limit: usize) -> AppResult
 SELECT ?s ?title ?extra ?g WHERE {{
   GRAPH ?g {{ ?s a <{type_iri}> . OPTIONAL {{ ?s {title_pred} ?title }} OPTIONAL {{ ?s {extra_pred} ?extra }} }}
   {filter}
+  FILTER NOT EXISTS {{ GRAPH ?tg {{ ?s tar:tombstoned true }} }}
 }} LIMIT {limit}"#,
             p = ns::PREFIXES
         );

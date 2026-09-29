@@ -1,0 +1,67 @@
+# Keep the registry's record of this deployment current, from the deployment itself.
+#
+# An init container announces the deployment every time a pod starts: PUT /api/v1/instances/self,
+# authenticated with the deployment's own identity-provider client. The first call after the
+# record exists updates it (endpoint, health URL, release), so it is safe to run on every start,
+# and a new release rolled out is reflected without anyone editing the registry by hand.
+#
+# Merge the initContainer into your own Deployment. The Secret holds the client credentials;
+# create it out of band rather than committing it:
+#
+#   kubectl -n your-namespace create secret generic registry-client \
+#     --from-literal=TAR_CLIENT_ID=… --from-literal=TAR_CLIENT_SECRET=…
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: registry-announce
+data:
+  TAR_URL: "https://registry.example.org"
+  TAR_TOKEN_URL: "https://sso.example.org/realms/main/protocol/openid-connect/token"
+  # What the registry should say about this deployment.
+  TAR_DEPLOYMENT_LABEL: "report-validator, production"
+  TAR_ENDPOINT_URL: "https://validator.example.org"
+  TAR_HEALTH_URL: "https://validator.example.org/healthz"
+  # The release's id in the registry (from the software page). Change it with each rollout.
+  TAR_RELEASE_ID: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: report-validator
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: report-validator }
+  template:
+    metadata:
+      labels: { app: report-validator }
+    spec:
+      initContainers:
+        - name: announce
+          image: curlimages/curl:8.10.1
+          envFrom:
+            - configMapRef: { name: registry-announce }
+            - secretRef: { name: registry-client }
+          command: ["/bin/sh", "-c"]
+          # Never block the pod on the registry: a registry outage must not take the service
+          # down with it, so every failure path ends in `exit 0` after saying what went wrong.
+          args:
+            - |
+              TOKEN=$(curl -fsS -u "$TAR_CLIENT_ID:$TAR_CLIENT_SECRET" -d grant_type=client_credentials \
+                "$TAR_TOKEN_URL" | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+              [ -n "$TOKEN" ] || { echo "announce skipped: no token from $TAR_TOKEN_URL"; exit 0; }
+              RELEASE=""; [ -n "$TAR_RELEASE_ID" ] && RELEASE=", \"release\": \"$TAR_RELEASE_ID\""
+              curl -sS --fail-with-body --retry 3 -X PUT "${TAR_URL%/}/api/v1/instances/self" \
+                -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+                -d "{\"label\": \"$TAR_DEPLOYMENT_LABEL\", \"endpoint_url\": \"$TAR_ENDPOINT_URL\",
+                     \"health_endpoint\": \"$TAR_HEALTH_URL\"$RELEASE}" \
+                || echo "announce failed; the service starts anyway"
+              exit 0
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+      containers:
+        - name: report-validator
+          image: ghcr.io/your-org/report-validator:2.2.0

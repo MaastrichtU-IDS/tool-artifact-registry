@@ -12,6 +12,14 @@
 
 - [Getting started](getting-started.md)
 
+# For service providers
+
+- [Guide for service providers](providers/README.md)
+  - [Register your software and deployments](providers/register.md)
+  - [Advertise runs and artifacts](providers/advertise.md)
+  - [React to other tools' artifacts](providers/subscribe.md)
+  - [Troubleshooting](providers/troubleshooting.md)
+
 # Using the API
 
 - [Conventions](api/conventions.md)

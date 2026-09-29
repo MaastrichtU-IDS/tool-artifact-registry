@@ -598,3 +598,166 @@ async fn the_registration_issuer_survives_a_partial_update() {
     assert_eq!(after["registration_issuer"], ISSUER, "a PATCH that never mentioned it must not drop it: {after}");
     assert_eq!(after["registration_clients"][0], "patched-prod", "{after}");
 }
+
+// ------------------------------------------------ advertising from a shared credential
+
+/// Advertise one produced artifact with `key`, optionally naming the deployment.
+async fn advertise_as(h: &Harness, key: &str, instance_key: Option<&str>, run: &str) -> (StatusCode, Value) {
+    let mut body = json!({"run": {"external_key": run, "status": "success"},
+                          "artifacts": [{"external_key": format!("{run}/out"), "title": format!("output of {run}")}]});
+    if let Some(k) = instance_key {
+        body["instance_key"] = json!(k);
+    }
+    h.req("POST", "/api/v1/advertise/produced", Some(key), Some(body)).await
+}
+
+async fn run_instance(h: &Harness, run_iri: &str) -> String {
+    let id = run_iri.rsplit('/').next().unwrap();
+    let (status, run) = h.req("GET", &format!("/api/v1/runs/{id}"), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+    run["instance"].as_str().unwrap_or_default().to_string()
+}
+
+/// The defect: a software key minted with advertise scopes, so that a deployment registering
+/// itself could say what it produced, was then refused every advertisement.
+#[tokio::test]
+async fn a_shared_key_advertises_for_the_deployment_it_names() {
+    let h = harness().await;
+    let (software_id, key, prod) = h.self_registered().await;
+    // With one deployment registered, there is nothing to choose between.
+    let (status, body) = advertise_as(&h, &key, None, "ci/1").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(run_instance(&h, body["run"].as_str().unwrap()).await, prod["iri"].as_str().unwrap());
+
+    // A second deployment of the same application, under its own key.
+    let (status, staging) = h
+        .req(
+            "PUT",
+            "/api/v1/instances/self",
+            Some(&key),
+            Some(json!({"label": "staging", "instance_key": "staging", "endpoint_url": "https://staging.example.org"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{staging}");
+
+    // Now the key has to say which one ran the job, and the refusal lists the choices.
+    let (status, body) = advertise_as(&h, &key, None, "ci/2").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let detail = body["detail"].as_str().unwrap();
+    assert!(detail.contains("instance_key") && detail.contains("prod") && detail.contains("staging"), "{detail}");
+
+    let (status, body) = advertise_as(&h, &key, Some("staging"), "ci/3").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(run_instance(&h, body["run"].as_str().unwrap()).await, staging["iri"].as_str().unwrap());
+
+    // A key it never announced is not a way in.
+    let (status, body) = advertise_as(&h, &key, Some("elsewhere"), "ci/4").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // Nor is another credential naming this one's deployment: the key is matched on the
+    // credential that registered it, not just on its spelling.
+    let (_, other) =
+        h.req("POST", &format!("/api/v1/software/{software_id}/tokens"), Some(ROOT), Some(json!({}))).await;
+    let (status, body) = advertise_as(&h, other["token"].as_str().unwrap(), Some("staging"), "ci/5").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+/// The same for an OIDC client shared through `registration_clients`: the deployment it
+/// registered says what it may do, since the client's own token carries no scopes.
+#[tokio::test]
+async fn a_shared_client_advertises_for_the_deployment_it_names() {
+    let h = harness_with_issuers(Some(ISSUER), vec![]).await;
+    let (status, sw) = h
+        .req(
+            "POST",
+            "/api/v1/software",
+            Some(ROOT),
+            Some(json!({"name": "shared", "kinds": ["service"], "registration_clients": ["shared-client"]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    let token = workload_token(ISSUER, "shared-client");
+    let mut deployments = Vec::new();
+    for k in ["east", "west"] {
+        let (status, inst) = h
+            .req(
+                "PUT",
+                "/api/v1/instances/self",
+                Some(&token),
+                Some(json!({"label": k, "instance_key": k, "endpoint_url": format!("https://{k}.example.org")})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{inst}");
+        deployments.push(inst["iri"].as_str().unwrap().to_string());
+    }
+    let (status, body) = advertise_as(&h, &token, None, "job/1").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "two deployments and no key: {body}");
+    let (status, body) = advertise_as(&h, &token, Some("west"), "job/2").await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(run_instance(&h, body["run"].as_str().unwrap()).await, deployments[1]);
+}
+
+// --------------------------------------------------------- which release it runs
+
+#[tokio::test]
+async fn an_announced_version_links_the_release_with_that_version() {
+    let h = harness().await;
+    let (software_id, key, _) = h.self_registered().await;
+    let (status, rel) = h
+        .req("POST", &format!("/api/v1/software/{software_id}/releases"), Some(ROOT), Some(json!({"version": "2.1.0"})))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{rel}");
+    let announce = |body: Value| h.req("PUT", "/api/v1/instances/self", Some(&key), Some(body));
+
+    let (status, inst) = announce(json!({"instance_key": "prod", "version": "2.1.0"})).await;
+    assert_eq!(status, StatusCode::OK, "{inst}");
+    assert_eq!(inst["release"], rel["iri"], "the version names a registered release: {inst}");
+
+    // A version nobody registered changes nothing, rather than unlinking what was there.
+    let (status, inst) = announce(json!({"instance_key": "prod", "version": "9.9.9"})).await;
+    assert_eq!(status, StatusCode::OK, "{inst}");
+    assert_eq!(inst["release"], rel["iri"], "{inst}");
+}
+
+/// The defect: an empty release id was stored as `{base}/release/`, a link to nothing.
+#[tokio::test]
+async fn a_release_reference_must_name_a_release_that_exists() {
+    let h = harness().await;
+    let (software_id, key, prod) = h.self_registered().await;
+    for bad in ["", "   ", "no-such-release", "a/b", "x> } #"] {
+        let (status, body) = h
+            .req("PUT", "/api/v1/instances/self", Some(&key), Some(json!({"instance_key": "prod", "release": bad})))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "release {bad:?}: {body}");
+    }
+    let _ = prod;
+    // A curator-made record takes the same check on edit. (A self-registered one is not
+    // editable by a curator at all; the deployment maintains it.)
+    let (status, curated) = h
+        .req("POST", "/api/v1/instances", Some(ROOT), Some(json!({"label": "curated", "software": software_id})))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{curated}");
+    let id = curated["id"].as_str().unwrap();
+    let (status, body) =
+        h.req("PATCH", &format!("/api/v1/instances/{id}"), Some(ROOT), Some(json!({"release": ""}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = h
+        .req(
+            "POST",
+            "/api/v1/instances",
+            Some(ROOT),
+            Some(json!({"label": "x", "software": software_id, "release": "nope"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // A real one, by id, still works.
+    let (_, rel) = h
+        .req("POST", &format!("/api/v1/software/{software_id}/releases"), Some(ROOT), Some(json!({"version": "1.0.0"})))
+        .await;
+    let (status, inst) = h
+        .req("PUT", "/api/v1/instances/self", Some(&key), Some(json!({"instance_key": "prod", "release": rel["id"]})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{inst}");
+    assert_eq!(inst["release"], rel["iri"]);
+}

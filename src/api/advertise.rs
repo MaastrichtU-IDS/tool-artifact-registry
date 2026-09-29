@@ -67,8 +67,27 @@ async fn advertise(
     input: AdvertiseIn,
     role: Role,
 ) -> AppResult<impl IntoResponse> {
-    principal.require_scope(role.scope())?;
-    let instance_iri = principal.require_instance()?;
+    // The deployment comes from the credential (§8.3). A shared registration credential has
+    // none of its own, and names which of the deployments it registered with `instance_key`.
+    let instance_iri = match (&principal.instance_iri, &principal.software_iri) {
+        (None, Some(_)) => {
+            let own = super::blocking({
+                let (state, principal, key) = (state.clone(), principal.clone(), input.instance_key.clone());
+                move || super::instances::own_deployment(&state, &principal, key.as_deref())
+            })
+            .await?;
+            // A shared OIDC client may carry no scopes itself; the deployment it registered
+            // says what it may do, exactly as it would for that deployment's own client.
+            if !principal.has_scope(role.scope()) && !own.allowed_scopes.iter().any(|s| s == role.scope()) {
+                principal.require_scope(role.scope())?;
+            }
+            own.iri
+        }
+        _ => {
+            principal.require_scope(role.scope())?;
+            principal.require_instance()?
+        }
+    };
     // Both checked together, and both fast, single-purpose store reads: whether the credential
     // still names something real, and — on throwaway candidate quads, rather than on the
     // transaction just before it commits — whether what is about to be built would validate at
@@ -103,7 +122,7 @@ async fn advertise(
     // same Run rather than inventing a new one.
     let mut run_input = input.run.clone();
     if let Some(r) = run_input.release.clone() {
-        run_input.release = Some(ids::iri_for(state.base(), Kind::Release, &r));
+        run_input.release = Some(ids::reference(state.base(), Kind::Release, &r)?);
     }
     let existing_run = match run_input.external_key.as_deref().filter(|k| !k.is_empty()) {
         Some(key) => state.ops.run_for_key(key, &instance_iri).await.map_err(AppError::from)?,

@@ -100,6 +100,7 @@ export default function InstanceDetail() {
           <section className="card flush">
             <h2>Runs</h2>
             {runs.loading && <div style={{ padding: 16 }}><Skeleton rows={3} /></div>}
+            {runs.error && <div style={{ padding: 16 }}><ErrorState error={runs.error} onRetry={runs.reload} /></div>}
             {runs.data && runs.data.items.length === 0 && (
               <p className="muted" style={{ padding: '0 16px 16px' }}>
                 No run has been advertised by this deployment yet.
@@ -138,6 +139,7 @@ export default function InstanceDetail() {
           <section className="card flush">
             <h2>Artifacts produced here</h2>
             {artifacts.loading && <div style={{ padding: 16 }}><Skeleton rows={3} /></div>}
+            {artifacts.error && <div style={{ padding: 16 }}><ErrorState error={artifacts.error} onRetry={artifacts.reload} /></div>}
             {artifacts.data && artifacts.data.items.length === 0 && (
               <p className="muted" style={{ padding: '0 16px 16px' }}>Nothing advertised yet.</p>
             )}

@@ -492,6 +492,11 @@ function SelfWithKey({ software, base }: { software: Software; base: string }) {
             <Skeleton rows={3} />
           </div>
         )}
+        {tokens.error && (
+          <div style={{ padding: 16 }}>
+            <ErrorState error={tokens.error} onRetry={tokens.reload} />
+          </div>
+        )}
         {tokens.data && tokens.data.items.length === 0 && (
           <p className="muted" style={{ padding: '0 16px 16px' }}>
             None yet, so no deployment of {software.name} can register itself with a key today.

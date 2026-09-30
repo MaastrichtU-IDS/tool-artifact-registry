@@ -118,6 +118,7 @@ curl -H "Authorization: Bearer $TOKEN" \\
       <section className="card flush">
         <h2>Existing tokens</h2>
         {tokens.loading && <div style={{ padding: 16 }}><Skeleton rows={3} /></div>}
+        {tokens.error && <div style={{ padding: 16 }}><ErrorState error={tokens.error} onRetry={tokens.reload} /></div>}
         {tokens.data && tokens.data.items.length === 0 && (
           <p className="muted" style={{ padding: '0 16px 16px' }}>No tokens have been minted.</p>
         )}

@@ -24,6 +24,7 @@ pub use queries::{is_owned_subresource, OWNED_SUBRESOURCE_PREDICATES};
 pub fn open(
     backend: Option<&crate::config::SparqlBackend>,
     graph_path: &str,
+    timeout: std::time::Duration,
 ) -> Result<std::sync::Arc<dyn GraphStore>> {
     Ok(match backend {
         Some(b) => {
@@ -32,7 +33,7 @@ pub fn open(
         }
         None => {
             tracing::info!(path = %graph_path, "graph store: embedded Oxigraph");
-            std::sync::Arc::new(OxigraphStore::open(graph_path)?)
+            std::sync::Arc::new(OxigraphStore::open_with_timeout(graph_path, timeout)?)
         }
     })
 }
@@ -392,5 +393,57 @@ mod tests {
         assert!(!s.exists(D).unwrap());
         assert!(s.exists(AGENT).unwrap(), "the agent is its own record and survives");
         assert_eq!(s.count().unwrap(), 1);
+    }
+}
+
+#[cfg(test)]
+mod limits {
+    use super::*;
+    use oxigraph::model::{GraphName, NamedNode, Quad};
+    use std::time::{Duration, Instant};
+
+    /// `n` subjects with one statement each, in one graph.
+    fn filled(n: usize, timeout: Duration) -> OxigraphStore {
+        let s = OxigraphStore::memory().unwrap().with_timeout(timeout);
+        let g = GraphName::NamedNode(NamedNode::new("urn:g").unwrap());
+        let p = NamedNode::new("urn:p").unwrap();
+        let quads: Vec<Quad> = (0..n)
+            .map(|i| {
+                Quad::new(
+                    NamedNode::new(format!("urn:s{i}")).unwrap(),
+                    p.clone(),
+                    NamedNode::new("urn:o").unwrap(),
+                    g.clone(),
+                )
+            })
+            .collect();
+        s.apply(GraphTx { insert: quads, ..Default::default() }).unwrap();
+        s
+    }
+
+    /// §1.4: a query a caller wrote could pin a CPU for as long as it liked. Now it is stopped
+    /// at the deadline, including one that sorts before it returns a single row.
+    #[test]
+    fn a_runaway_query_is_stopped_at_the_deadline() {
+        let s = filled(400, Duration::from_millis(300));
+        let started = Instant::now();
+        let err = s
+            .select(
+                "SELECT ?a WHERE { GRAPH ?g { ?a ?p ?o . ?b ?q ?r . ?c ?x ?y } \
+                 FILTER(CONCAT(STR(?a), STR(?b), STR(?c)) = \"never\") }",
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("TAR_SPARQL_TIMEOUT"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(10), "stopped at {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_result_too_large_to_hold_is_refused() {
+        let s = filled(400, Duration::from_secs(60));
+        // 400 × 400 = 160 000 rows, over the cap.
+        let err = s.select("SELECT ?a ?b WHERE { GRAPH ?g { ?a ?p ?o . ?b ?q ?r } }").unwrap_err();
+        assert!(err.to_string().contains("LIMIT"), "{err}");
+        // Under the cap it answers.
+        assert_eq!(s.select("SELECT ?a WHERE { GRAPH ?g { ?a ?p ?o } }").unwrap().rows.len(), 400);
     }
 }

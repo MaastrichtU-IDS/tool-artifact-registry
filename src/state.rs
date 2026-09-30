@@ -46,7 +46,7 @@ impl AppState {
         } else {
             format!("{}/ops.db", config.data_dir.trim_end_matches('/'))
         };
-        let store = crate::store::open(config.sparql_backend.as_ref(), &graph_path)?;
+        let store = crate::store::open(config.sparql_backend.as_ref(), &graph_path, config.sparql_timeout)?;
         let ops = Ops::open(&ops_path).await?;
         Ok(Arc::new(Self::from_parts(config, store, ops)))
     }

@@ -57,7 +57,7 @@ docker run -d -p 8080:8080 \
   -e TAR_BASE_IRI=https://registry.example.org \
   -e TAR_ROOT_TOKEN="$TAR_ROOT_TOKEN" \
   -v tar-data:/data \
-  ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0
+  ghcr.io/maastrichtu-ids/tool-artifact-registry:0.2.0
 ```
 
 `compose.identity.yaml` brings up the registry *and* an identity provider with its realm already

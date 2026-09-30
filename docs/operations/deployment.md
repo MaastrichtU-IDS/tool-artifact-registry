@@ -98,7 +98,7 @@ docker run -d --name tar \
   -e TAR_ROOT_TOKEN="$TAR_ROOT_TOKEN" \
   -v tar-data:/data \
   --restart unless-stopped \
-  ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0
+  ghcr.io/maastrichtu-ids/tool-artifact-registry:0.2.0
 ```
 
 That is the whole install. The image already sets `TAR_DATA_DIR=/data`,
@@ -110,7 +110,7 @@ because both stores are single-writer:
 
 ```console
 $ docker run --rm -e TAR_BASE_IRI=https://registry.example.org -v tar-data:/data \
-    ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0 seed
+    ghcr.io/maastrichtu-ids/tool-artifact-registry:0.2.0 seed
 {
   "artifacts": 19,
   "instances": 5,
@@ -148,7 +148,7 @@ docker run -d --name tar \
   -e TAR_BASE_IRI=https://registry.example.org \
   -e TAR_ROOT_TOKEN="$TAR_ROOT_TOKEN" \
   -v tar-data:/data \
-  ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0
+  ghcr.io/maastrichtu-ids/tool-artifact-registry:0.2.0
 ```
 
 The image already runs as that user (distroless `nonroot`), and ships an empty `/data` owned by
@@ -397,7 +397,7 @@ repository ships only the generic base and its optional components.
 
 | Tag | |
 |---|---|
-| `0.1.0`, `0.1` | From a `v0.1.0` tag. What a deployment should pin. |
+| `0.2.0`, `0.2` | From a `v0.2.0` tag. What a deployment should pin. |
 | `latest` | The most recent release tag. Not the default branch. |
 | `main`, `main-<sha>` | The tip of the default branch, for when you deliberately want it. |
 
@@ -406,7 +406,7 @@ manifest list, so `docker pull` gets the right one with no `--platform`. Each re
 signed build provenance attestation:
 
 ```bash
-gh attestation verify oci://ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0 \
+gh attestation verify oci://ghcr.io/maastrichtu-ids/tool-artifact-registry:0.2.0 \
   --owner MaastrichtU-IDS
 ```
 
@@ -442,7 +442,7 @@ starting it:
 
 ```console
 $ docker run --rm -e TAR_BASE_IRI=… -e TAR_ROOT_TOKEN=… -v tar-data:/data \
-    ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0 config
+    ghcr.io/maastrichtu-ids/tool-artifact-registry:0.2.0 config
 base_iri              https://registry.example.org
 data_dir              /data
 graph store           embedded oxigraph at /data/graph
@@ -540,7 +540,7 @@ Restoring the graph is the reverse of the dump, into a stopped registry:
 
 ```console
 $ docker run --rm -e TAR_BASE_IRI=… -v tar-data:/data -v "$PWD":/backup:ro \
-    ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0 restore --nquads /backup/registry.nq
+    ghcr.io/maastrichtu-ids/tool-artifact-registry:0.2.0 restore --nquads /backup/registry.nq
 loaded 1456 quads
 ```
 

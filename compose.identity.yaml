@@ -44,7 +44,7 @@ include:
 services:
   registry:
     build: .
-    image: ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0
+    image: ghcr.io/maastrichtu-ids/tool-artifact-registry:0.2.0
     # See the header. `ports:` would be ignored under this mode, so TAR_LISTEN is the port.
     network_mode: host
     depends_on:

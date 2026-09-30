@@ -51,7 +51,7 @@ labels:
 
 images:
   - name: ghcr.io/maastrichtu-ids/tool-artifact-registry
-    newTag: "0.1.0"
+    newTag: "0.2.0"
 
 configMapGenerator:
   - name: tar-config

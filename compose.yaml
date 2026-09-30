@@ -3,7 +3,7 @@
 services:
   registry:
     build: .
-    image: ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0
+    image: ghcr.io/maastrichtu-ids/tool-artifact-registry:0.2.0
     environment:
       TAR_BASE_IRI: ${TAR_BASE_IRI:-http://localhost:8080}
       TAR_ROOT_TOKEN: ${TAR_ROOT_TOKEN:?set me — the registry refuses to start with a default}

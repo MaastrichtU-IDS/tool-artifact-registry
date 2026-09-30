@@ -545,7 +545,7 @@ pub async fn lineage(
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
     let iri = ids::reference(state.base(), Kind::Artifact, &id)?;
-    let depth = q.depth.unwrap_or(1).clamp(1, 6);
+    let depth = q.depth.unwrap_or(2).clamp(1, 6);
     let direction = q.direction.unwrap_or_else(|| "both".into());
     if !["up", "down", "both"].contains(&direction.as_str()) {
         return Err(AppError::bad_request("direction must be up, down or both"));

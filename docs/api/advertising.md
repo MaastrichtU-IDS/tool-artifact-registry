@@ -225,7 +225,7 @@ GET /api/v1/runs/{id}                   one run, with what it used and generated
 GET /api/v1/artifacts                   ?q= ?conforms_to= ?license= ?availability= ?keyword=
                                         ?instance= ?software= ?run= ?content= ?registry=
 GET /api/v1/artifacts/{id}
-GET /api/v1/artifacts/{id}/lineage      ?direction=up|down|both (default both) ?depth= (1–6, default 1)
+GET /api/v1/artifacts/{id}/lineage      ?direction=up|down|both (default both) ?depth= (1–6, default 2)
 GET /api/v1/instances/{id}/runs         one deployment's runs
 GET /api/v1/instances/{id}/artifacts    the artifacts its runs touched
 ```

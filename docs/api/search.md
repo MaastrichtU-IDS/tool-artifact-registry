@@ -56,7 +56,7 @@ curl 'https://registry.example.org/api/v1/artifacts/01a05…/lineage?direction=b
 ```
 
 `direction` is `up` (what this came from), `down` (what came from this) or `both`, default
-`both`. `depth` is clamped 1–6, default 1.
+`both`. `depth` is clamped 1–6, default 2 — an artifact, the run that made it, and that run's inputs. Nodes are found breadth-first, so a node's `depth` is its shortest distance from the root, and each edge is listed once.
 
 `GET /api/v1/graph?iri=…&depth=` returns the same subgraph centred on any node, with `depth`
 clamped 1–4. Both return exactly what a graph view would need; there is no graph visualisation

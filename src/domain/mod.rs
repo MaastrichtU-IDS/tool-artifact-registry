@@ -108,14 +108,15 @@ impl Ctx {
                 r#"{p}
 SELECT ?t ?label ?def WHERE {{
   VALUES ?t {{ {values} }}
-  GRAPH ?g {{
-    OPTIONAL {{ ?t skos:prefLabel ?label }}
-    OPTIONAL {{ ?t rdfs:label ?label }}
-    OPTIONAL {{ ?t skos:definition ?def }}
-  }}
+  OPTIONAL {{ GRAPH ?g1 {{ ?t skos:prefLabel ?label }} }}
+  OPTIONAL {{ GRAPH ?g2 {{ ?t rdfs:label ?label }} }}
+  OPTIONAL {{ GRAPH ?g3 {{ ?t skos:definition ?def }} }}
 }}"#,
                 p = ns::PREFIXES
             );
+            // Each OPTIONAL names its own graph. With the three inside one `GRAPH ?g {}`, the
+            // group had no required pattern and was evaluated against every named graph —
+            // about 185 ms per chip, which made a 25-row list take seconds.
             // The record store first, then the bundles in memory. Both are asked because a chip
             // may name a bundled term, a term minted here, or one cached from a peer, and only
             // the record store holds the last two; `or_insert` then leaves the record store's

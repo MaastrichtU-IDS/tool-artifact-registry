@@ -39,7 +39,9 @@ use sqlx::Row;
 /// `metadata-only` is the common case (spec §6.2) a subscription without it is mostly noise;
 /// `software` and `instance` are the trust axis ("only from a deployment I believe"); and
 /// `keywords` plus `q` carry the project and cohort axis that no ontology covers.
+// A misspelt key would otherwise vanish and leave a filter that matches everything.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Filter {
     /// `dct:conformsTo` — the artifact type. Full IRIs (EDAM or a local `/type/…`).
     #[serde(default)]

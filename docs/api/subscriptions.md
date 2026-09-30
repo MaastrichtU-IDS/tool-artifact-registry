@@ -74,6 +74,11 @@ Registry-minted software and deployment ids may be sent bare and are expanded se
 Type and licence IRIs must be full IRIs, because the registry has no basis for guessing what a
 bare one meant.
 
+A filter that could never mean what it says is refused with `400`: an unknown key (`conformsTo`
+for `conforms_to` would otherwise be dropped, leaving a filter that matches everything), and a
+`conforms_to` the registry does not hold as an artifact type (nothing could be advertised with
+it, so it would match nothing, ever). Register the type first, with `POST /api/v1/types`.
+
 `exclude_own` defaults to `true` because the overwhelmingly common subscription is "tell me what
 *somebody else* made", and a tool woken by its own output is a loop.
 

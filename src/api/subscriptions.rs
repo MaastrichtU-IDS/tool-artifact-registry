@@ -169,6 +169,9 @@ fn may_manage(principal: &Principal, instance_iri: &str) -> AppResult<()> {
 
 async fn load_owned(state: &Arc<AppState>, principal: &Principal, sid: &str) -> AppResult<subs::Subscription> {
     let Some(sub) = subs::get(&state.ops, sid).await.map_err(AppError::from)? else {
+        // Owns nothing that does not exist: a deployment gets the same 403 as for another's.
+        // Only those who may manage every subscription learn that it is missing.
+        may_manage(principal, "")?;
         return Err(AppError::not_found("no such subscription"));
     };
     may_manage(principal, &sub.instance_iri)?;
@@ -283,6 +286,7 @@ pub async fn create(
         )));
     }
     let filter = normalise_filter(state.base(), input.filter)?;
+    check_filter_types(&state, &filter).await?;
     let settings = WebhookSettings::from_env();
     let webhook_url = match input.webhook_url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
         Some(u) => Some(validate_webhook_url(u, &settings)?),
@@ -347,7 +351,9 @@ pub async fn patch(
         p.label = Some(Some(l));
     }
     if let Some(f) = input.filter {
-        p.filter = Some(normalise_filter(state.base(), f)?);
+        let f = normalise_filter(state.base(), f)?;
+        check_filter_types(&state, &f).await?;
+        p.filter = Some(f);
     }
     let mut has_webhook = sub.webhook_url.is_some();
     if let Some(u) = input.webhook_url.as_deref().map(str::trim) {
@@ -504,6 +510,32 @@ fn normalise_filter(base: &str, mut f: Filter) -> AppResult<Filter> {
     f.conforms_to.retain(|k| !k.trim().is_empty());
     f.license.retain(|k| !k.trim().is_empty());
     Ok(f)
+}
+
+/// A `conforms_to` the registry does not hold as an artifact type can never match: artifacts
+/// are refused unless their type is one. Say so now rather than deliver nothing forever. The
+/// same rule, and the same message, as a write.
+async fn check_filter_types(state: &Arc<AppState>, f: &Filter) -> AppResult<()> {
+    if f.conforms_to.is_empty() {
+        return Ok(());
+    }
+    let (state, types) = (state.clone(), f.conforms_to.clone());
+    super::blocking(move || {
+        let iris: Vec<&str> = types.iter().map(String::as_str).collect();
+        // An unreadable store is not evidence the type is wrong; let it through.
+        let Some(known) = crate::domain::vocabulary::held(&state, &iris) else { return Ok(()) };
+        let slot = crate::domain::vocabulary::Slot::Type;
+        for t in &types {
+            let verdict = match known.get(t) {
+                None => crate::domain::vocabulary::Verdict::Unknown,
+                Some(h) if !h.usable_as(slot) => crate::domain::vocabulary::Verdict::WrongClass(h.classes.clone()),
+                Some(_) => continue,
+            };
+            return Err(AppError::bad_request(format!("conforms_to: {}", verdict.describe(t, slot))));
+        }
+        Ok(())
+    })
+    .await
 }
 
 fn require_iri(field: &str, value: &str) -> AppResult<()> {

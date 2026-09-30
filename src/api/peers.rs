@@ -242,8 +242,12 @@ pub struct ResolveQuery {
 /// Resolve a foreign IRI, cache a stub in the peer graph, return it (spec §7.8, §9.4).
 pub async fn resolve(
     State(state): State<Arc<AppState>>,
+    principal: Principal,
     Query(q): Query<ResolveQuery>,
 ) -> AppResult<impl IntoResponse> {
+    // Fetching on demand is the registry making a request on the caller's behalf, so the caller
+    // has to be someone (design note: pre-deploy audit §1.2).
+    principal.require_authenticated()?;
     let iri = q.iri.clone();
     if crate::ids::is_local(state.base(), &iri) {
         return Err(AppError::bad_request("that IRI is local — dereference it directly"));
@@ -273,7 +277,15 @@ pub async fn resolve(
 /// Dereference a foreign IRI with `Accept: text/turtle`, write a minimal stub into the peer
 /// graph, and record success or backoff — on the IRI, and on the peer it belongs to.
 pub async fn fetch_stub(state: &Arc<AppState>, iri: &str) -> AppResult<serde_json::Value> {
-    let peer = owning_peer(state, iri).await;
+    // Only IRIs under an active peer's base are fetched. Anything else stays a cross-link:
+    // otherwise a caller, or a payload, could make the registry fetch any URL and cache what came
+    // back into the catalogue.
+    let Some(peer) = owning_peer(state, iri).await else {
+        return Err(AppError::bad_request(format!(
+            "{iri} is not under the base of any peer this registry federates with; only peers' records are resolved"
+        )));
+    };
+    let peer = Some(peer);
     let failed = |msg: String| {
         let (state, peer_id) = (state.clone(), peer.as_ref().map(|p| p.id.clone()));
         async move {
@@ -284,10 +296,21 @@ pub async fn fetch_stub(state: &Arc<AppState>, iri: &str) -> AppResult<serde_jso
             AppError::bad_request(msg)
         }
     };
-    let body = match state.http.get(iri).header(axum::http::header::ACCEPT, "text/turtle").send().await {
-        Ok(r) if r.status().is_success() => match r.text().await {
-            Ok(body) => body,
+    // A peer is trusted, and may well sit on a private address in the same estate, so private
+    // targets are allowed; redirects and link-local addresses still are not, and the body is
+    // capped while it is read.
+    let client = match url::Url::parse(iri) {
+        Ok(u) => crate::outbound::client_for(&u, true, state.config.peer_resolve_timeout).await,
+        Err(e) => Err(e.to_string()),
+    };
+    let client = match client {
+        Ok(c) => c,
+        Err(e) => return Err(failed(format!("cannot dereference {iri}: {e}")).await),
+    };
+    let body = match client.get(iri).header(axum::http::header::ACCEPT, "text/turtle").send().await {
+        Ok(r) if r.status().is_success() => match crate::outbound::read_capped(r, STUB_MAX_BYTES).await {
             // Not an empty document: parsing "" would replace the cached stub with nothing.
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
             Err(e) => return Err(failed(format!("reading {iri}: {e}")).await),
         },
         Ok(r) => return Err(failed(format!("{iri} returned {}", r.status())).await),
@@ -404,7 +427,11 @@ fn stub_quads(iri: &str, turtle: &str, graph: &str) -> anyhow::Result<Stub> {
     Ok(Stub { quads: out, others })
 }
 
-async fn owning_peer(state: &Arc<AppState>, iri: &str) -> Option<PeerRecord> {
+/// A stub is one record's description. Four megabytes is generous for that, and small enough
+/// that a hostile peer cannot hold the process's memory hostage with one response.
+const STUB_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+pub(crate) async fn owning_peer(state: &Arc<AppState>, iri: &str) -> Option<PeerRecord> {
     let peers = state.ops.list_peers(None).await.ok()?;
     peers.into_iter().find(|p| iri.starts_with(&p.base_iri))
 }

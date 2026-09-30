@@ -159,7 +159,7 @@ pub fn record(state: &AppState, iri: &str, v: &Verdict) -> anyhow::Result<()> {
     state.store.apply(tx)
 }
 
-async fn probe(state: &Arc<AppState>, url: &str, target: ProbeTarget, s: &Settings) -> Verdict {
+async fn probe(_state: &Arc<AppState>, url: &str, target: ProbeTarget, s: &Settings) -> Verdict {
     if !s.allow_private {
         if let Some(host) = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string)) {
             if is_private_host(&host) {
@@ -174,7 +174,17 @@ async fn probe(state: &Arc<AppState>, url: &str, target: ProbeTarget, s: &Settin
     // and a framework that answers 405 to the HEAD would have every one of them marked down now
     // that a declared health endpoint is required to return 2xx. The body is never read — the
     // response is dropped after the status line — so this still pulls no arbitrary bytes.
-    let result = tokio::time::timeout(s.timeout, state.http.get(url).send()).await;
+    // Addresses checked and pinned, no redirects: a probe target that answers 302 to cloud
+    // metadata must not be followed there (crate::outbound).
+    let client = match url::Url::parse(url) {
+        Ok(u) => crate::outbound::client_for(&u, s.allow_private, s.timeout).await,
+        Err(e) => Err(e.to_string()),
+    };
+    let client = match client {
+        Ok(c) => c,
+        Err(e) => return Verdict { health: "unknown", detail: e },
+    };
+    let result = tokio::time::timeout(s.timeout, client.get(url).send()).await;
     match result {
         Ok(Ok(r)) => verdict_for(Some(r.status().as_u16()), None, target),
         Ok(Err(e)) if e.is_connect() => verdict_for(None, Some("could not connect"), target),

@@ -262,8 +262,9 @@ async fn advertising_produced_records_lineage_and_is_idempotent() {
     assert_eq!(first["created"], true);
     let run = first["run"].as_str().unwrap().to_string();
     let artifact = first["artifacts"][0].as_str().unwrap().to_string();
-    // The unresolved foreign parent is queued, never fetched inline.
-    assert_eq!(first["queued_for_resolution"][0], "https://reg.mumc.nl/artifact/01J7Z");
+    // The foreign parent is kept as a cross-link. It is not queued for fetching: only a peer's
+    // records are resolved, so a payload cannot make the registry fetch a URL of its choosing.
+    assert!(first["queued_for_resolution"].as_array().is_none_or(Vec::is_empty), "{first}");
 
     // A retried CI step must not duplicate lineage (spec §7.5).
     let (status, second) = h.post("/api/v1/advertise/produced", &f.token, payload).await;
@@ -350,7 +351,8 @@ async fn consuming_accepts_a_bare_foreign_iri_and_never_blocks_on_the_network() 
         .await;
     assert_eq!(status, StatusCode::CREATED, "{out}");
     assert_eq!(out["artifacts"].as_array().unwrap().len(), 2);
-    assert_eq!(out["queued_for_resolution"][0], "https://reg.mumc.nl/artifact/01J7Z");
+    // Not a peer's IRI, so it stays a cross-link and nothing is fetched.
+    assert!(out["queued_for_resolution"].as_array().is_none_or(Vec::is_empty), "{out}");
 
     let run_id = out["run"].as_str().unwrap().rsplit('/').next().unwrap().to_string();
     let (_, r) = h.get(&format!("/api/v1/runs/{run_id}")).await;
@@ -1639,7 +1641,7 @@ async fn a_refresh_trims_a_legacy_peer_graph_and_counts_the_record_once() {
 
     let resolve = format!("/api/v1/resolve?iri={}&refresh=true", urlencoding(&record));
     for _ in 0..2 {
-        let (status, body) = h.get(&resolve).await;
+        let (status, body, _) = h.req("GET", &resolve, Some(ROOT), None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
     }
     let cached = h.state.store.dump_nquads(Some(&graph)).unwrap();
@@ -3416,7 +3418,8 @@ async fn one_registry_finds_a_peers_record_of_the_same_bytes_without_merging_the
     // read-only graph. The identifier has to survive that round trip through Turtle, or the
     // cached copy is unrecognisable for exactly the thing it was cached to be recognised by.
     let theirs_iri = theirs["iri"].as_str().unwrap().to_string();
-    let (status, resolved) = a.h.get(&format!("/api/v1/resolve?iri={}", urlencoding(&theirs_iri))).await;
+    let (status, resolved, _) =
+        a.h.req("GET", &format!("/api/v1/resolve?iri={}", urlencoding(&theirs_iri)), Some(ROOT), None).await;
     assert_eq!(status, StatusCode::OK, "{resolved}");
     assert!(resolved["graph"].as_str().unwrap().starts_with("urn:tar:peer:"), "{resolved}");
 

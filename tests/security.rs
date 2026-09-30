@@ -140,3 +140,90 @@ async fn a_filter_value_cannot_change_the_query() {
     }
     let _ = &h.state;
 }
+
+// ------------------------------------------------------------- outbound fetches
+
+/// A local server that counts every request by path, so a test can prove what the registry
+/// did and did not fetch.
+async fn spawn_counting_server(extra: axum::Router<()>) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (wk, log) = (base.clone(), hits.clone());
+    let app = axum::Router::new()
+        .route(
+            "/.well-known/tar-registry",
+            axum::routing::get(move || {
+                let wk = wk.clone();
+                async move { axum::Json(json!({"base_iri": wk, "title": "peer", "peers": []})) }
+            }),
+        )
+        .merge(extra)
+        .layer(axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(req.uri().path().to_string());
+                next.run(req).await
+            }
+        }));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (base, hits)
+}
+
+/// §1.2: `/resolve` made the registry fetch any URL for anyone, and cache what came back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resolve_needs_a_credential_and_fetches_only_a_peers_records() {
+    let h = harness().await;
+    let (elsewhere, hits) = spawn_counting_server(axum::Router::new()).await;
+    let target = format!("{elsewhere}/internal/secret");
+    let uri = format!("/api/v1/resolve?iri={}&refresh=true", enc(&target));
+
+    let (status, body, _) = h.send("GET", &uri, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    let (status, body, _) = h.send("GET", &uri, Some(ROOT), None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "not a peer's IRI: {body}");
+    assert!(hits.lock().unwrap().is_empty(), "nothing was fetched: {:?}", hits.lock().unwrap());
+}
+
+/// §1.3: a peer answering with a redirect is not followed there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_redirect_from_a_peer_is_not_followed() {
+    let h = harness().await;
+    let routes = axum::Router::new()
+        .route("/artifact/1", axum::routing::get(|| async { axum::response::Redirect::to("/secret") }))
+        .route("/secret", axum::routing::get(|| async { "<https://x/secret> <https://x/p> \"leaked\" ." }));
+    let (peer, hits) = spawn_counting_server(routes).await;
+    let (status, body, _) =
+        h.send("POST", "/api/v1/peers", Some(ROOT), Some(json!({"base_url": peer, "announce": false}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let uri = format!("/api/v1/resolve?iri={}&refresh=true", enc(&format!("{peer}/artifact/1")));
+    let (status, body, _) = h.send("GET", &uri, Some(ROOT), None).await;
+    assert!(!status.is_success(), "a 302 is not a record: {status} {body}");
+    assert!(!hits.lock().unwrap().iter().any(|p| p == "/secret"), "{:?}", hits.lock().unwrap());
+    assert!(!h.state.store.dump_nquads(None).unwrap().contains("leaked"));
+}
+
+/// §1.3: the API-description viewer returns what it fetched to anonymous readers, so it does
+/// not fetch private addresses unless the operator opts in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_api_doc_viewer_does_not_fetch_a_private_address_by_default() {
+    let h = harness().await;
+    let (internal, hits) = spawn_counting_server(axum::Router::new()).await;
+    let (status, sw, _) = h
+        .send(
+            "POST",
+            "/api/v1/software",
+            Some(ROOT),
+            Some(json!({"name": "svc", "kinds": ["service"],
+                          "api_docs": [{"url": format!("{internal}/openapi.json"), "format": "openapi"}]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sw}");
+    let (status, body) = h.get(&format!("/api/v1/software/{}/api-doc", sw["id"].as_str().unwrap())).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(body["detail"].as_str().unwrap().contains("TAR_APIDOC_ALLOW_PRIVATE"), "{body}");
+    assert!(hits.lock().unwrap().is_empty(), "{:?}", hits.lock().unwrap());
+}

@@ -250,3 +250,142 @@ async fn pages_carry_a_content_security_policy_and_every_response_the_basics() {
     assert_eq!(headers["referrer-policy"], "strict-origin-when-cross-origin");
     assert!(!headers.contains_key("content-security-policy"), "JSON needs no page policy");
 }
+
+// ---------------------------------------------------------------------- scopes
+
+async fn deployment(h: &Harness, allowed: &[&str]) -> String {
+    let (_, sw, _) =
+        h.send("POST", "/api/v1/software", Some(ROOT), Some(json!({"name": "svc", "kinds": ["service"]}))).await;
+    let (status, inst, _) = h
+        .send(
+            "POST",
+            "/api/v1/instances",
+            Some(ROOT),
+            Some(json!({"label": "d", "software": sw["id"], "allowed_scopes": allowed})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{inst}");
+    inst["id"].as_str().unwrap().to_string()
+}
+
+async fn mint(h: &Harness, as_: &str, instance: &str, scopes: &[&str]) -> (StatusCode, Value) {
+    let (s, v, _) = h
+        .send("POST", &format!("/api/v1/instances/{instance}/tokens"), Some(as_), Some(json!({"scopes": scopes})))
+        .await;
+    (s, v)
+}
+
+/// §1.6: a deployment's credential could mint itself wider scopes, and `allowed_scopes`
+/// bounded nothing for API tokens.
+#[tokio::test]
+async fn a_minted_token_stays_within_the_deployment_and_the_minter() {
+    let h = harness().await;
+    let id = deployment(&h, &["advertise:produce", "advertise:consume"]).await;
+
+    // The deployment's ceiling holds even for the root token.
+    let (status, body) = mint(&h, ROOT, &id, &["register:software"]).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, _) = mint(&h, ROOT, &id, &["advertise:produce"]).await;
+    assert_eq!(status, StatusCode::CREATED);
+    // subscribe:artifacts grants less than any of the deployment's credentials already has.
+    let (status, body) = mint(&h, ROOT, &id, &["subscribe:artifacts"]).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // A deployment token cannot mint what it does not hold, even inside the ceiling.
+    let (_, narrow) = mint(&h, ROOT, &id, &["advertise:produce"]).await;
+    let narrow = narrow["token"].as_str().unwrap();
+    let (status, body) = mint(&h, narrow, &id, &["advertise:consume"]).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = mint(&h, narrow, &id, &["advertise:produce"]).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+/// §1.6: `register:software` passed the curator check, so a token for one project's CI could
+/// edit or withdraw every deployment.
+#[tokio::test]
+async fn register_software_maintains_software_and_nothing_more() {
+    let h = harness().await;
+    let other = deployment(&h, &[]).await;
+    // A software-scoped credential, as an admin would issue to a project's CI.
+    let (_, sw, _) =
+        h.send("POST", "/api/v1/software", Some(ROOT), Some(json!({"name": "ci-owner", "kinds": ["service"]}))).await;
+    let ci_host = deployment(&h, &["register:software"]).await;
+    let (status, tok) = mint(&h, ROOT, &ci_host, &["register:software"]).await;
+    assert_eq!(status, StatusCode::CREATED, "{tok}");
+    let ci = tok["token"].as_str().unwrap();
+
+    let (status, body, _) =
+        h.send("POST", "/api/v1/software", Some(ci), Some(json!({"name": "from-ci", "kinds": ["cli"]}))).await;
+    assert_eq!(status, StatusCode::CREATED, "it still registers software: {body}");
+    let sw_id = sw["id"].as_str().unwrap();
+    let (status, body, _) =
+        h.send("PATCH", &format!("/api/v1/software/{sw_id}"), Some(ci), Some(json!({"tagline": "edited"}))).await;
+    assert_eq!(status, StatusCode::OK, "and maintains it: {body}");
+
+    for (method, uri, body) in [
+        ("PATCH", format!("/api/v1/instances/{other}"), Some(json!({"label": "hijacked"}))),
+        ("DELETE", format!("/api/v1/instances/{other}"), None),
+        ("DELETE", format!("/api/v1/software/{sw_id}"), None),
+    ] {
+        let (status, resp, _) = h.send(method, &uri, Some(ci), body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {resp}");
+    }
+}
+
+const HS_SECRET: &[u8] = b"a-test-signing-secret-not-used-in-production";
+const HOME: &str = "https://keycloak.test.example/realms/ids";
+const PARTNER: &str = "https://partner.example/realms/theirs";
+
+fn jwt(claims: Value) -> String {
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
+    header.kid = Some("test-key".into());
+    jsonwebtoken::encode(&header, &claims, &jsonwebtoken::EncodingKey::from_secret(HS_SECRET)).unwrap()
+}
+
+async fn oidc_harness() -> Harness {
+    let mut config = Config::for_test(BASE);
+    config.root_token = Some(ROOT.into());
+    config.oidc.issuer = Some(HOME.into());
+    config.oidc.client_id = Some("tar-ui".into());
+    config.oidc.audience = Some(BASE.into());
+    config.oidc.workload_issuers = vec![PARTNER.into()];
+    let store = common::test_store().await;
+    let ops = Ops::open(":memory:").await.unwrap();
+    let mut state = AppState::from_parts(config, store, ops);
+    state.jwt = state.jwt.with_static_key(
+        "test-key",
+        jsonwebtoken::Algorithm::HS256,
+        jsonwebtoken::DecodingKey::from_secret(HS_SECRET),
+    );
+    let state = Arc::new(state);
+    tar::seed::load_vocab(&state).unwrap();
+    Harness { app: tar::app(state.clone()), state }
+}
+
+/// §1.6: scopes in a token were honoured from any accepted issuer, `admin:*` included.
+#[tokio::test]
+async fn a_token_cannot_make_itself_an_administrator() {
+    let h = oidc_harness().await;
+    let exp = chrono::Utc::now().timestamp() + 600;
+    for issuer in [HOME, PARTNER] {
+        let t = jwt(
+            json!({"iss": issuer, "aud": BASE, "exp": exp, "sub": "svc", "azp": "some-client", "scope": "admin:*"}),
+        );
+        let (status, me, _) = h.send("GET", "/api/v1/whoami", Some(&t), None).await;
+        assert_eq!(status, StatusCode::OK, "{me}");
+        assert_eq!(me["is_admin"], false, "admin:* from {issuer}: {me}");
+        let (status, _, _) = h.send("GET", "/admin/dump", Some(&t), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{issuer}");
+    }
+
+    // A bound deployment's token is capped by its allowed scopes.
+    let id = deployment(&h, &["advertise:produce"]).await;
+    let (status, body, _) = h
+        .send("PATCH", &format!("/api/v1/instances/{id}"), Some(ROOT), Some(json!({"oidc_client_id": "bound-client"})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let t = jwt(json!({"iss": HOME, "aud": BASE, "exp": exp, "sub": "svc", "azp": "bound-client",
+                       "scope": "advertise:produce advertise:consume register:software"}));
+    let (_, me, _) = h.send("GET", "/api/v1/whoami", Some(&t), None).await;
+    assert_eq!(me["scopes"], json!(["advertise:produce"]), "{me}");
+}

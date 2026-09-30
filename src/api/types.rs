@@ -127,7 +127,7 @@ pub async fn create(
     principal: Principal,
     Json(input): Json<ArtifactTypeIn>,
 ) -> AppResult<impl IntoResponse> {
-    principal.require_curator()?;
+    principal.require_software_editor()?;
     if input.label.trim().is_empty() {
         return Err(AppError::bad_request("an artifact type needs a label"));
     }

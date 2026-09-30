@@ -200,7 +200,7 @@ pub async fn create(
     principal: Principal,
     Json(input): Json<SoftwareIn>,
 ) -> AppResult<impl IntoResponse> {
-    principal.require_curator()?;
+    principal.require_software_editor()?;
     check_registration_binding(&state, &input)?;
     if let Some(sync) = &input.sync {
         crate::domain::forge::check_fields(&sync.fields)?;
@@ -242,7 +242,7 @@ pub async fn patch(
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> AppResult<impl IntoResponse> {
-    principal.require_curator()?;
+    principal.require_software_editor()?;
     let iri = ids::reference(state.base(), Kind::Software, &id)?;
     if !ids::is_local(state.base(), &iri) {
         return Err(AppError::forbidden("this registry is not authoritative for that IRI (spec §9.7)"));
@@ -346,7 +346,7 @@ pub async fn create_release(
     Path(id): Path<String>,
     Json(input): Json<ReleaseIn>,
 ) -> AppResult<impl IntoResponse> {
-    principal.require_curator()?;
+    principal.require_software_editor()?;
     let software_iri = ids::reference(state.base(), Kind::Software, &id)?;
     let iri = ids::mint(state.base(), Kind::Release);
     let subject = principal.subject.clone();
@@ -391,7 +391,7 @@ pub async fn sync(
     principal: Principal,
     Path(id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
-    principal.require_curator()?;
+    principal.require_software_editor()?;
     let iri = ids::reference(state.base(), Kind::Software, &id)?;
     let ctx = Ctx::new(&state).await?;
     let (existing, quads, cfg) = super::blocking({
@@ -590,7 +590,7 @@ pub async fn delete_release(
     principal: Principal,
     Path((id, release_id)): Path<(String, String)>,
 ) -> AppResult<impl IntoResponse> {
-    principal.require_curator()?;
+    principal.require_software_editor()?;
     let software_iri = ids::reference(state.base(), Kind::Software, &id)?;
     let iri = ids::iri_for(state.base(), Kind::Release, &release_id);
     super::blocking({
@@ -618,7 +618,7 @@ pub async fn put_capability(
     Path(id): Path<String>,
     Json(input): Json<CapabilityIn>,
 ) -> AppResult<impl IntoResponse> {
-    principal.require_curator()?;
+    principal.require_software_editor()?;
     let iri = ids::reference(state.base(), Kind::Software, &id)?;
     put_capability_on(&state, &principal, &iri, &input, "software").await
 }

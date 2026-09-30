@@ -307,13 +307,19 @@ pub async fn principal_from_claims(state: &Arc<AppState>, issuer: &str, claims: 
         }
     }
 
-    // Scopes the token itself carries, filtered to scopes this registry understands.
+    // Scopes the token itself carries, filtered to scopes this registry understands — and read
+    // only from the home issuer, like roles. A workload issuer vouches for *which* deployment is
+    // calling, not for what it may do: a partner's identity provider that can put `admin:*` in a
+    // scope claim would otherwise hand that token this registry. `admin:*` is never taken from a
+    // token at all; being an administrator is a role.
     let mut token_scopes: BTreeSet<String> = BTreeSet::new();
-    for path in [cfg.scope_claim.as_str(), "scope", "scp"] {
-        if let Some(v) = claim_path(claims, path) {
-            for s in string_list(v) {
-                if ALL_SCOPES.contains(&s.as_str()) {
-                    token_scopes.insert(s);
+    if home_issuer {
+        for path in [cfg.scope_claim.as_str(), "scope", "scp"] {
+            if let Some(v) = claim_path(claims, path) {
+                for s in string_list(v) {
+                    if ALL_SCOPES.contains(&s.as_str()) && s != super::SCOPE_ADMIN {
+                        token_scopes.insert(s);
+                    }
                 }
             }
         }
@@ -342,7 +348,10 @@ pub async fn principal_from_claims(state: &Arc<AppState>, issuer: &str, claims: 
 
     if let Some(binding) = bound {
         // A workload: the deployment itself is the principal (spec §8.3).
-        let scopes = if !token_scopes.is_empty() {
+        // The deployment's allowed scopes are a ceiling on what its token may claim.
+        let scopes = if !token_scopes.is_empty() && !binding.allowed_scopes.is_empty() {
+            token_scopes.into_iter().filter(|s| binding.allowed_scopes.contains(s)).collect()
+        } else if !token_scopes.is_empty() {
             token_scopes
         } else if !binding.allowed_scopes.is_empty() {
             binding.allowed_scopes.iter().cloned().collect()

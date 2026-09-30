@@ -49,12 +49,16 @@ export function TermPicker({
   const [registering, setRegistering] = useState(false)
   const [registerError, setRegisterError] = useState<string | null>(null)
   const box = useRef<HTMLDivElement>(null)
+  // IRIs already looked up, found or not. Without it, a lookup that failed or left one out
+  // was repeated on every render that touched `labels` — forever.
+  const asked = useRef(new Set<string>())
 
   // Resolve labels for values we were handed, so editing an existing record shows names
   // rather than the IRIs the user was trying to avoid in the first place.
   useEffect(() => {
-    const unknown = value.filter((v) => !labels[v])
+    const unknown = value.filter((v) => !labels[v] && !asked.current.has(v))
     if (unknown.length === 0) return
+    unknown.forEach((v) => asked.current.add(v))
     fetch(`/api/v1/vocab/resolve?iris=${encodeURIComponent(unknown.join(','))}`)
       .then((r) => (r.ok ? r.json() : []))
       .then((terms: Term[]) => {

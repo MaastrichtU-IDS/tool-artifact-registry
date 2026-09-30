@@ -153,6 +153,26 @@ export function ProblemJsonError({ error, onRetry }: { error: unknown; onRetry?:
   )
 }
 
+/** An action behind a button: busy while it runs, and its failure kept to show rather than
+ *  thrown into the void. For the destructive confirmations, where a silent failure reads as
+ *  success until the list is reloaded. */
+export function useAction() {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<unknown>()
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      await fn()
+    } catch (e) {
+      setError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return { run, busy, error, reset: () => setError(undefined) }
+}
+
 export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   return <ProblemJsonError error={error} onRetry={onRetry} />
 }

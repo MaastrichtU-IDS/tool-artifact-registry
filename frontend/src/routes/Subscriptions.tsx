@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
-import { CopyField, EmptyState, ErrorState, Modal, ProblemJsonError, Skeleton } from '../components/common'
+import { CopyField, EmptyState, ErrorState, Modal, ProblemJsonError, Skeleton, useAction } from '../components/common'
 import { ArtifactTypeChip, AvailabilityBadge, RelativeTime, shortId } from '../components/chips'
 import { TermPicker } from '../components/TermPicker'
 import type { Availability, Subscription, SubscriptionDelivery } from '../lib/types'
@@ -24,6 +24,7 @@ export default function Subscriptions() {
   const [created, setCreated] = useState<{ secret?: string; pullUrl: string }>()
   const [error, setError] = useState<Error>()
   const [confirmDelete, setConfirmDelete] = useState<Subscription>()
+  const danger = useAction()
   const [open, setOpen] = useState<string>()
 
   // form
@@ -385,7 +386,8 @@ export default function Subscriptions() {
       )}
 
       {confirmDelete && (
-        <Modal title="Delete subscription" onClose={() => setConfirmDelete(undefined)}>
+        <Modal title="Delete subscription" onClose={() => { danger.reset(); setConfirmDelete(undefined) }}>
+          {danger.error !== undefined && <ProblemJsonError error={danger.error} />}
           <p>
             Delete <strong>{confirmDelete.label ?? shortId(confirmDelete.id)}</strong> for{' '}
             <strong>{instance.label}</strong>? Its queued matches, including{' '}
@@ -395,15 +397,16 @@ export default function Subscriptions() {
             <button
               type="button"
               className="danger"
-              onClick={async () => {
+              disabled={danger.busy}
+              onClick={() => danger.run(async () => {
                 await api.deleteSubscription(confirmDelete.id)
                 setConfirmDelete(undefined)
                 subs.reload()
-              }}
+              })}
             >
               Delete it
             </button>
-            <button type="button" onClick={() => setConfirmDelete(undefined)}>
+            <button type="button" onClick={() => { danger.reset(); setConfirmDelete(undefined) }}>
               Cancel
             </button>
           </div>

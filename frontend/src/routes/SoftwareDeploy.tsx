@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
-import { CopyBlock, CopyField, ErrorState, Modal, ProblemJsonError, Skeleton } from '../components/common'
+import { CopyBlock, CopyField, ErrorState, Modal, ProblemJsonError, Skeleton, useAction } from '../components/common'
 import { RelativeTime } from '../components/chips'
 import { useSession } from '../lib/session'
 import type { Software, WellKnown } from '../lib/types'
@@ -382,6 +382,7 @@ function SelfWithKey({ software, base }: { software: Software; base: string }) {
   const [minted, setMinted] = useState<string>()
   const [error, setError] = useState<Error>()
   const [confirmRevoke, setConfirmRevoke] = useState<{ id: string; prefix: string }>()
+  const danger = useAction()
 
   const mint = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -577,23 +578,25 @@ function SelfWithKey({ software, base }: { software: Software; base: string }) {
       )}
 
       {confirmRevoke && (
-        <Modal title="Revoke this key?" onClose={() => setConfirmRevoke(undefined)}>
+        <Modal title="Revoke this key?" onClose={() => { danger.reset(); setConfirmRevoke(undefined) }}>
+          {danger.error !== undefined && <ProblemJsonError error={danger.error} />}
           <p>
             Deployments still using <code>tar_{confirmRevoke.prefix}…</code> stop being able to
             update their records. The records themselves stay.
           </p>
           <div className="actions">
-            <button type="button" onClick={() => setConfirmRevoke(undefined)}>
+            <button type="button" onClick={() => { danger.reset(); setConfirmRevoke(undefined) }}>
               Cancel
             </button>
             <button
               type="button"
               className="danger"
-              onClick={async () => {
+              disabled={danger.busy}
+              onClick={() => danger.run(async () => {
                 await api.revokeSoftwareToken(software.id, confirmRevoke.id)
                 setConfirmRevoke(undefined)
                 tokens.reload()
-              }}
+              })}
             >
               Revoke
             </button>

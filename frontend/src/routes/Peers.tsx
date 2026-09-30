@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
 import { useSession } from '../lib/session'
-import { EmptyState, ErrorState, Modal, ProblemJsonError, Skeleton } from '../components/common'
+import { EmptyState, ErrorState, Modal, ProblemJsonError, Skeleton, useAction } from '../components/common'
 import { RelativeTime } from '../components/chips'
 import { safeHref } from '../lib/safeHref'
 
@@ -14,6 +14,7 @@ export default function Peers() {
   const [preview, setPreview] = useState<Awaited<ReturnType<typeof api.previewPeer>>>()
   const [error, setError] = useState<Error>()
   const [confirmRemove, setConfirmRemove] = useState<{ id: string; base: string; count: number }>()
+  const danger = useAction()
 
   if (sessionLoading) return <Skeleton rows={4} />
   if (!isAdmin) {
@@ -204,7 +205,8 @@ export default function Peers() {
       )}
 
       {confirmRemove && (
-        <Modal title="Remove peer" onClose={() => setConfirmRemove(undefined)}>
+        <Modal title="Remove peer" onClose={() => { danger.reset(); setConfirmRemove(undefined) }}>
+          {danger.error !== undefined && <ProblemJsonError error={danger.error} />}
           <p>
             Removing <strong>{confirmRemove.base}</strong> drops its cached graph —{' '}
             <strong>{confirmRemove.count} cached {confirmRemove.count === 1 ? 'record' : 'records'}</strong>{' '}
@@ -215,15 +217,16 @@ export default function Peers() {
             <button
               type="button"
               className="danger"
-              onClick={async () => {
+              disabled={danger.busy}
+              onClick={() => danger.run(async () => {
                 await api.removePeer(confirmRemove.id)
                 setConfirmRemove(undefined)
                 peers.reload()
-              }}
+              })}
             >
               Remove and drop cache
             </button>
-            <button type="button" onClick={() => setConfirmRemove(undefined)}>Cancel</button>
+            <button type="button" onClick={() => { danger.reset(); setConfirmRemove(undefined) }}>Cancel</button>
           </div>
         </Modal>
       )}

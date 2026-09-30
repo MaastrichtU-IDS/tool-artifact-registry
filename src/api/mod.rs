@@ -160,10 +160,59 @@ pub fn router(state: Arc<AppState>) -> Router {
         // before anything is charged for it, and an old IRI is translated before any handler
         // or limiter reads the request.
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::rebase::middleware))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), security_headers))
         .layer(DefaultBodyLimit::max(limit))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Headers that limit what a page served from here can do, set where a handler has not set its
+/// own (the API-description proxy sends a stricter sandbox, which must survive).
+///
+/// The page holds a signed-in user's token, so the content-security policy is what bounds a
+/// script that got in some other way: scripts only from this origin, network calls only to this
+/// origin and the identity provider, and no framing — a framed registry is a clickjacking target
+/// for the buttons that mint tokens and withdraw records. Styles allow inline attributes, which
+/// the UI uses; images come from anywhere over https, because a README's images do.
+async fn security_headers(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    use axum::http::{header, HeaderValue};
+    let mut resp = next.run(req).await;
+    let is_html = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/html"));
+    let h = resp.headers_mut();
+    for (name, value) in [
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (header::X_FRAME_OPTIONS, "DENY"),
+        (header::REFERRER_POLICY, "strict-origin-when-cross-origin"),
+    ] {
+        h.entry(name).or_insert(HeaderValue::from_static(value));
+    }
+    if is_html && !h.contains_key(header::CONTENT_SECURITY_POLICY) {
+        let idp = state
+            .config
+            .oidc
+            .issuer
+            .as_deref()
+            .and_then(|i| url::Url::parse(i).ok())
+            .map(|u| format!(" {}", u.origin().ascii_serialization()))
+            .unwrap_or_default();
+        let csp = format!(
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; \
+             connect-src 'self'{idp}; frame-ancestors 'none'; base-uri 'self'; form-action 'self'{idp}; object-src 'none'"
+        );
+        if let Ok(v) = HeaderValue::from_str(&csp) {
+            h.insert(header::CONTENT_SECURITY_POLICY, v);
+        }
+    }
+    resp
 }
 
 /// Paths that stay open on a registry with anonymous reads closed.

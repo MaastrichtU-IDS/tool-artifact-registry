@@ -4,6 +4,7 @@ import { useAsync } from '../lib/useAsync'
 import { useSession } from '../lib/session'
 import { EmptyState, ErrorState, Modal, ProblemJsonError, Skeleton } from '../components/common'
 import { RelativeTime } from '../components/chips'
+import { safeHref } from '../lib/safeHref'
 
 export default function Peers() {
   const { isAdmin, loading: sessionLoading } = useSession()
@@ -91,7 +92,7 @@ export default function Peers() {
                 {peers.data.items.map((p) => (
                   <tr key={p.id}>
                     <td>{p.title ?? <span className="muted">untitled</span>}</td>
-                    <td><a href={p.base_iri} target="_blank" rel="noreferrer">{p.base_iri}</a></td>
+                    <td><a href={safeHref(p.base_iri)} target="_blank" rel="noreferrer">{p.base_iri}</a></td>
                     <td><RelativeTime iso={p.last_seen_at} /></td>
                     <td>
                       <span className={p.resolve_status === 'ok' ? 'chip ok' : p.resolve_status === 'error' ? 'chip danger' : 'chip'}>

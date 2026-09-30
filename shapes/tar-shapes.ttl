@@ -16,6 +16,7 @@
 @prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
 @prefix codemeta: <https://w3id.org/codemeta/terms/> .
+@prefix foaf:   <http://xmlns.com/foaf/0.1/> .
 
 # Targets are the tar: marker classes, not schema:SoftwareApplication: a Release carries that
 # type too (spec §4.2), so targeting it would fire the Software shape on every Release.
@@ -68,6 +69,16 @@ tar:LicenceShape a sh:NodeShape ;
     sh:targetSubjectsOf dct:license ;
     sh:property [ sh:path dct:license ; sh:pattern "^https?://" ;
                   sh:message "license must be an SPDX IRI such as https://spdx.org/licenses/Apache-2.0" ] .
+
+# Every field the UI draws as a link: not a scheme that runs code when clicked. `sh:nodeKind
+# sh:IRI` let `javascript:alert(1)` through — it is a perfectly valid IRI. The UI refuses these
+# too (`safeHref`), since a peer's records never pass through these shapes; this keeps them out
+# of this registry's own records.
+tar:LinkShape a sh:NodeShape ;
+    sh:targetSubjectsOf schema:url, dcat:endpointURL, dcat:endpointDescription, tar:healthEndpoint, dcat:landingPage, foaf:page, dcat:accessURL, dcat:downloadURL, tar:accessRequestURL, schema:codeRepository, schema:softwareHelp, schema:downloadUrl, schema:image, schema:screenshot, tar:readmeBaseURL, schema:releaseNotes ;
+    sh:property [ sh:path [ sh:alternativePath ( schema:url dcat:endpointURL dcat:endpointDescription tar:healthEndpoint dcat:landingPage foaf:page dcat:accessURL dcat:downloadURL tar:accessRequestURL schema:codeRepository schema:softwareHelp schema:downloadUrl schema:image schema:screenshot tar:readmeBaseURL schema:releaseNotes ) ] ;
+                  sh:not [ sh:pattern "^(javascript|data|vbscript|file):" ; sh:flags "i" ] ;
+                  sh:message "a link must be an http(s) URL, not javascript:, data:, vbscript: or file:" ] .
 
 tar:ApiDocShape a sh:NodeShape ;
     sh:targetObjectsOf dcat:endpointDescription ;

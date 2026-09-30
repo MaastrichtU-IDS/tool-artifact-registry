@@ -6,6 +6,7 @@ import {
 } from '../components/common'
 import { ArtifactTypeChip, AvailabilityBadge, LicenseChip, OriginChip, RelativeTime, shortId } from '../components/chips'
 import type { Distribution } from '../lib/types'
+import { safeHref } from '../lib/safeHref'
 
 export default function ArtifactDetail() {
   const { id = '' } = useParams()
@@ -221,10 +222,10 @@ function DistributionCard({ d }: { d: Distribution }) {
             {/* A browser cannot follow s3://, ipfs:// or file://. Offering a link that does
                 nothing is worse than showing the URI the client actually needs. */}
             {d.download_url && browserFollowable(d.download_url) && (
-              <li><a className="chip accent" href={d.download_url}>⬇ Download</a></li>
+              <li><a className="chip accent" href={safeHref(d.download_url)}>⬇ Download</a></li>
             )}
             {d.access_url && browserFollowable(d.access_url) && (
-              <li><a className="chip" href={d.access_url} target="_blank" rel="noreferrer">Access page ↗</a></li>
+              <li><a className="chip" href={safeHref(d.access_url)} target="_blank" rel="noreferrer">Access page ↗</a></li>
             )}
           </ul>
           {d.download_url && !browserFollowable(d.download_url) && (
@@ -239,13 +240,13 @@ function DistributionCard({ d }: { d: Distribution }) {
       )}
 
       {d.access_request_url && (
-        <a className="chip accent" href={d.access_request_url} target="_blank" rel="noreferrer">Request access ↗</a>
+        <a className="chip accent" href={safeHref(d.access_request_url)} target="_blank" rel="noreferrer">Request access ↗</a>
       )}
 
       <dl className="rail-section">
         {d.media_type && (<><dt>Media type</dt><dd className="mono">{d.media_type}</dd></>)}
         {d.byte_size !== undefined && (<><dt>Size</dt><dd>{formatBytes(d.byte_size)}</dd></>)}
-        {d.conforms_to && (<><dt>Conforms to</dt><dd><a href={d.conforms_to}>{d.conforms_to}</a></dd></>)}
+        {d.conforms_to && (<><dt>Conforms to</dt><dd><a href={safeHref(d.conforms_to)}>{d.conforms_to}</a></dd></>)}
         {(d.access_protocol || d.auth_method) && (
           <>
             <dt>Access</dt>
@@ -278,7 +279,7 @@ function LineageLink({ iri, title }: { iri: string; title?: string }) {
   }
   return (
     <span className="inline">
-      <a href={iri} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 12.5 }}>{iri}</a>
+      <a href={safeHref(iri)} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 12.5 }}>{iri}</a>
       <span className="chip peer">peer</span>
     </span>
   )

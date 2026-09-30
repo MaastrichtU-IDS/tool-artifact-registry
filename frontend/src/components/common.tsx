@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../lib/api'
+import { safeHref } from '../lib/safeHref'
 
 /** Copy-to-clipboard for an IRI, checksum, token or command (handoff §6.2). */
 export function CopyField({ value, label, mono = true }: { value: string; label: string; mono?: boolean }) {
@@ -194,9 +195,9 @@ export function FairDownloads({ iri, biotools }: { iri: string; biotools?: strin
         This record is RDF. The IRI content-negotiates; these links pin a format.
       </p>
       <ul className="chips">
-        <li><a className="chip" href={`${iri}.ttl`}>⬇ Turtle</a></li>
-        <li><a className="chip" href={`${iri}.jsonld`}>⬇ JSON-LD</a></li>
-        {biotools && <li><a className="chip" href={biotools}>⬇ biotoolsSchema</a></li>}
+        <li><a className="chip" href={safeHref(`${iri}.ttl`)}>⬇ Turtle</a></li>
+        <li><a className="chip" href={safeHref(`${iri}.jsonld`)}>⬇ JSON-LD</a></li>
+        {biotools && <li><a className="chip" href={safeHref(biotools)}>⬇ biotoolsSchema</a></li>}
       </ul>
     </section>
   )
@@ -284,7 +285,7 @@ export function ForeignNotice({ homeIri }: { homeIri?: string }) {
       <h3>Cached from another registry</h3>
       <p>
         This is a read-only copy and may be out of date.{' '}
-        {homeIri && <a href={homeIri} target="_blank" rel="noreferrer">Open it at its home registry →</a>}
+        {homeIri && <a href={safeHref(homeIri)} target="_blank" rel="noreferrer">Open it at its home registry →</a>}
       </p>
     </div>
   )

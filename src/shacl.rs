@@ -378,6 +378,27 @@ mod tests {
         shapes().validate_quads(&quads)
     }
 
+    /// §1.5: `javascript:` is a valid IRI, so `sh:nodeKind sh:IRI` let it into every link field.
+    #[test]
+    fn a_link_field_cannot_hold_a_scheme_that_runs_code() {
+        let refused = |r: &Report| r.findings.iter().any(|f| f.message.starts_with("a link must be an http(s) URL"));
+        let sw = |homepage: &str| {
+            software(SoftwareIn { name: "x".into(), homepage: Some(homepage.into()), ..Default::default() })
+        };
+        assert!(refused(&sw("javascript:alert(document.cookie)")));
+        assert!(refused(&sw("JavaScript:alert(1)")), "the check ignores case");
+        assert!(!refused(&sw("https://example.org")));
+        let art = |url: &str| {
+            artifact(ArtifactIn {
+                title: Some("x".into()),
+                distributions: vec![DistributionIn { download_url: Some(url.into()), ..Default::default() }],
+                ..Default::default()
+            })
+        };
+        assert!(refused(&art("data:text/html;base64,PHNjcmlwdD4=")));
+        assert!(!refused(&art("s3://bucket/key.ttl")), "a storage scheme is not a script");
+    }
+
     /// A bare licence name used to pass as a relative IRI and then vanish from the record.
     #[test]
     fn a_licence_must_be_an_http_iri_on_every_kind_of_record() {

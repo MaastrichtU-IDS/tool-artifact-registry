@@ -14,6 +14,7 @@ import { ApiDocs } from '../components/ApiDocs'
 import { useState } from 'react'
 import { ApiError } from '../lib/api'
 import type { Software as SoftwareRecord } from '../lib/types'
+import { safeHref } from '../lib/safeHref'
 
 /**
  * Lead with what only this registry can say: what the tool consumes and produces, and which
@@ -62,10 +63,10 @@ export default function SoftwareDetail() {
             </div>
             {s.tagline && <p className="tagline">{s.tagline}</p>}
             <ul className="chips">
-              {s.code_repository && <li><a className="chip" href={s.code_repository} target="_blank" rel="noreferrer">Repository ↗</a></li>}
-              {s.documentation && <li><a className="chip" href={s.documentation} target="_blank" rel="noreferrer">Docs ↗</a></li>}
-              {s.homepage && s.homepage !== s.code_repository && <li><a className="chip" href={s.homepage} target="_blank" rel="noreferrer">Website ↗</a></li>}
-              {s.download_url && <li><a className="chip accent" href={s.download_url} target="_blank" rel="noreferrer">⬇ Download ↗</a></li>}
+              {s.code_repository && <li><a className="chip" href={safeHref(s.code_repository)} target="_blank" rel="noreferrer">Repository ↗</a></li>}
+              {s.documentation && <li><a className="chip" href={safeHref(s.documentation)} target="_blank" rel="noreferrer">Docs ↗</a></li>}
+              {s.homepage && s.homepage !== s.code_repository && <li><a className="chip" href={safeHref(s.homepage)} target="_blank" rel="noreferrer">Website ↗</a></li>}
+              {s.download_url && <li><a className="chip accent" href={safeHref(s.download_url)} target="_blank" rel="noreferrer">⬇ Download ↗</a></li>}
             </ul>
           </div>
 
@@ -101,7 +102,7 @@ export default function SoftwareDetail() {
                   <ul className="chips">
                     {s.latest_release!.downloads!.map((d) => (
                       <li key={d.url}>
-                        <a className="chip accent" href={d.url}>
+                        <a className="chip accent" href={safeHref(d.url)}>
                           ⬇ {d.platform ?? d.label ?? d.url.split('/').pop()}
                           {d.byte_size ? <span className="muted"> {formatBytes(d.byte_size)}</span> : null}
                         </a>
@@ -114,7 +115,7 @@ export default function SoftwareDetail() {
                 (s.latest_release?.downloads?.length ?? 0) === 0 &&
                 s.download_url && (
                   <p style={{ margin: 0 }}>
-                    <a href={s.download_url} target="_blank" rel="noreferrer">Downloads and releases ↗</a>
+                    <a href={safeHref(s.download_url)} target="_blank" rel="noreferrer">Downloads and releases ↗</a>
                   </p>
                 )}
             </section>
@@ -223,7 +224,7 @@ export default function SoftwareDetail() {
               <h2>Screenshots</h2>
               <div className="shots">
                 {[s.image, ...s.screenshots].filter(Boolean).map((src) => (
-                  <a key={src} href={src} target="_blank" rel="noreferrer">
+                  <a key={src} href={safeHref(src)} target="_blank" rel="noreferrer">
                     <img
                       src={src}
                       alt={`${s.name} screenshot`}
@@ -273,7 +274,7 @@ export default function SoftwareDetail() {
               <h2>Publications</h2>
               <ul>
                 {s.publications.map((p) => (
-                  <li key={p}><a href={p} target="_blank" rel="noreferrer">{p}</a></li>
+                  <li key={p}><a href={safeHref(p)} target="_blank" rel="noreferrer">{p}</a></li>
                 ))}
               </ul>
             </section>
@@ -345,12 +346,12 @@ export default function SoftwareDetail() {
                     <dt>Publisher</dt>
                     <dd>
                       {s.publisher.homepage ? (
-                        <a href={s.publisher.homepage} target="_blank" rel="noreferrer">{s.publisher.name}</a>
+                        <a href={safeHref(s.publisher.homepage)} target="_blank" rel="noreferrer">{s.publisher.name}</a>
                       ) : (
                         s.publisher.name
                       )}
                       {s.publisher.identifier && (
-                        <> · <a href={s.publisher.identifier} target="_blank" rel="noreferrer">
+                        <> · <a href={safeHref(s.publisher.identifier)} target="_blank" rel="noreferrer">
                           {s.publisher.identifier.includes('ror.org') ? 'ROR' : 'ORCID'}
                         </a></>
                       )}

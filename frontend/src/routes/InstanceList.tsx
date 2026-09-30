@@ -4,6 +4,7 @@ import { useAsync } from '../lib/useAsync'
 import { useSession } from '../lib/session'
 import { EmptyState, ErrorState, KeysetPager, Skeleton } from '../components/common'
 import { HealthDot, OriginChip, RelativeTime } from '../components/chips'
+import { safeHref } from '../lib/safeHref'
 
 export default function InstanceList() {
   const [params, setParams] = useSearchParams()
@@ -83,7 +84,7 @@ export default function InstanceList() {
                     <td>{i.operator?.name ?? <span className="muted">—</span>}</td>
                     <td>
                       {i.endpoint_url ? (
-                        <a href={i.endpoint_url} target="_blank" rel="noreferrer">
+                        <a href={safeHref(i.endpoint_url)} target="_blank" rel="noreferrer">
                           {i.endpoint_url.replace(/^https?:\/\//, '')}
                         </a>
                       ) : (

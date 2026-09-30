@@ -227,3 +227,26 @@ async fn the_api_doc_viewer_does_not_fetch_a_private_address_by_default() {
     assert!(body["detail"].as_str().unwrap().contains("TAR_APIDOC_ALLOW_PRIVATE"), "{body}");
     assert!(hits.lock().unwrap().is_empty(), "{:?}", hits.lock().unwrap());
 }
+
+/// §1.5: nothing bounded what a script that got into the page could do.
+#[tokio::test]
+async fn pages_carry_a_content_security_policy_and_every_response_the_basics() {
+    let h = harness_with(|c| c.oidc.issuer = Some("https://sso.example.org/realms/main".into())).await;
+    let (status, _, headers) = h.send("GET", "/software", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let csp = headers["content-security-policy"].to_str().unwrap();
+    for part in [
+        "script-src 'self'",
+        "frame-ancestors 'none'",
+        "object-src 'none'",
+        "connect-src 'self' https://sso.example.org",
+    ] {
+        assert!(csp.contains(part), "{part} missing from {csp}");
+    }
+    assert_eq!(headers["x-frame-options"], "DENY");
+
+    let (_, _, headers) = h.send("GET", "/api/v1/software", None, None).await;
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(headers["referrer-policy"], "strict-origin-when-cross-origin");
+    assert!(!headers.contains_key("content-security-policy"), "JSON needs no page policy");
+}

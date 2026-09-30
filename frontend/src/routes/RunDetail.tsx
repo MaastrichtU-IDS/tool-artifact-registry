@@ -4,6 +4,7 @@ import { useAsync } from '../lib/useAsync'
 import { CopyField, ErrorState, SignalBar, Skeleton, formatDuration } from '../components/common'
 import { ArtifactTypeChip, AvailabilityBadge, OriginChip, RelativeTime, RunStatus, shortId } from '../components/chips'
 import type { ArtifactRef } from '../lib/types'
+import { safeHref } from '../lib/safeHref'
 
 export default function RunDetail() {
   const { id = '' } = useParams()
@@ -93,7 +94,7 @@ function ArtifactColumn({ title, refs, empty }: { title: string; refs: ArtifactR
             <li key={r.iri}>
               <div className="spread">
                 {r.unresolved ? (
-                  <a href={r.iri} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 12.5 }}>{r.iri}</a>
+                  <a href={safeHref(r.iri)} target="_blank" rel="noreferrer" className="mono" style={{ fontSize: 12.5 }}>{r.iri}</a>
                 ) : (
                   <Link to={`/artifacts/${r.iri.split('/').pop()}`}>{r.title ?? r.iri.split('/').pop()}</Link>
                 )}

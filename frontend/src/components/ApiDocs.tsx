@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ApiDoc } from '../lib/types'
 import { api } from '../lib/api'
+import { safeHref } from '../lib/safeHref'
 
 /** Human names for the formats. Kept beside the type rather than in each caller. */
 export const API_FORMAT_LABEL: Record<string, string> = {
@@ -192,7 +193,7 @@ export function ApiDocView({ softwareId, doc, index }: { softwareId: string; doc
           {doc.description && <p className="muted">{doc.description}</p>}
         </div>
         <div className="api-doc-actions">
-          <a className="btn ghost" href={doc.url} target="_blank" rel="noreferrer noopener">
+          <a className="btn ghost" href={safeHref(doc.url)} target="_blank" rel="noreferrer noopener">
             Open document
           </a>
           {renderable && (
@@ -207,7 +208,7 @@ export function ApiDocView({ softwareId, doc, index }: { softwareId: string; doc
       {expanded && state.error && (
         <p className="error">
           {state.error}{' '}
-          <a href={doc.url} target="_blank" rel="noreferrer noopener">
+          <a href={safeHref(doc.url)} target="_blank" rel="noreferrer noopener">
             {doc.url}
           </a>
         </p>

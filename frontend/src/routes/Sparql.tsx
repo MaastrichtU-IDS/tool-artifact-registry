@@ -4,6 +4,7 @@ import { api, ApiError } from '../lib/api'
 import { useSession } from '../lib/session'
 import { EmptyState, ProblemJsonError } from '../components/common'
 import type { SparqlAnswer, SparqlTerm } from '../lib/types'
+import { safeHref } from '../lib/safeHref'
 
 /**
  * Read-only SPARQL (spec §7.7). The endpoint is "a first-class surface, not a bonus", so the
@@ -527,7 +528,7 @@ function TermCell({ term, base }: { term: SparqlTerm; base: string }) {
       )
     }
     return (
-      <a className="mono" href={term.value} target="_blank" rel="noreferrer" title={term.value}>
+      <a className="mono" href={safeHref(term.value)} target="_blank" rel="noreferrer" title={term.value}>
         {shorten(term.value, base)}
       </a>
     )

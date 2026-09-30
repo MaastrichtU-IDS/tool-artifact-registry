@@ -119,6 +119,11 @@ pub async fn create(
         ),
         None => None,
     };
+    // Past this, an expiry is a typo or an attempt at one that never comes; either way say so
+    // plainly rather than failing somewhere deeper.
+    if ttl.is_some_and(|d| d > chrono::Duration::days(3650)) {
+        return Err(AppError::bad_request("expires_in may be at most 10 years (3650d)"));
+    }
     let (rec, plaintext) = state
         .ops
         .mint_token(TokenSubject::Instance(&iri), &scopes, input.label.as_deref(), Some(&principal.subject), ttl)
@@ -223,6 +228,11 @@ pub async fn create_for_software(
         ),
         None => None,
     };
+    // Past this, an expiry is a typo or an attempt at one that never comes; either way say so
+    // plainly rather than failing somewhere deeper.
+    if ttl.is_some_and(|d| d > chrono::Duration::days(3650)) {
+        return Err(AppError::bad_request("expires_in may be at most 10 years (3650d)"));
+    }
     let (rec, plaintext) = state
         .ops
         .mint_token(TokenSubject::Software(&iri), &scopes, input.label.as_deref(), Some(&principal.subject), ttl)

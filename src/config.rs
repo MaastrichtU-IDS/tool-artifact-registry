@@ -235,7 +235,9 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
         _ => (s, 1),
     };
     let n: u64 = num.trim().parse().with_context(|| format!("bad duration {s:?}"))?;
-    Ok(Duration::from_secs(n * mult))
+    // Checked: `expires_in` reaches here from a request body, and an overflow panicked.
+    let secs = n.checked_mul(mult).with_context(|| format!("duration {s:?} is too long"))?;
+    Ok(Duration::from_secs(secs))
 }
 
 fn env_duration(key: &str, default: &str) -> Result<Duration> {

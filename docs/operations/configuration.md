@@ -47,9 +47,10 @@ The two are **independent**, and that is deliberate: SPARQL is a public read sur
 right, and losing it whenever an operator closes REST reads would make the two settings one. An
 operator who wants a genuinely private registry has to say so about the query endpoint too.
 
-`/healthz`, `/readyz`, `/metrics`, `/api/v1/registry`, `/api/v1/context`, `/api/v1/whoami`, the
+`/healthz`, `/readyz`, `/api/v1/registry`, `/api/v1/context`, `/api/v1/whoami`, the
 `/.well-known/` documents and the MCP handshake stay reachable either way — a probe or a
-discovery document that needs a credential fails for the wrong reason.
+discovery document that needs a credential fails for the wrong reason. `/metrics` always needs
+an admin token.
 
 ## Rate limits
 

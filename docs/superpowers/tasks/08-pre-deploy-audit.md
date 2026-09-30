@@ -30,6 +30,11 @@ Suggested split: one PR for §1, one for §2, one for §3, then bump to 0.2.0 an
   unless `TAR_APIDOC_ALLOW_PRIVATE=true`. Neither follows redirects, and both always refuse
   link-local addresses (cloud metadata).
 
+- **Tombstones: 410 with the record.** A withdrawn record answers `410 Gone` and still carries
+  its body, marked tombstoned, so the page and the UI's banner keep working.
+- **`/metrics`: admin token.** Prometheus sends an admin bearer token; the counts are cached for
+  30 seconds so a scrape does not walk the graph every time.
+
 ## 0. Decision for the user first
 
 - **Visibility.** The repo, the GHCR package and the Pages site are all **public** today; the
@@ -79,6 +84,12 @@ floor has no automated test (no network seam).
    refetch has no negative cache.
 
 ## 2. Correctness and operations — must fix before deploying
+
+**Done except 13** on branch `ops-fixes` (2026-09-30), regressions in `tests/operations.rs`.
+Item 13 (bump to 0.2.0 and tag) waits for the user. Notes: withdrawn records now answer 410 on
+every representation, `.md` included; `/admin/ops-backup` is a 500 on a `TAR_DATA_DIR=memory`
+registry (an in-memory SQLite database cannot be copied to a file); the online backup is read
+whole into memory before it is sent.
 
 8. **Tombstones:** GET of a tombstoned software/instance is 200, not the documented 410; PATCH
    revives a tombstoned software/instance (reproduced). A deleted deployment's tokens still

@@ -1,5 +1,5 @@
-# /metrics is reachable without a credential whatever TAR_PUBLIC_READ says, so the scrape needs
-# no token. It is also exempt from rate limiting.
+# /metrics needs an admin token, so the scrape sends the root token from `tar-secrets` (the
+# Secret the Deployment reads; it must be in this namespace). It is exempt from rate limiting.
 #
 # kube-prometheus-stack only picks up ServiceMonitors carrying its release label by default. If
 # yours does, add that label here — `release: <your release name>` — or nothing is scraped and
@@ -19,3 +19,8 @@ spec:
       # Not the operator's 30s default. Every scrape counts the whole graph and every record
       # kind, and the numbers it reports move on the scale of hours.
       interval: 60s
+      authorization:
+        type: Bearer
+        credentials:
+          name: tar-secrets
+          key: TAR_ROOT_TOKEN

@@ -459,8 +459,16 @@ pub async fn ack(
     Json(input): Json<AckIn>,
 ) -> AppResult<impl IntoResponse> {
     let sub = load_owned(&state, &principal, &sid).await?;
-    let cursor = subs::ack(&state.ops, &sub.id, input.cursor).await.map_err(AppError::from)?;
     let latest = subs::max_seq(&state.ops, &sub.id).await.map_err(AppError::from)?;
+    // The cursor only moves forward, so one past the newest delivery would silently hide every
+    // delivery matched after it. That is always a client's mistake: say so instead.
+    if input.cursor > latest {
+        return Err(AppError::bad_request(format!(
+            "cursor {} is past the newest delivery of this subscription ({latest})",
+            input.cursor
+        )));
+    }
+    let cursor = subs::ack(&state.ops, &sub.id, input.cursor).await.map_err(AppError::from)?;
     Ok(Json(json!({ "cursor": cursor, "remaining": (latest - cursor).max(0) })))
 }
 

@@ -107,6 +107,13 @@ impl Ops {
         &self.pool
     }
 
+    /// A consistent copy of the whole database at `path`, taken while it is in use. `path`
+    /// must not exist yet.
+    pub async fn backup_to(&self, path: &str) -> Result<()> {
+        sqlx::query("VACUUM INTO ?").bind(path).execute(&self.pool).await.context("VACUUM INTO")?;
+        Ok(())
+    }
+
     // ---------------------------------------------------------------- tokens
 
     /// Mint a token. The plaintext is returned exactly once — it is never stored (handoff §5.8).
@@ -134,7 +141,11 @@ impl Ops {
         let plaintext = format!("tar_{prefix}_{secret}");
         let hash = hash_secret(&plaintext)?;
         let now = Utc::now();
-        let expires = ttl.map(|d| (now + d).to_rfc3339());
+        // Checked: an expiry past the end of the calendar panicked instead of being refused.
+        let expires = match ttl {
+            Some(d) => Some(now.checked_add_signed(d).context("that expiry is too far in the future")?.to_rfc3339()),
+            None => None,
+        };
         let scopes_s = scopes.join(" ");
         sqlx::query(
             "INSERT INTO api_tokens (id, prefix, hash, instance_iri, software_iri, subject_kind, scopes, label, created_at, created_by, expires_at)

@@ -151,8 +151,10 @@ docker run -d --name tar \
   ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0
 ```
 
-The volume has to be writable by that user — `chown 65532:65532` on a bind mount, or an
-`fsGroup` on Kubernetes, which the manifests set. This is verified, not assumed: seeding,
+The image already runs as that user (distroless `nonroot`), and ships an empty `/data` owned by
+it, so a fresh named volume is writable with no extra step. A bind mount has to be
+`chown 65532:65532` first; on Kubernetes the manifests set an `fsGroup`. `compose.yaml` applies
+the same restrictions. This is verified, not assumed: seeding,
 serving, and a `POST /api/v1/software` all succeed under those restrictions.
 
 ## Compose
@@ -290,10 +292,12 @@ Both endpoints exist and answer different questions, so they are used for differ
 |---|---|
 | `GET /healthz` | Static `{"status":"ok"}`. **Liveness.** A liveness probe that also checks a dependency restarts a healthy process because something else broke. |
 | `GET /readyz` | Counts the graph and runs `SELECT 1` against SQLite. **Readiness**, and the startup probe. A pod whose external SPARQL endpoint is unreachable stops taking traffic without being killed. |
-| `GET /metrics` | Prometheus text: total triples, records by kind, peers configured and failing. |
+| `GET /metrics` | Prometheus text: total triples, records by kind, peers configured and failing. **Admin token required.** |
 
-All three are reachable regardless of `TAR_PUBLIC_READ` — a probe that needs a credential fails
-for the wrong reason.
+The two probes are reachable regardless of `TAR_PUBLIC_READ` — a probe that needs a credential
+fails for the wrong reason. `/metrics` is not a probe: it needs an admin bearer token, because
+counting walks the whole store (the counts are reused for 30 seconds) and the peer and
+rate-limit figures are the operator's business.
 
 The startup probe allows up to 150 seconds. Boot itself is fast (about 0.3 s to listening on a
 warm volume), but a first boot on cold storage loads the shapes and the bundled vocabularies
@@ -333,9 +337,11 @@ metadata:
 ```
 
 It selects the Service by `app.kubernetes.io/name: tool-artifact-registry`, scrapes the `http`
-port at `/metrics` every 60 seconds, and needs no credential — `/metrics` is open whatever
-`TAR_PUBLIC_READ` says. Each scrape counts the whole graph, which is why the interval is longer
-than the operator's default. kube-prometheus-stack only picks up ServiceMonitors carrying its
+port at `/metrics` every 60 seconds, and sends the root token from the `tar-secrets` Secret
+as a bearer token — `/metrics` answers 401 without an admin credential. The Secret has to be in
+the same namespace as the ServiceMonitor, which it is when both come from these manifests. Each
+scrape counts the whole graph (reused for 30 seconds), which is why the interval is longer than
+the operator's default. kube-prometheus-stack only picks up ServiceMonitors carrying its
 `release` label unless configured otherwise; if yours does, add that label in
 `components/servicemonitor/servicemonitor.yaml`.
 
@@ -471,7 +477,30 @@ curl -H "Authorization: Bearer $TAR_ROOT_TOKEN" \
   https://registry.example.org/admin/dump > registry.nq
 ```
 
-Restoring is the reverse, into a stopped registry:
+That is the graph. The other half — tokens, peers, the audit log, subscriptions and their
+delivery queues — is the SQLite database, and `GET /admin/ops-backup` copies it online
+(`VACUUM INTO`, so the copy is consistent while writes go on):
+
+```bash
+curl -fH "Authorization: Bearer $TAR_ROOT_TOKEN" \
+  https://registry.example.org/admin/ops-backup > ops.db
+```
+
+**Both together are a complete backup.** The SQLite copy holds webhook secrets in the clear, so
+keep it wherever you keep the root token. A nightly schedule is enough for most registries — the
+graph changes on the scale of hours, and a lost day of the audit log is the worst case:
+
+```cron
+# m h dom mon dow
+15 3 * * *  d=/backups/tar/$(date +\%F) && mkdir -p $d && \
+            curl -fsH "Authorization: Bearer $TAR_ROOT_TOKEN" https://registry.example.org/admin/dump > $d/registry.nq && \
+            curl -fsH "Authorization: Bearer $TAR_ROOT_TOKEN" https://registry.example.org/admin/ops-backup > $d/ops.db
+```
+
+To restore the SQLite side, stop the registry, replace `/data/ops.db` with the copy, delete any
+`ops.db-wal` and `ops.db-shm` beside it, and start it again.
+
+Restoring the graph is the reverse of the dump, into a stopped registry:
 
 ```console
 $ docker run --rm -e TAR_BASE_IRI=… -v tar-data:/data -v "$PWD":/backup:ro \

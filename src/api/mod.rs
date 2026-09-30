@@ -130,6 +130,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // in the format an LLM reads without a parser (https://llmstxt.org).
         .route("/llms.txt", get(llms::llms_txt))
         .route("/admin/dump", get(registry::dump))
+        .route("/admin/ops-backup", get(registry::ops_backup))
         // Registry IRIs and UI routes are the same URLs (handoff §3).
         .route("/software/{id}", get(deref::deref_software))
         .route("/release/{id}", get(deref::deref_release))
@@ -161,6 +162,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         // or limiter reads the request.
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::rebase::middleware))
         .layer(axum::middleware::from_fn_with_state(state.clone(), security_headers))
+        // A panic in a handler is a bug, but it should cost one request a 500, not drop the
+        // connection with no answer at all.
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(|_| {
+            AppError::internal("a handler panicked").into_response()
+        }))
         .layer(DefaultBodyLimit::max(limit))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .layer(TraceLayer::new_for_http())
@@ -378,12 +384,19 @@ pub async fn resource_response(
     default_repr: Repr,
 ) -> AppResult<Negotiated> {
     let repr = negotiate(headers, default_repr);
+    // A withdrawn record answers 410 Gone, in every representation, and still carries the
+    // record: the status tells a client it is withdrawn, the body says what it was, and the
+    // IRI keeps resolving rather than turning into a 404 that looks like it never existed.
+    let status = match serde_json::to_value(json).ok().and_then(|v| v.get("tombstoned").and_then(|t| t.as_bool())) {
+        Some(true) => axum::http::StatusCode::GONE,
+        _ => axum::http::StatusCode::OK,
+    };
     match repr {
         Repr::Json => Ok(Negotiated {
             repr,
             body: serde_json::to_string(json).map_err(|e| AppError::internal(e.to_string()))?,
             signposting: Some(signposting),
-            status: axum::http::StatusCode::OK,
+            status,
         }),
         // An agent that asks the JSON API for markdown gets the same rendering the IRI
         // serves, rather than a 406 or, worse, JSON under a markdown content type.
@@ -398,7 +411,7 @@ pub async fn resource_response(
                 llms::render_record(&ctx.state, &ctx, kind, &iri, &quads)
             })
             .await?;
-            Ok(Negotiated { repr, body, signposting: Some(signposting), status: axum::http::StatusCode::OK })
+            Ok(Negotiated { repr, body, signposting: Some(signposting), status })
         }
         Repr::Turtle | Repr::JsonLd | Repr::NQuads => {
             let state = state.clone();
@@ -408,7 +421,7 @@ pub async fn resource_response(
                 serialize(&quads, repr, &state.config.base_iri)
             })
             .await?;
-            Ok(Negotiated { repr, body, signposting: Some(signposting), status: axum::http::StatusCode::OK })
+            Ok(Negotiated { repr, body, signposting: Some(signposting), status })
         }
         Repr::Html => Err(AppError::unsupported_media("HTML is served by the SPA route")),
     }

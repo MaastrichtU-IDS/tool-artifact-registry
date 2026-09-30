@@ -376,6 +376,11 @@ fn urlencode(s: &str) -> String {
 
 fn local_hits(ctx: &Ctx, q: &str, only: Option<&str>, limit: usize) -> AppResult<Vec<SearchHit>> {
     let filter = super::text_filter(q, &["?title", "?extra"]);
+    // Ranking happens here, not in the query, so each kind is asked for more than `limit`:
+    // otherwise the exact match can be cut before it is scored.
+    // ponytail: a fixed pool; past 500 matches per kind the best one can still be missed.
+    const POOL: usize = 500;
+    let pool = POOL.max(limit);
     let mut hits = Vec::new();
     let kinds: Vec<(&str, &str, &str, &str)> = vec![
         ("software", crate::domain::software::TYPE_SOFTWARE, "schema:name", "dct:abstract|tar:tagline"),
@@ -395,7 +400,7 @@ SELECT ?s ?title ?extra ?g WHERE {{
   GRAPH ?g {{ ?s a <{type_iri}> . OPTIONAL {{ ?s {title_pred} ?title }} OPTIONAL {{ ?s {extra_pred} ?extra }} }}
   {filter}
   FILTER NOT EXISTS {{ GRAPH ?tg {{ ?s tar:tombstoned true }} }}
-}} LIMIT {limit}"#,
+}} LIMIT {pool}"#,
             p = ns::PREFIXES
         );
         for row in ctx.state.store.select(&sparql).map_err(AppError::from)?.rows {
@@ -413,6 +418,10 @@ SELECT ?s ?title ?extra ?g WHERE {{
             } else {
                 0.3
             };
+            // A record with several values for the snippet predicate comes back once per value.
+            if hits.iter().any(|h: &SearchHit| h.iri == iri) {
+                continue;
+            }
             hits.push(SearchHit {
                 iri,
                 entity_type: name.to_string(),
@@ -423,6 +432,9 @@ SELECT ?s ?title ?extra ?g WHERE {{
             });
         }
     }
+    // Each kind was asked for `limit`; the answer is the best `limit` across them.
+    hits.sort_by(|a, b| b.score.total_cmp(&a.score));
+    hits.truncate(limit);
     Ok(hits)
 }
 

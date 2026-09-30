@@ -18,7 +18,7 @@ curl 'https://registry.example.org/api/v1/search?q=validation&type=software&limi
 |---|---|
 | `q` | Required in practice — an empty `q` returns nothing rather than everything. |
 | `type` | `software`, `instance`, `artifact` or `run`. Omit for all four. |
-| `limit` | Default 30, clamped 1–100. |
+| `limit` | Default 30, clamped 1–100. Across every kind together: the best `limit` hits, exact title matches first, then prefix, then substring. `total` is the number of hits returned. |
 | `federated` | `true` to ask this registry's peers too. See [Federation](federation.md). |
 
 It matches the fields a person would search on: a software's name, tagline and abstract; a

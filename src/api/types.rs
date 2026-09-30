@@ -224,8 +224,14 @@ SELECT DISTINCT ?s WHERE {{
         let rows = ctx.state.store.select(&q).map_err(AppError::from)?;
         let iris: Vec<String> = rows.rows.iter().filter_map(|r| r.iri("s")).collect();
         let total = iris.len() as i64;
-        let items: Vec<ArtifactTypeOut> = iris.iter().take(paging.limit()).filter_map(|i| load(&ctx, i).ok()).collect();
-        Ok(crate::model::Page::new(items, total, None))
+        // Ascending by IRI, so the cursor is the last IRI of the previous page and the next page
+        // starts after it. The whole list is in hand already: it is at most a few hundred types.
+        let after = paging.cursor.as_deref().filter(|c| !c.is_empty());
+        let rest: Vec<&String> = iris.iter().filter(|i| after.is_none_or(|c| i.as_str() > c)).collect();
+        let page: Vec<&String> = rest.iter().take(paging.limit()).copied().collect();
+        let next = (rest.len() > page.len()).then(|| page.last().map(|i| i.to_string())).flatten();
+        let items: Vec<ArtifactTypeOut> = page.into_iter().filter_map(|i| load(&ctx, i).ok()).collect();
+        Ok(crate::model::Page::new(items, total, next))
     })
     .await?;
     Ok(Json(page))

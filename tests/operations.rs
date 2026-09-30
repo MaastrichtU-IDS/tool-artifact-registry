@@ -204,3 +204,41 @@ async fn every_error_is_a_problem_document() {
         }
     }
 }
+
+/// §3: /types had no next page, and search returned `limit` hits per kind, unranked.
+#[tokio::test]
+async fn types_page_and_search_honours_its_limit() {
+    let h = harness().await;
+    for label in ["Paged type A", "Paged type B", "Paged type C"] {
+        h.created("/api/v1/types", json!({"label": label})).await;
+    }
+    let mut seen = Vec::new();
+    let mut uri = "/api/v1/types?limit=2".to_string();
+    loop {
+        let (status, page) = h.send("GET", &uri, None, None).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        seen.extend(page["items"].as_array().unwrap().iter().map(|t| t["iri"].as_str().unwrap().to_string()));
+        match page["next_cursor"].as_str() {
+            Some(c) => uri = format!("/api/v1/types?limit=2&cursor={}", urlencoding(c)),
+            None => break,
+        }
+    }
+    let total = h.send("GET", "/api/v1/types", None, None).await.1["total"].as_u64().unwrap() as usize;
+    assert_eq!(seen.len(), total, "every type, once: {seen:?}");
+    assert!(total >= 3);
+
+    for name in ["zeta", "zeta two", "zeta three"] {
+        let sw = h.created("/api/v1/software", json!({"name": name, "kinds": ["service"]})).await;
+        h.created("/api/v1/instances", json!({"label": format!("{name} deployment"), "software": sw["id"]})).await;
+    }
+    let (_, found) = h.send("GET", "/api/v1/search?q=zeta&limit=2", None, None).await;
+    let hits = found["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 2, "{found}");
+    assert_eq!(hits[0]["title"], "zeta", "the exact match ranks first: {found}");
+}
+
+fn urlencoding(s: &str) -> String {
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}

@@ -389,3 +389,32 @@ async fn a_token_cannot_make_itself_an_administrator() {
     let (_, me, _) = h.send("GET", "/api/v1/whoami", Some(&t), None).await;
     assert_eq!(me["scopes"], json!(["advertise:produce"]), "{me}");
 }
+
+// ----------------------------------------------------------------------- smaller
+
+/// §1.7: an anonymous announcement stored whatever it was sent, as often as it was sent.
+#[tokio::test]
+async fn peer_announcements_are_bounded() {
+    let h = harness().await;
+    let announce = |url: String| {
+        let h = &h;
+        async move { h.send("POST", "/api/v1/peers/announce", None, Some(json!({"base_url": url}))).await.0 }
+    };
+    assert_eq!(announce("javascript:alert(1)".into()).await, StatusCode::BAD_REQUEST);
+    assert_eq!(announce(format!("https://x.example/{}", "a".repeat(2_000_000))).await, StatusCode::BAD_REQUEST);
+    for i in 0..100 {
+        assert_eq!(announce(format!("https://peer{i}.example.org")).await, StatusCode::OK, "{i}");
+    }
+    assert_eq!(announce("https://one-too-many.example.org".into()).await, StatusCode::SERVICE_UNAVAILABLE);
+    // One already known is still answered.
+    assert_eq!(announce("https://peer3.example.org".into()).await, StatusCode::OK);
+}
+
+/// §1.7: an external triplestore follows SERVICE from its own network.
+#[tokio::test]
+async fn a_federated_sparql_query_is_refused() {
+    let h = harness().await;
+    let q = enc("SELECT * WHERE { SERVICE <http://169.254.169.254/latest/meta-data/> { ?s ?p ?o } }");
+    let (status, body) = h.get(&format!("/sparql?query={q}")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}

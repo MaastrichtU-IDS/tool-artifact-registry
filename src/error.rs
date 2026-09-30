@@ -87,7 +87,17 @@ impl IntoResponse for AppError {
             "status": self.status.as_u16(),
         });
         let obj = body.as_object_mut().expect("object");
-        if let Some(d) = self.detail {
+        // A 500's detail is for the operator, not the caller: it has carried generated SPARQL,
+        // store errors and SQL, which tell an attacker how to shape the next request. The
+        // caller gets a reference; the log has the rest under the same reference.
+        let detail = if self.status == StatusCode::INTERNAL_SERVER_ERROR {
+            let reference = uuid::Uuid::now_v7().to_string();
+            tracing::error!(%reference, detail = self.detail.as_deref().unwrap_or(""), "internal error");
+            Some(format!("something went wrong on the server; quote reference {reference} to its operator"))
+        } else {
+            self.detail
+        };
+        if let Some(d) = detail {
             obj.insert("detail".into(), json!(d));
         }
         if let Some(r) = self.report {
@@ -108,8 +118,16 @@ impl IntoResponse for AppError {
 
 impl From<anyhow::Error> for AppError {
     fn from(e: anyhow::Error) -> Self {
-        tracing::error!(error = ?e, "internal error");
-        AppError::internal(e.to_string())
+        let text = e.to_string();
+        // The store's two limits are about the query, not a fault: say so to whoever sent it.
+        if text.contains("TAR_SPARQL_TIMEOUT") {
+            return AppError::new(StatusCode::SERVICE_UNAVAILABLE, "query-timeout", "Query took too long").detail(text);
+        }
+        if text.contains("add a LIMIT") || text.contains("narrow it") {
+            return AppError::new(StatusCode::UNPROCESSABLE_ENTITY, "result-too-large", "Result too large")
+                .detail(text);
+        }
+        AppError::internal(text)
     }
 }
 
@@ -165,5 +183,32 @@ where
     match tokio::task::spawn_blocking(f).await {
         Ok(result) => result,
         Err(e) => Err(AppError::internal(format!("a store operation panicked: {e}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_body_util::BodyExt;
+
+    /// §1.7: a 500 told the caller the generated query, the store error or the SQL.
+    #[tokio::test]
+    async fn a_500_gives_a_reference_not_the_internals() {
+        let resp = AppError::internal("SELECT ?secret WHERE { GRAPH <urn:tar:local> { ?s ?p ?o } }").into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains("SELECT") && text.contains("reference"), "{text}");
+    }
+
+    #[test]
+    fn the_stores_limits_are_answered_as_what_they_are() {
+        let timeout =
+            AppError::from(anyhow::anyhow!("the query ran longer than TAR_SPARQL_TIMEOUT (60s) and was stopped"));
+        assert_eq!(timeout.status, StatusCode::SERVICE_UNAVAILABLE);
+        let big =
+            AppError::from(anyhow::anyhow!("the query returns more than 100000 rows; add a LIMIT and page through it"));
+        assert_eq!(big.status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(AppError::from(anyhow::anyhow!("disk on fire")).status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

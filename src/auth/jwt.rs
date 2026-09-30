@@ -47,6 +47,9 @@ use tokio::sync::RwLock;
 use super::{CredentialKind, Principal, Role, ALL_SCOPES};
 
 const JWKS_TTL: Duration = Duration::from_secs(3600);
+/// The shortest interval between two fetches of one issuer's keys, however many unknown key
+/// ids arrive.
+const JWKS_MIN_REFRESH: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Deserialize)]
 struct Jwk {
@@ -110,10 +113,14 @@ impl JwtVerifier {
     }
 
     async fn keys_for(&self, issuer: &str, force: bool) -> Result<Vec<Jwk>> {
-        if !force {
+        {
             let cache = self.jwks.read().await;
             if let Some(c) = cache.get(issuer) {
-                if c.at.elapsed() < JWKS_TTL {
+                // A forced refetch is for a key the issuer has just rotated in, which a refetch
+                // every JWKS_MIN_REFRESH still finds. Without the floor, every token naming a
+                // made-up `kid` sent this registry to the issuer once more.
+                let fresh_enough = if force { JWKS_MIN_REFRESH } else { JWKS_TTL };
+                if c.at.elapsed() < fresh_enough {
                     return Ok(c.keys.clone());
                 }
             }

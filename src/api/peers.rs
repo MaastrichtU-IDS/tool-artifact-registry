@@ -182,17 +182,30 @@ pub struct Announce {
 /// Inbound mutual discovery. Produces a suggestion for admin review — never a peer
 /// (spec §8.4). Deliberately unauthenticated: it grants nothing.
 pub async fn announce(State(state): State<Arc<AppState>>, Json(input): Json<Announce>) -> AppResult<impl IntoResponse> {
-    let base = input.base_url.trim_end_matches('/').to_string();
+    let base = input.base_url.trim().trim_end_matches('/').to_string();
+    // Anonymous, so bounded: an http(s) URL of a sane length, a short title, and a cap on how
+    // many suggestions may wait for review, so this cannot be used to fill the disk or bury the
+    // real suggestions.
+    let valid = base.len() <= 200
+        && url::Url::parse(&base).is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some());
+    if !valid {
+        return Err(AppError::bad_request("base_url must be an http(s) URL of at most 200 characters"));
+    }
+    let title = input.title.as_deref().map(|t| t.chars().take(200).collect::<String>());
     if base == state.config.base_iri {
         return Ok(Json(json!({"accepted": false, "reason": "that is this registry"})));
     }
     if let Some(existing) = state.ops.get_peer(&base).await.map_err(AppError::from)? {
         return Ok(Json(json!({"accepted": true, "state": existing.state, "note": "already known"})));
     }
+    if state.ops.list_peers(Some("suggested")).await.map_err(AppError::from)?.len() >= MAX_PENDING_SUGGESTIONS {
+        return Err(AppError::new(StatusCode::SERVICE_UNAVAILABLE, "suggestions-full", "Too many suggestions pending")
+            .detail("this registry has too many peer suggestions waiting for review; try again later"));
+    }
     let s = PeerRecord {
         id: uuid::Uuid::now_v7().to_string(),
         base_iri: base.clone(),
-        title: input.title.clone(),
+        title: title.clone(),
         operator: None,
         added_at: Utc::now().to_rfc3339(),
         last_seen_at: None,
@@ -204,7 +217,7 @@ pub async fn announce(State(state): State<Arc<AppState>>, Json(input): Json<Anno
         stale: false,
     };
     state.ops.upsert_peer(&s).await.map_err(AppError::from)?;
-    let _ = state.ops.audit(None, "anonymous", "peer.announce", Some(&base), input.title.as_deref(), None).await;
+    let _ = state.ops.audit(None, "anonymous", "peer.announce", Some(&base), title.as_deref(), None).await;
     Ok(Json(json!({"accepted": true, "state": "suggested", "note": "queued for admin review"})))
 }
 
@@ -426,6 +439,10 @@ fn stub_quads(iri: &str, turtle: &str, graph: &str) -> anyhow::Result<Stub> {
     others.dedup();
     Ok(Stub { quads: out, others })
 }
+
+/// Unreviewed peer suggestions that may wait at once; past this, anonymous announcements are
+/// turned away until an admin works through them.
+const MAX_PENDING_SUGGESTIONS: usize = 100;
 
 /// A stub is one record's description. Four megabytes is generous for that, and small enough
 /// that a hostile peer cannot hold the process's memory hostage with one response.

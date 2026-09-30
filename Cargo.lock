@@ -2731,6 +2731,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shacl-rust",
+ "spargebra",
  "sqlx",
  "thiserror",
  "tokio",

@@ -20,7 +20,7 @@ services:
       # TAR_SPARQL_ENDPOINT: http://fuseki:3030/tar/sparql
       # TAR_SPARQL_UPDATE_ENDPOINT: http://fuseki:3030/tar/update
       # TAR_SPARQL_USERNAME: admin
-      # TAR_SPARQL_PASSWORD: ${FUSEKI_PASSWORD:-admin}
+      # TAR_SPARQL_PASSWORD: ${FUSEKI_PASSWORD}
     ports: ["8080:8080"]
     volumes: ["tar-data:/data"]
     # Nothing but /data is written; nothing needs a capability.
@@ -41,7 +41,9 @@ services:
     image: stain/jena-fuseki
     profiles: ["external-store"]
     environment:
-      ADMIN_PASSWORD: ${FUSEKI_PASSWORD:-admin}
+      # Set FUSEKI_PASSWORD. Unset, the image generates a random one and the registry cannot
+      # authenticate — which fails loudly, unlike a default of `admin`.
+      ADMIN_PASSWORD: ${FUSEKI_PASSWORD:-}
       # Create the dataset on first start, so the registry has somewhere to write.
       FUSEKI_DATASET_1: tar
     volumes: ["fuseki-data:/fuseki"]

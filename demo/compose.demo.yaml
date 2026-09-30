@@ -19,11 +19,12 @@ services:
       dockerfile: Dockerfile
     environment:
       TAR_BASE_IRI: ${TAR_BASE_IRI:-http://localhost:8080}
-      TAR_ROOT_TOKEN: ${TAR_ROOT_TOKEN:-demo-root-token-change-me-please}
+      TAR_ROOT_TOKEN: ${TAR_ROOT_TOKEN:-demo-root-token-local-only}
       TAR_TITLE: IDS Tool Artifact Registry
       TAR_OPERATOR: Maastricht University — Institute of Data Science
       TAR_PEER_RESOLVE_ENABLED: "false"
-    ports: ["8080:8080"]
+    # Loopback only: the demo's token and object-store credentials are public defaults.
+    ports: ["127.0.0.1:8080:8080"]
     volumes: ["registry-data:/data"]
     healthcheck:
       test: ["CMD", "/tar", "healthcheck"]
@@ -39,7 +40,7 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-minioadmin}
-    ports: ["9000:9000", "9001:9001"]
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
     volumes: ["assets-data:/data"]
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]

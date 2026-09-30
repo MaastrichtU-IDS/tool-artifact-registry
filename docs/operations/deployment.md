@@ -224,6 +224,29 @@ an in-memory database wiped on `down`, and passwords committed to the repository
 real deployment points `TAR_OIDC_ISSUER` at a real identity provider and adds the audience
 mapper there — see [Identity provider setup](identity-provider.md).
 
+## TLS and a reverse proxy
+
+The registry speaks plain HTTP and expects something in front of it to terminate TLS: an
+ingress on Kubernetes, or a reverse proxy (Caddy, nginx, Traefik) beside a container. Three
+things have to agree:
+
+- **The scheme.** `TAR_BASE_IRI` is `https://…` when the proxy terminates TLS. Every identifier
+  is minted from it, so a mismatch mints identifiers nobody can dereference.
+- **The client address.** List the proxy's addresses in `TAR_TRUSTED_PROXIES`, and have it set
+  `X-Forwarded-For`. Otherwise rate limits charge every client to the proxy.
+- **The body size.** Let the proxy pass at least `TAR_MAX_PAYLOAD_BYTES` (2 MiB by default).
+
+A minimal Caddy site, which also obtains the certificate:
+
+```
+registry.example.org {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+Publish the container's port on loopback only (`-p 127.0.0.1:8080:8080`) so the proxy is the
+only way in.
+
 ## Kubernetes
 
 `deploy/kubernetes/` holds plain manifests assembled with kustomize, which `kubectl` has built
@@ -268,6 +291,19 @@ Never in a manifest, never in git:
 kubectl -n tar create secret generic tar-secrets \
   --from-literal=TAR_ROOT_TOKEN="$(openssl rand -hex 24)"
 ```
+
+### Before the first apply
+
+The base assumes things about your cluster that it cannot know. Check each:
+
+| | Where | Default | Change when |
+|---|---|---|---|
+| Ingress class | `ingress.yaml` `ingressClassName` | `nginx` | Your controller is traefik, haproxy, … — and then also the `nginx.ingress.kubernetes.io/proxy-body-size` annotation, which only ingress-nginx reads. |
+| TLS certificate | `ingress.yaml` `tls.secretName` | `tar-tls` | Always: create that Secret, or uncomment the `cert-manager.io/cluster-issuer` annotation and let cert-manager create it. Without it the ingress serves the controller's default certificate. |
+| Storage class | `pvc.yaml` `storageClassName` | the cluster default | Your default class is not persistent, or cannot expand. |
+| Image pull secret | `deployment.yaml` `imagePullSecrets` | none | The image is mirrored into a private registry. The published image is public. |
+| Image tag | `deployment.yaml` `image` | the release the manifests were written for | You upgrade. Pin a version, never `latest`. |
+| Trusted proxies | `kustomization.yaml` `TAR_TRUSTED_PROXIES` | commented out | Always, behind an ingress — see [The ingress](#the-ingress). |
 
 Add the graph-store credential to the same secret if you use an external endpoint —
 `TAR_SPARQL_USERNAME` and `TAR_SPARQL_PASSWORD`, or `TAR_SPARQL_BEARER_TOKEN`. The Deployment

@@ -269,7 +269,10 @@ impl Config {
         if let Some(t) = &root_token {
             // §8.2: refuses to start with a default or empty value.
             const REFUSED: [&str; 6] = ["changeme", "change-me", "root", "admin", "secret", "tar"];
-            if REFUSED.contains(&t.to_ascii_lowercase().as_str()) || t.len() < 16 {
+            let lower = t.to_ascii_lowercase();
+            // Also inside a longer value: `demo-token-change-me-please` is still a placeholder.
+            if REFUSED.contains(&lower.as_str()) || lower.contains("change-me") || lower.contains("changeme") || t.len() < 16
+            {
                 bail!("TAR_ROOT_TOKEN is a default or too short (need >= 16 chars, not a placeholder)");
             }
         }

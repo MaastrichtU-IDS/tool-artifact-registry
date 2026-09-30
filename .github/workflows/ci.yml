@@ -162,3 +162,22 @@ jobs:
           printf 'components:\n  - components/servicemonitor\n' >> "$dir/kustomization.yaml"
           kubectl kustomize "$dir" > "$dir/rendered.yaml"
           grep -q '^kind: ServiceMonitor$' "$dir/rendered.yaml"
+
+  # The image builds, and runs as the unprivileged user under the restrictions compose.yaml
+  # applies. Without this a broken Dockerfile is first noticed by the release workflow.
+  image:
+    name: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t tar:ci .
+      - name: boots read-only, unprivileged, on a fresh volume
+        run: |
+          docker run -d --name tar --read-only --cap-drop ALL --security-opt no-new-privileges \
+            -e TAR_BASE_IRI=http://localhost:8080 -e TAR_ROOT_TOKEN=ci-root-token-0123456789 \
+            -v tar-data:/data -p 8080:8080 tar:ci
+          for i in $(seq 1 60); do curl -sf localhost:8080/readyz && break; sleep 1; done
+          curl -sf -X POST -H "Authorization: Bearer ci-root-token-0123456789" -H 'content-type: application/json' \
+            -d '{"name":"ci","kinds":["service"]}' localhost:8080/api/v1/software
+          test "$(docker inspect -f '{{.Config.User}}' tar)" = "65532:65532"

@@ -85,6 +85,12 @@ floor has no automated test (no network seam).
 
 ## 2. Correctness and operations — must fix before deploying
 
+**Done except 13** on branch `ops-fixes` (2026-09-30), regressions in `tests/operations.rs`.
+Item 13 (bump to 0.2.0 and tag) waits for the user. Notes: withdrawn records now answer 410 on
+every representation, `.md` included; `/admin/ops-backup` is a 500 on a `TAR_DATA_DIR=memory`
+registry (an in-memory SQLite database cannot be copied to a file); the online backup is read
+whole into memory before it is sent.
+
 8. **Tombstones:** GET of a tombstoned software/instance is 200, not the documented 410; PATCH
    revives a tombstoned software/instance (reproduced). A deleted deployment's tokens still
    advertise (reproduced): refuse a principal whose instance is tombstoned, or revoke on delete.

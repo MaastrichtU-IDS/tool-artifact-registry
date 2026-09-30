@@ -173,3 +173,34 @@ async fn the_operational_database_can_be_backed_up_while_running() {
     assert!(left.iter().all(|n| !n.to_string_lossy().contains("backup")), "the copy is removed: {left:?}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// §3: extractor rejections and 405 came out as plain text or nothing.
+#[tokio::test]
+async fn every_error_is_a_problem_document() {
+    let h = harness().await;
+    let send = |method: &str, uri: &str, ctype: Option<&str>, body: &'static str| {
+        let mut b = Request::builder().method(method).uri(uri).header("authorization", format!("Bearer {ROOT}"));
+        if let Some(c) = ctype {
+            b = b.header("content-type", c);
+        }
+        h.app.clone().oneshot(b.body(Body::from(body)).unwrap())
+    };
+    for (resp, want) in [
+        (send("POST", "/api/v1/software", Some("application/json"), "{not json").await.unwrap(), 400),
+        (send("POST", "/api/v1/software", Some("text/csv"), "a,b").await.unwrap(), 415),
+        (send("POST", "/api/v1/software", Some("application/json"), r#"{"name": 5}"#).await.unwrap(), 422),
+        (send("DELETE", "/api/v1/registry", None, "").await.unwrap(), 405),
+    ] {
+        assert_eq!(resp.status().as_u16(), want);
+        let allow = resp.headers().get("allow").cloned();
+        let ctype = resp.headers()["content-type"].to_str().unwrap().to_string();
+        assert_eq!(ctype, "application/problem+json", "{want}");
+        let body: Value = serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(body["status"], want, "{body}");
+        if want == 405 {
+            assert!(allow.is_some(), "405 keeps its Allow header");
+        } else {
+            assert!(body["detail"].as_str().is_some_and(|d| !d.is_empty()), "{body}");
+        }
+    }
+}

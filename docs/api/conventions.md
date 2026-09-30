@@ -73,7 +73,11 @@ Every error path returns [RFC 9457] `application/problem+json`:
 | `403` | `forbidden` | A valid credential lacking the role or scope. Retrying with different arguments will not help. |
 | `404` | `not-found` | No such record. |
 | `409` | `conflict` | A uniqueness rule was violated. |
-| `410` | `tombstoned` | The record was withdrawn. It still resolves and says so. |
+| `405` | `method-not-allowed` | The path exists but not with this method. `Allow` lists the ones it takes. |
+| `410` | — | The record was withdrawn. The body is **the record itself**, in the representation asked for, with `tombstoned: true` — not a problem document. A write to it is also `410`, and that one is a problem (`tombstoned`). |
+| `413` | `payload-too-large` | The body is over `TAR_MAX_PAYLOAD_BYTES`. |
+| `415` | `unsupported-media-type` | A write without `Content-Type: application/json`. |
+| `422` | `invalid-body` | The body is JSON but a field has the wrong type or a required one is missing. |
 | `422` | `shacl-validation-failed` | The write is well-formed JSON but not a record the registry accepts. |
 | `422` | `result-too-large` | A query would return more than 100 000 rows. Add a `LIMIT` and page. |
 | `429` | `rate-limited` | Over a rate limit. `Retry-After` says when to try again. |

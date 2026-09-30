@@ -69,15 +69,19 @@ COPY Cargo.toml Cargo.lock build.rs ./
 COPY shapes ./shapes
 COPY migrations ./migrations
 COPY src ./src
-RUN cargo build --release --locked --bin tar
+RUN cargo build --release --locked --bin tar && mkdir -p /empty-data
 
 # ----------------------------------------------------------------------------- the image
-FROM gcr.io/distroless/cc-debian12
+FROM gcr.io/distroless/cc-debian12:nonroot
 LABEL org.opencontainers.image.source="https://github.com/MaastrichtU-IDS/tool-artifact-registry" \
       org.opencontainers.image.description="Registry of software, deployments, runs and data artifacts" \
       org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /src/target/release/tar /tar
 COPY --from=frontend /ui/dist /ui
+# Runs as distroless's `nonroot` (65532). A fresh named volume takes this directory's owner,
+# so the registry can write its data without root. A bind mount must be chowned to 65532.
+COPY --from=build --chown=65532:65532 /empty-data /data
+USER 65532:65532
 ENV TAR_DATA_DIR=/data \
     TAR_LISTEN=0.0.0.0:8080 \
     TAR_STATIC_DIR=/ui

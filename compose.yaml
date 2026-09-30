@@ -23,6 +23,11 @@ services:
       # TAR_SPARQL_PASSWORD: ${FUSEKI_PASSWORD:-admin}
     ports: ["8080:8080"]
     volumes: ["tar-data:/data"]
+    # Nothing but /data is written; nothing needs a capability.
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     healthcheck:
       test: ["CMD", "/tar", "healthcheck"]
       interval: 30s

@@ -143,15 +143,33 @@ pub async fn readyz(State(state): State<Arc<AppState>>) -> AppResult<impl IntoRe
     Ok(Json(json!({"status": "ready"})))
 }
 
+/// How long a counted graph is reused. Counting walks the whole store; a scraper, or anyone
+/// with the admin token and a loop, should not be able to make it do that continuously.
+const METRICS_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+pub type MetricsCache = tokio::sync::Mutex<Option<(std::time::Instant, serde_json::Value, usize)>>;
+
 /// Prometheus exposition (spec §7.1). Deliberately small: the interesting operational signal
-/// for a catalogue is how much it holds and how federation is doing.
-pub async fn metrics(State(state): State<Arc<AppState>>) -> AppResult<impl IntoResponse> {
+/// for a catalogue is how much it holds and how federation is doing. Admin only: the counts
+/// cost a walk of the store, and the peer and rate-limit figures are nobody else's business.
+pub async fn metrics(State(state): State<Arc<AppState>>, principal: Principal) -> AppResult<impl IntoResponse> {
+    principal.require_admin()?;
     let peers = state.ops.list_peers(None).await.unwrap_or_default();
-    let (counts, triples) = super::blocking({
-        let state = state.clone();
-        move || Ok((entity_counts(&state)?, state.store.count().unwrap_or(0)))
-    })
-    .await?;
+    // Held across the count, so concurrent scrapes wait for one walk instead of starting several.
+    let mut cached = state.metrics_cache.lock().await;
+    let (counts, triples) = match cached.as_ref() {
+        Some((at, counts, triples)) if at.elapsed() < METRICS_TTL => (counts.clone(), *triples),
+        _ => {
+            let (counts, triples) = super::blocking({
+                let state = state.clone();
+                move || Ok((entity_counts(&state)?, state.store.count().unwrap_or(0)))
+            })
+            .await?;
+            *cached = Some((std::time::Instant::now(), counts.clone(), triples));
+            (counts, triples)
+        }
+    };
+    drop(cached);
     let failing = peers.iter().filter(|p| p.resolve_status == "error").count();
     let mut out = String::new();
     out.push_str("# HELP tar_triples Total triples in the graph store\n# TYPE tar_triples gauge\n");
@@ -188,6 +206,34 @@ pub async fn dump(
     })
     .await?;
     Ok(([(axum::http::header::CONTENT_TYPE, "application/n-quads")], body))
+}
+
+/// The operational database — tokens, peers, audit, subscriptions — as a SQLite file, taken
+/// online. With `/admin/dump` it is a complete backup of a running registry. It holds webhook
+/// secrets in the clear: treat the file like the root token.
+pub async fn ops_backup(State(state): State<Arc<AppState>>, principal: Principal) -> AppResult<impl IntoResponse> {
+    principal.require_admin()?;
+    // Next to the database rather than in /tmp: the root filesystem is read-only in the shipped
+    // manifests, and the copy is as sensitive as the original.
+    let dir = match state.config.data_dir.as_str() {
+        "memory" => std::env::temp_dir(),
+        d => std::path::PathBuf::from(d),
+    };
+    let path = dir.join(format!(".ops-backup-{}.db", uuid::Uuid::new_v4()));
+    let taken = state.ops.backup_to(&path.to_string_lossy()).await;
+    // ponytail: the copy is read whole into memory; stream it if ops.db ever reaches hundreds of MB.
+    let bytes = match taken {
+        Ok(()) => tokio::fs::read(&path).await.map_err(|e| AppError::internal(format!("reading the backup: {e}"))),
+        Err(e) => Err(AppError::from(e)),
+    };
+    let _ = tokio::fs::remove_file(&path).await;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "application/vnd.sqlite3"),
+            (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"ops.db\""),
+        ],
+        bytes?,
+    ))
 }
 
 #[derive(Deserialize)]

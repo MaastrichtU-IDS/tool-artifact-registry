@@ -44,7 +44,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"
 tower = { version = "0.5", features = ["util"] }
 # Reading the body of that internal response.
 http-body-util = "0.1"
-tower-http = { version = "0.6", features = ["fs", "cors", "trace", "set-header", "limit"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "trace", "set-header", "limit", "catch-panic"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"

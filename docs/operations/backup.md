@@ -10,10 +10,19 @@ Two stores under `TAR_DATA_DIR`:
 | A SQLite database | Hashed API tokens, peers, the audit log, federation cursors, idempotency keys, subscriptions and their delivery queues, and repository stats. |
 
 They are separate on purpose. The graph is the catalogue and is meant to be dumped, diffed and
-reloaded; the SQLite side is operational bookkeeping that is mostly reconstructible and contains
-the only secrets — hashed, but still.
+reloaded; the SQLite side is operational bookkeeping and holds the secrets. API tokens are
+stored hashed, but **webhook secrets are stored in the clear** — the registry has to sign
+deliveries with them — so a copy of the SQLite database is as sensitive as the root token.
 
-Backing up the directory backs up both. Do it with the process stopped.
+Backing up the directory backs up both; do that with the process stopped. For a running
+registry, take both halves over HTTP:
+
+```bash
+curl -fH "Authorization: Bearer $TAR_ROOT_TOKEN" https://registry.example.org/admin/dump > registry.nq
+curl -fH "Authorization: Bearer $TAR_ROOT_TOKEN" https://registry.example.org/admin/ops-backup > ops.db
+```
+
+A schedule, and how to restore each half, are in [Deployment — backup and restore](deployment.md#backup-and-restore).
 
 ## Dump and restore the graph
 
@@ -60,8 +69,9 @@ GET /metrics     Prometheus text format
 ```
 
 `/metrics` reports total triples, record counts by kind, and how many peers are configured and
-how many are failing to resolve. All three are public regardless of `TAR_PUBLIC_READ`, because a
-liveness probe that needs a credential is a liveness probe that fails for the wrong reason.
+how many are failing to resolve. It needs an admin token, and reuses its counts for 30 seconds.
+The two probes are public regardless of `TAR_PUBLIC_READ`, because a liveness probe that needs a
+credential is a liveness probe that fails for the wrong reason.
 
 The container image's own healthcheck runs `tar healthcheck`.
 

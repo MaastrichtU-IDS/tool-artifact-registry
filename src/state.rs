@@ -30,6 +30,8 @@ pub struct AppState {
     /// Rate limiters (`crate::ratelimit`). Here rather than on the router, which is rebuilt per
     /// MCP tool call and per test harness.
     pub rate_limits: crate::ratelimit::RateLimits,
+    /// The last `/metrics` count of the store (`crate::api::registry::metrics`).
+    pub metrics_cache: crate::api::registry::MetricsCache,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub version: &'static str,
 }
@@ -72,6 +74,7 @@ impl AppState {
             config,
             api_doc_cache: Default::default(),
             rate_limits,
+            metrics_cache: Default::default(),
             started_at: chrono::Utc::now(),
             version: env!("CARGO_PKG_VERSION"),
         }

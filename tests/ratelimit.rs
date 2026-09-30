@@ -122,7 +122,7 @@ async fn an_anonymous_sparql_burst_is_refused_with_a_retry_after_and_other_addre
     assert_ne!(h.get("198.51.100.8", ASK).await, TOO_MANY, "another address has its own bucket");
     assert_eq!(h.get("198.51.100.7", "/api/v1/software").await, StatusCode::OK, "another class is untouched");
 
-    let (_, metrics, _) = h.send("198.51.100.7", "GET", "/metrics", None, None, &[]).await;
+    let (_, metrics, _) = h.send("198.51.100.7", "GET", "/metrics", Some(ROOT), None, &[]).await;
     assert!(metrics.as_str().unwrap().contains("tar_ratelimit_rejections_total{class=\"sparql\"} 1"), "{metrics}");
 }
 

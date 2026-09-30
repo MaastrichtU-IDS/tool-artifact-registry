@@ -106,6 +106,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (resp.status === 204) return undefined as T
   const text = await resp.text()
   const body = text ? JSON.parse(text) : null
+  // A withdrawn record answers 410 Gone and still carries the record, marked tombstoned, so
+  // its page can say what it was. That is data, not an error.
+  if (resp.status === 410 && body && body.tombstoned === true) return body as T
   if (!resp.ok) {
     throw new ApiError(
       body ?? { type: 'about:blank', title: resp.statusText, status: resp.status },

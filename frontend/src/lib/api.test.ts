@@ -139,3 +139,19 @@ describe('token renewal', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('a withdrawn record', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  it('comes back as the record when the registry answers 410 with it', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ id: 'x', name: 'old tool', tombstoned: true }), { status: 410 })))
+    const s = await api.getSoftware('x')
+    expect(s.name).toBe('old tool')
+    expect(s.tombstoned).toBe(true)
+  })
+  it('is still an error when a 410 carries only a problem', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ type: 'x', title: 'Gone', status: 410 }), { status: 410 })))
+    await expect(api.getSoftware('x')).rejects.toBeInstanceOf(ApiError)
+  })
+})

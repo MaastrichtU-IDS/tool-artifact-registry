@@ -484,6 +484,8 @@ SELECT ?i ?label ?iss (GROUP_CONCAT(DISTINCT ?scope; separator=" ") AS ?scopes) 
     OPTIONAL {{ ?i tar:oidcIssuer ?iss }}
     OPTIONAL {{ ?i tar:allowedScope ?scope }}
   }}
+  # A withdrawn deployment is nobody's identity any more.
+  FILTER NOT EXISTS {{ GRAPH ?tg {{ ?i tar:tombstoned true }} }}
 }} GROUP BY ?i ?label ?iss"#,
             prefixes = ns::PREFIXES,
             g = ns::G_LOCAL,

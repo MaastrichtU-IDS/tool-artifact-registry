@@ -337,6 +337,10 @@ pub async fn patch(
             if !state.store.exists(&iri).map_err(AppError::from)? {
                 return Err(AppError::not_found(format!("no instance at {iri}")));
             }
+            let quads = state.store.describe(&iri).map_err(AppError::from)?;
+            if Props::from_quads(&iri, &quads).bool(ns::TAR, "tombstoned").unwrap_or(false) {
+                return Err(AppError::gone(format!("{iri} was withdrawn; it cannot be edited")));
+            }
             let current = dom::load_instance(&ctx, &iri)?;
 
             // A self-registered deployment owns its own record, and nobody else may edit it

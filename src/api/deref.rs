@@ -55,6 +55,11 @@ async fn deref(state: Arc<AppState>, headers: HeaderMap, kind: Kind, id: String)
         return Ok(resp);
     }
 
+    // Withdrawn: 410 in every representation, with the record still in the body.
+    let status = match crate::rdf::Props::from_quads(&iri, &quads).bool(crate::ns::TAR, "tombstoned") {
+        Some(true) => axum::http::StatusCode::GONE,
+        _ => axum::http::StatusCode::OK,
+    };
     let (body, sp) = super::blocking({
         let (ctx, iri, quads) = (ctx, iri.clone(), quads);
         move || -> AppResult<(String, Signposting)> {
@@ -88,7 +93,7 @@ async fn deref(state: Arc<AppState>, headers: HeaderMap, kind: Kind, id: String)
         }
     })
     .await?;
-    Ok(Negotiated { repr, body, signposting: Some(sp), status: axum::http::StatusCode::OK }.into_response())
+    Ok(Negotiated { repr, body, signposting: Some(sp), status }.into_response())
 }
 
 fn signposting_for(ctx: &Ctx, kind: Kind, iri: &str, state: &AppState) -> Signposting {

@@ -730,14 +730,15 @@ async fn a_withdrawn_release_leaves_the_list_but_keeps_resolving() {
     assert_eq!(list["total"], 1);
     assert_eq!(list["items"][0]["id"], keep["id"]);
 
-    // Withdrawn, not erased: an Instance may cite the IRI, so it still dereferences.
+    // Withdrawn, not erased: an Instance may cite the IRI, so it still dereferences — as 410
+    // Gone, with the record in the body.
     let req = Request::builder()
         .uri(format!("/release/{}", drop_me["id"].as_str().unwrap()))
         .header("accept", "text/turtle")
         .body(Body::empty())
         .unwrap();
     let resp = h.app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::GONE);
 
     // And a release belonging to another software cannot be withdrawn through this path.
     let (_, other) = h.post("/api/v1/software", ROOT, json!({"name": "other", "kind": "cli"})).await;
@@ -760,7 +761,7 @@ async fn a_tombstoned_record_still_resolves() {
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     let (status, sw) = h.get(&format!("/api/v1/software/{}", f.software_id)).await;
-    assert_eq!(status, StatusCode::OK, "a soft-deleted IRI must keep resolving, not 404");
+    assert_eq!(status, StatusCode::GONE, "a soft-deleted IRI keeps resolving, as 410 not 404");
     assert_eq!(sw["tombstoned"], true);
 
     // …but it is withdrawn, so it must not still be offered in listings or counted in totals.
@@ -786,9 +787,9 @@ async fn a_withdrawn_instance_stops_counting_against_its_software() {
     let (_, list) = h.get("/api/v1/instances").await;
     assert_eq!(list["total"], 0);
 
-    // Still resolves, because something may cite it.
+    // Still resolves (410, with the record), because something may cite it.
     let (status, inst) = h.get(&format!("/api/v1/instances/{}", f.instance_id)).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::GONE);
     assert_eq!(inst["tombstoned"], true);
 }
 
@@ -2301,7 +2302,7 @@ async fn a_withdrawn_record_still_resolves_and_says_so() {
     assert!(status.is_success(), "{status}");
 
     let (status, body, _) = markdown(&h, &format!("/software/{id}.md")).await;
-    assert_eq!(status, StatusCode::OK, "an IRI that once meant something keeps meaning it");
+    assert_eq!(status, StatusCode::GONE, "an IRI that once meant something keeps meaning it");
     assert!(body.contains("Withdrawn"), "{body}");
 
     // ...and it is not in the index a fresh agent reads.

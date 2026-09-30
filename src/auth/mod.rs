@@ -263,6 +263,23 @@ pub async fn authenticate(state: &Arc<AppState>, raw: &str) -> AppResult<Princip
         let Some(rec) = state.ops.verify_token(raw).await.map_err(AppError::from)? else {
             return Err(AppError::unauthorized("token is unknown, revoked or expired"));
         };
+        // A token outlives nothing it was minted for: a withdrawn deployment's tokens kept
+        // advertising runs as it, which is exactly what withdrawing it was meant to stop.
+        if let Some(instance) = rec.instance_iri.clone() {
+            let state = state.clone();
+            let withdrawn = crate::error::blocking(move || {
+                let q = format!(
+                    "PREFIX tar: <{}>\nASK {{ GRAPH ?g {{ {} tar:tombstoned true }} }}",
+                    crate::ns::TAR,
+                    crate::store::queries::term(&instance)
+                );
+                state.store.ask(&q).map_err(AppError::from)
+            })
+            .await?;
+            if withdrawn {
+                return Err(AppError::unauthorized("the deployment this token belongs to has been withdrawn"));
+            }
+        }
         return Ok(Principal {
             credential: CredentialKind::LocalToken,
             instance_iri: rec.instance_iri.clone(),

@@ -255,6 +255,11 @@ pub async fn patch(
             if existing.is_empty() {
                 return Err(AppError::not_found(format!("no software at {iri}")));
             }
+            // Editing used to rewrite a withdrawn record from its projection, dropping the
+            // tombstone and bringing it back.
+            if Props::from_quads(&iri, &existing).bool(ns::TAR, "tombstoned").unwrap_or(false) {
+                return Err(AppError::gone(format!("{iri} was withdrawn; it cannot be edited")));
+            }
             let created = Props::from_quads(&iri, &existing).str(ns::DCT, "created");
             let current = software_in_from(&dom::load_software(&ctx, &iri)?);
             let merged = super::instances::merge_json(

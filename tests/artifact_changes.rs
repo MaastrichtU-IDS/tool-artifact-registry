@@ -156,7 +156,7 @@ async fn a_withdrawn_artifact_still_resolves_but_is_no_longer_offered() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     // Its IRI still answers, marked withdrawn, so lineage that points at it does not dangle.
     let (status, a) = h.req("GET", &uri, None, None).await;
-    assert_eq!(status, StatusCode::OK, "{a}");
+    assert_eq!(status, StatusCode::GONE, "withdrawn answers 410, with the record: {a}");
     assert_eq!(a["tombstoned"], true, "{a}");
     assert!(a["attributed_to"].as_str().is_some_and(|s| !s.contains("root")), "withdrawing is not advertising: {a}");
 

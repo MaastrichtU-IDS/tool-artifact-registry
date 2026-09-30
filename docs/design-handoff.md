@@ -100,7 +100,7 @@ the two read as one system.
 │ shacl-manager                │ METADATA        │
 │ SHACL shape mgmt+validation  │ Apache-2.0      │
 │ [Repo] [Docs]                │ kind: service   │
-├──────────────────────────────┤ EDAM topics:    │
+├──────────────────────────────┤ Topics:         │
 │ 5 instances │ 143 runs/30d   │  ◆ Data quality │
 ├──────────────────────────────┤  ◆ Semantic web │
 │ USE IT                       │ Rust 94% Py 4%  │
@@ -142,9 +142,9 @@ Each entry gives the API calls (spec §7) and the states to build.
 
 ### 5.1 Software list — `/software`
 
-`GET /api/v1/software?q=&license=&publisher=&edam_topic=&keyword=&kind=&cursor=`
+`GET /api/v1/software?q=&kind=&topic=&keyword=&license=&publisher=&produces=&consumes=&registry=&cursor=`
 
-Card or row per software: name, tagline, licence chip, `kind` chip, instance count, EDAM topic
+Card or row per software: name, tagline, licence chip, `kind` chip, instance count, topic
 chips, origin chip. Left facet panel mirrors the query params. Keyset pagination
 (`cursor`) — not page numbers.
 
@@ -215,8 +215,8 @@ Timeline header (started, ended, duration, status), instance + release + operato
 
 `POST|PATCH /api/v1/software` · `POST|PATCH /api/v1/instances`
 
-Sectioned form mirroring the model: identity → links → licence & party → EDAM topics &
-keywords → capability (produces/consumes type pickers with EDAM autocomplete plus a
+Sectioned form mirroring the model: identity → links → licence & party → topics &
+keywords → capability (produces/consumes type pickers with vocabulary autocomplete plus a
 free-IRI escape hatch, per spec D11).
 
 The API validates writes with SHACL and returns `422` with a Turtle validation report
@@ -263,8 +263,8 @@ interleaved silently with local ones.
 | Component | Purpose | Rules |
 |---|---|---|
 | `OriginChip` | `local` vs `peer: <name>` | On every record header and every list row that can contain foreign data. Peer chips link to the peer's record at its home registry. Foreign records render all edit affordances as absent, not disabled. |
-| `KindChip` | `service` / `library` / `cli` / `workflow` | Distinguishes Software kinds; helps keep Software vs Instance distinct. |
-| `ArtifactTypeChip` | EDAM or local type | Shows label, tooltips the definition, links to filtered artifacts. Falls back to the IRI's last segment if the label is unresolved. |
+| `KindChip` | `service` / `library` / `cli` / `desktop` / `workflow` | Distinguishes Software kinds; helps keep Software vs Instance distinct. |
+| `ArtifactTypeChip` | bundled or local type | Shows label, tooltips the definition, links to filtered artifacts. Falls back to the IRI's last segment if the label is unresolved. |
 | `AvailabilityBadge` | `public` / `restricted` / `embargoed` / `metadata-only` | Drives whether download affordances render at all (§5.5). |
 | `LicenseChip` | SPDX | Links to the SPDX IRI. Renders "unlicensed" distinctly from absent. |
 | `HealthDot` | instance up/down/unknown | Never colour-only — pair with text or shape. |

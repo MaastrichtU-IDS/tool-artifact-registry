@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft for review · implemented in the prototype |
+| **Status** | Implemented |
 | **Date** | 2026-08-30 |
 | **Amends** | [`2026-08-30-tool-artifact-registry-design.md`](2026-08-30-tool-artifact-registry-design.md) — D8, §8, §9.1, §10.5 |
 | **Question** | *"Instead of giving API keys to each tool, can we authenticate and authorise tools using Keycloak or something similar?"* |

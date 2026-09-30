@@ -163,9 +163,15 @@ software token, or add the client to `registration_clients`.
 ## Reading deployments
 
 ```
-GET  /api/v1/instances                    list, with ?software= ?health= ?availability=
+GET  /api/v1/instances                    list, with ?q= ?software= ?release= ?operator= ?status= ?registry=
 GET  /api/v1/instances/{id}               one record
 GET  /api/v1/instances/{id}/runs          its runs
 GET  /api/v1/instances/{id}/artifacts     the artifacts its runs touched
 PUT  /api/v1/instances/{id}/capability    declare what it can produce and consume
 ```
+
+`?status=` filters on the observed `health` — `up`, `down` or `unknown` (a probe that could
+not be made); a deployment never probed has no stored value and matches none of them.
+`?operator=` takes the operator's IRI, `?release=` a release id or IRI, and `?registry=` is
+`local` or a peer's id as `/api/v1/peers` lists it. Paging is `?cursor=` and `?limit=`, as
+everywhere.

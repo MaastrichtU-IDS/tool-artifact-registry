@@ -30,6 +30,9 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      # Only if the image is mirrored into a private registry; the published one is public.
+      # imagePullSecrets:
+      #   - name: my-registry-credentials
       containers:
         - name: tar
           image: ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0

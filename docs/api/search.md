@@ -18,7 +18,7 @@ curl 'https://registry.example.org/api/v1/search?q=validation&type=software&limi
 |---|---|
 | `q` | Required in practice — an empty `q` returns nothing rather than everything. |
 | `type` | `software`, `instance`, `artifact` or `run`. Omit for all four. |
-| `limit` | Default 30, clamped 1–100. |
+| `limit` | Default 30, clamped 1–100. Across every kind together: the best `limit` hits, exact title matches first, then prefix, then substring. `total` is the number of hits returned. |
 | `federated` | `true` to ask this registry's peers too. See [Federation](federation.md). |
 
 It matches the fields a person would search on: a software's name, tagline and abstract; a
@@ -56,11 +56,11 @@ curl 'https://registry.example.org/api/v1/artifacts/01a05…/lineage?direction=b
 ```
 
 `direction` is `up` (what this came from), `down` (what came from this) or `both`, default
-`both`. `depth` is clamped 1–6, default 1.
+`both`. `depth` is clamped 1–6, default 2 — an artifact, the run that made it, and that run's inputs. Nodes are found breadth-first, so a node's `depth` is its shortest distance from the root, and each edge is listed once.
 
 `GET /api/v1/graph?iri=…&depth=` returns the same subgraph centred on any node, with `depth`
-clamped 1–4. Both return exactly what a graph view would need; there is no graph visualisation
-in the UI yet.
+clamped 1–4, default 1. Both return exactly what a graph view would need; there is no graph
+visualisation in the UI yet.
 
 ## SPARQL, when the question does not fit
 

@@ -26,7 +26,8 @@ enum Command {
         #[arg(long, default_value = "ids-examples")]
         from: String,
         /// Also generate example runs and artifacts, including one cross-registry input.
-        #[arg(long, default_value_t = true)]
+        /// `--with-runs=false` to skip them. Takes a value: as a plain flag it could only say true.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true")]
         with_runs: bool,
     },
     /// Container healthcheck — the compose healthcheck runs `tar healthcheck`.

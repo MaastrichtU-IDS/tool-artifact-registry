@@ -18,6 +18,11 @@ https://registry.example.org/keyword/rdf-graphs
 Ids are UUIDv7, so they sort by creation time. Minted vocabulary terms get a slug instead of a
 UUID, because a term's identifier is read by people.
 
+The parts of a record — `/capability/…`, `/distribution/…`, `/agent/…` — and the keyword scheme
+at `/scheme/artifact-keywords` have IRIs that dereference too, as RDF only: they have no page of
+their own. The plural UI paths `/instances/…`, `/artifacts/…` and `/runs/…` resolve to the same
+record as the singular IRI.
+
 ## Representations
 
 The same IRI serves six representations. Ask by `Accept` header, or append an extension — they

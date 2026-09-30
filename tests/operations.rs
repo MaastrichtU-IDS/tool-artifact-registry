@@ -173,3 +173,94 @@ async fn the_operational_database_can_be_backed_up_while_running() {
     assert!(left.iter().all(|n| !n.to_string_lossy().contains("backup")), "the copy is removed: {left:?}");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// §3: extractor rejections and 405 came out as plain text or nothing.
+#[tokio::test]
+async fn every_error_is_a_problem_document() {
+    let h = harness().await;
+    let send = |method: &str, uri: &str, ctype: Option<&str>, body: &'static str| {
+        let mut b = Request::builder().method(method).uri(uri).header("authorization", format!("Bearer {ROOT}"));
+        if let Some(c) = ctype {
+            b = b.header("content-type", c);
+        }
+        h.app.clone().oneshot(b.body(Body::from(body)).unwrap())
+    };
+    for (resp, want) in [
+        (send("POST", "/api/v1/software", Some("application/json"), "{not json").await.unwrap(), 400),
+        (send("POST", "/api/v1/software", Some("text/csv"), "a,b").await.unwrap(), 415),
+        (send("POST", "/api/v1/software", Some("application/json"), r#"{"name": 5}"#).await.unwrap(), 422),
+        (send("DELETE", "/api/v1/registry", None, "").await.unwrap(), 405),
+    ] {
+        assert_eq!(resp.status().as_u16(), want);
+        let allow = resp.headers().get("allow").cloned();
+        let ctype = resp.headers()["content-type"].to_str().unwrap().to_string();
+        assert_eq!(ctype, "application/problem+json", "{want}");
+        let body: Value = serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(body["status"], want, "{body}");
+        if want == 405 {
+            assert!(allow.is_some(), "405 keeps its Allow header");
+        } else {
+            assert!(body["detail"].as_str().is_some_and(|d| !d.is_empty()), "{body}");
+        }
+    }
+}
+
+/// §3: /types had no next page, and search returned `limit` hits per kind, unranked.
+#[tokio::test]
+async fn types_page_and_search_honours_its_limit() {
+    let h = harness().await;
+    for label in ["Paged type A", "Paged type B", "Paged type C"] {
+        h.created("/api/v1/types", json!({"label": label})).await;
+    }
+    let mut seen = Vec::new();
+    let mut uri = "/api/v1/types?limit=2".to_string();
+    loop {
+        let (status, page) = h.send("GET", &uri, None, None).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        seen.extend(page["items"].as_array().unwrap().iter().map(|t| t["iri"].as_str().unwrap().to_string()));
+        match page["next_cursor"].as_str() {
+            Some(c) => uri = format!("/api/v1/types?limit=2&cursor={}", urlencoding(c)),
+            None => break,
+        }
+    }
+    let total = h.send("GET", "/api/v1/types", None, None).await.1["total"].as_u64().unwrap() as usize;
+    assert_eq!(seen.len(), total, "every type, once: {seen:?}");
+    assert!(total >= 3);
+
+    for name in ["zeta", "zeta two", "zeta three"] {
+        let sw = h.created("/api/v1/software", json!({"name": name, "kinds": ["service"]})).await;
+        h.created("/api/v1/instances", json!({"label": format!("{name} deployment"), "software": sw["id"]})).await;
+    }
+    let (_, found) = h.send("GET", "/api/v1/search?q=zeta&limit=2", None, None).await;
+    let hits = found["hits"].as_array().unwrap();
+    assert_eq!(hits.len(), 2, "{found}");
+    assert_eq!(hits[0]["title"], "zeta", "the exact match ranks first: {found}");
+}
+
+fn urlencoding(s: &str) -> String {
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
+/// §3: a browser following a release, type or series IRI landed on the UI's "not found".
+#[tokio::test]
+async fn a_browser_is_sent_to_the_page_that_shows_a_release_or_a_type() {
+    let h = harness().await;
+    let sw = h.created("/api/v1/software", json!({"name": "has releases", "kinds": ["service"]})).await;
+    let sid = sw["id"].as_str().unwrap();
+    let rel = h.created(&format!("/api/v1/software/{sid}/releases"), json!({"version": "1.0.0"})).await;
+    let ty = h.created("/api/v1/types", json!({"label": "Browsed type"})).await;
+    let html = |path: String| {
+        let req = Request::builder().uri(path).header("accept", "text/html").body(Body::empty()).unwrap();
+        h.app.clone().oneshot(req)
+    };
+    let resp = html(format!("/release/{}", rel["id"].as_str().unwrap())).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(resp.headers()["location"], format!("/software/{sid}").as_str());
+
+    let path = ty["iri"].as_str().unwrap().trim_start_matches(BASE).to_string();
+    let resp = html(path).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert!(resp.headers()["location"].to_str().unwrap().starts_with("/artifacts?conforms_to=https%3A"));
+}

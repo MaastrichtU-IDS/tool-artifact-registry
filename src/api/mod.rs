@@ -161,6 +161,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // before anything is charged for it, and an old IRI is translated before any handler
         // or limiter reads the request.
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::rebase::middleware))
+        .layer(axum::middleware::from_fn(problem_errors))
         .layer(axum::middleware::from_fn_with_state(state.clone(), security_headers))
         // A panic in a handler is a bug, but it should cost one request a 500, not drop the
         // connection with no answer at all.
@@ -181,6 +182,49 @@ pub fn router(state: Arc<AppState>) -> Router {
 /// origin and the identity provider, and no framing — a framed registry is a clickjacking target
 /// for the buttons that mint tokens and withdraw records. Styles allow inline attributes, which
 /// the UI uses; images come from anywhere over https, because a README's images do.
+/// Errors raised before a handler runs — axum's extractor rejections (400, 413, 415, 422) and
+/// the router's 405 — come out as plain text or an empty body. Rewrite them into the same
+/// problem document every handler error is, keeping the rejection's text as the detail. A
+/// response that already has a type of its own (a problem, or a withdrawn record's 410) is
+/// left alone.
+async fn problem_errors(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    use axum::http::{header, StatusCode};
+    let resp = next.run(req).await;
+    let status = resp.status();
+    let plain = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_none_or(|v| v.starts_with("text/plain"));
+    if !(status.is_client_error() || status.is_server_error()) || !plain {
+        return resp;
+    }
+    let (parts, body) = resp.into_parts();
+    let text = axum::body::to_bytes(body, 64 * 1024).await.unwrap_or_default();
+    let kind = match status {
+        StatusCode::NOT_FOUND => "not-found",
+        StatusCode::METHOD_NOT_ALLOWED => "method-not-allowed",
+        StatusCode::PAYLOAD_TOO_LARGE => "payload-too-large",
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => "unsupported-media-type",
+        StatusCode::UNPROCESSABLE_ENTITY => "invalid-body",
+        s if s.is_server_error() => "internal",
+        _ => "bad-request",
+    };
+    let mut err = AppError::new(status, kind, status.canonical_reason().unwrap_or("Error"));
+    let text = String::from_utf8_lossy(&text);
+    if !text.trim().is_empty() {
+        err = err.detail(text.trim());
+    }
+    let mut out = err.into_response();
+    // Keep what the rejection said beyond its body: `Allow` on a 405, above all.
+    for (name, value) in parts.headers.iter() {
+        if name != header::CONTENT_TYPE && name != header::CONTENT_LENGTH {
+            out.headers_mut().entry(name).or_insert(value.clone());
+        }
+    }
+    out
+}
+
 async fn security_headers(
     State(state): State<Arc<AppState>>,
     req: axum::extract::Request,

@@ -549,3 +549,28 @@ async fn a_subscribe_only_token_manages_subscriptions_and_nothing_else() {
         assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri} must be refused: {body}");
     }
 }
+
+/// §3: a misspelt key or an unknown type made a filter that silently matched everything, or
+/// nothing, forever.
+#[tokio::test]
+async fn a_filter_that_could_never_mean_what_it_says_is_refused() {
+    let h = harness().await;
+    let sw = h.software().await;
+    let dep = h.deployment(&sw, "strict.example.org").await;
+    let uri = format!("/api/v1/instances/{}/subscriptions", dep.id);
+    for filter in [
+        json!({"conformsTo": [REPORT]}),
+        json!({"conforms_to": ["https://example.org/not-a-type-anywhere"]}),
+    ] {
+        let (status, body) = h.post(&uri, &dep.token, json!({"filter": filter})).await;
+        assert!(status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY, "{filter}: {body}");
+    }
+    let (status, body) = h.post(&uri, &dep.token, json!({"filter": {"conforms_to": [REPORT]}})).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // A missing id answers a deployment exactly as another deployment's does.
+    let (status, _) = h.get("/api/v1/subscriptions/does-not-exist", Some(&dep.token)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = h.get("/api/v1/subscriptions/does-not-exist", Some(ROOT)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

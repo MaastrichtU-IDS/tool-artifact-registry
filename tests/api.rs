@@ -701,6 +701,19 @@ async fn lineage_walks_both_directions_and_marks_unresolved_cross_links() {
     let foreign = nodes.iter().find(|n| n["iri"] == "https://reg.mumc.nl/artifact/01J7Z");
     assert!(foreign.is_some(), "a cross-registry ancestor is an ordinary node");
     assert_eq!(foreign.unwrap()["unresolved"], true);
+
+    // Both ways at once reaches every edge from both ends: each is still listed once, and
+    // `generated` still points from the run to what it made.
+    let parent_id = parent.rsplit('/').next().unwrap();
+    let (_, lin) = h.get(&format!("/api/v1/artifacts/{parent_id}/lineage?depth=3&direction=both")).await;
+    let edges = lin["edges"].as_array().unwrap();
+    let keys: std::collections::HashSet<_> = edges.iter().map(|e| e.to_string()).collect();
+    assert_eq!(keys.len(), edges.len(), "no duplicate edges: {lin}");
+    for e in edges.iter().filter(|e| e["predicate"] == "generated") {
+        let from = lin["nodes"].as_array().unwrap().iter().find(|n| n["iri"] == e["from"]).unwrap();
+        assert_eq!(from["entity_type"], "run", "generated runs from the run: {e}");
+    }
+    assert!(edges.iter().filter(|e| e["predicate"] == "generated").count() >= 2, "{lin}");
 }
 
 // -------------------------------------------------------------- lifecycle

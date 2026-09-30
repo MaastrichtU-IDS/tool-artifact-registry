@@ -39,7 +39,9 @@ use sqlx::Row;
 /// `metadata-only` is the common case (spec §6.2) a subscription without it is mostly noise;
 /// `software` and `instance` are the trust axis ("only from a deployment I believe"); and
 /// `keywords` plus `q` carry the project and cohort axis that no ontology covers.
+// A misspelt key would otherwise vanish and leave a filter that matches everything.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Filter {
     /// `dct:conformsTo` — the artifact type. Full IRIs (EDAM or a local `/type/…`).
     #[serde(default)]
@@ -314,8 +316,8 @@ impl RetryPolicy {
         Self {
             max_attempts: env_i64("TAR_SUBSCRIPTION_MAX_ATTEMPTS", d.max_attempts).clamp(1, 20),
             suspend_after: env_i64("TAR_SUBSCRIPTION_SUSPEND_AFTER", d.suspend_after).clamp(1, 500),
-            base_backoff_secs: env_i64("TAR_SUBSCRIPTION_BACKOFF_BASE", d.base_backoff_secs).clamp(1, 3600),
-            max_backoff_secs: env_i64("TAR_SUBSCRIPTION_BACKOFF_MAX", d.max_backoff_secs).clamp(1, 7 * 86400),
+            base_backoff_secs: env_secs("TAR_SUBSCRIPTION_BACKOFF_BASE", d.base_backoff_secs).clamp(1, 3600),
+            max_backoff_secs: env_secs("TAR_SUBSCRIPTION_BACKOFF_MAX", d.max_backoff_secs).clamp(1, 7 * 86400),
         }
     }
 
@@ -329,6 +331,15 @@ impl RetryPolicy {
 
 fn env_i64(key: &str, default: i64) -> i64 {
     std::env::var(key).ok().and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(default)
+}
+
+/// Seconds, from `30s` / `5m` / `6h` / `1d` or a bare number.
+fn env_secs(key: &str, default: i64) -> i64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| crate::config::parse_duration(&v).ok())
+        .map(|d| d.as_secs().min(i64::MAX as u64) as i64)
+        .unwrap_or(default)
 }
 
 // ------------------------------------------------------------------ store ops

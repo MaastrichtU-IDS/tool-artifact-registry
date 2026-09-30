@@ -112,6 +112,18 @@ whole into memory before it is sent.
 
 ## 3. Should fix
 
+**Done** on branch `polish-fixes` (2026-09-30), except:
+- `deny_unknown_fields` everywhere. Applied to subscription filters, where a typo turned a
+  filter into match-all. Not applied to record bodies: the UI and existing clients send whole
+  records back, read-only fields included, and refusing those is a breaking change for a
+  should-fix.
+- `compose.yaml` still has both `build: .` and the pinned image, so `docker compose up --build`
+  tags a local build with the release name. The getting-started flow depends on `--build`;
+  splitting it needs a second compose file. Left as is.
+- The slow lists were a single query: one type-label lookup that scanned every named graph,
+  paid once per chip. Lists now take milliseconds and still load each row, which is fine at
+  this size.
+
 - Non-problem+json errors: axum `Json`/`Query` rejections (400/415/413/422 text) and 405 with an
   empty body; wrap the extractors, add a method-not-allowed fallback.
 - Lineage returns duplicated and reversed edges (`domain/artifact.rs:373+`); walk breadth-first,

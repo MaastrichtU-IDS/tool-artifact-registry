@@ -9,6 +9,9 @@ configured, the SPARQL endpoint, the `llms.txt` location and the peers it federa
 curl https://registry.example.org/.well-known/tar-registry
 ```
 
+`GET /api/v1/registry` is the catalogue's own summary — title, operator, version, record counts,
+peer count — and `GET /api/v1/context` is the registry's JSON-LD `@context`.
+
 ## Authentication
 
 A credential is a bearer token, whatever kind it is:
@@ -72,14 +75,24 @@ Every error path returns [RFC 9457] `application/problem+json`:
 | `401` | `unauthorized` | No credential, or one that did not verify. `WWW-Authenticate: Bearer` is set. |
 | `403` | `forbidden` | A valid credential lacking the role or scope. Retrying with different arguments will not help. |
 | `404` | `not-found` | No such record. |
+| `405` | `method-not-allowed` | The path exists but not with this method. `Allow` lists the ones it takes. |
+| `406` | `not-acceptable` | An API route asked for `text/html`. Pages are served at the record's IRI, not under `/api/v1`. |
 | `409` | `conflict` | A uniqueness rule was violated. |
-| `410` | `tombstoned` | The record was withdrawn. It still resolves and says so. |
+| `410` | — | The record was withdrawn. The body is **the record itself**, in the representation asked for, with `tombstoned: true` — not a problem document. A write to it is also `410`, and that one is a problem (`tombstoned`). |
+| `413` | `payload-too-large` | The body is over `TAR_MAX_PAYLOAD_BYTES`. |
+| `415` | `unsupported-media-type` | A write without `Content-Type: application/json`. |
+| `422` | `invalid-body` | The body is JSON but a field has the wrong type or a required one is missing. |
 | `422` | `shacl-validation-failed` | The write is well-formed JSON but not a record the registry accepts. |
+| `422` | `not-deployable` | An `endpoint_url` on a deployment of software marked `deployable: false`. `field` names it. |
+| `422` | `invalid-checksum` | `/artifacts/identify` got a digest it cannot use. `field` and the accepted `algorithms` are in the body. |
+| `422` | `bytes-not-accepted` | `/artifacts/identify` was sent the data instead of its digest. |
 | `422` | `result-too-large` | A query would return more than 100 000 rows. Add a `LIMIT` and page. |
 | `429` | `rate-limited` | Over a rate limit. `Retry-After` says when to try again. |
 | `500` | `internal` | A fault on the server. The `detail` gives a reference to quote to the operator, who finds the internals in the log under it. |
 | `502` | `upstream-failed` | A peer or repository the registry had to reach did not answer. |
+| `502` | `forge-unreachable` | Repository sync could not fetch from the forge. |
 | `503` | `query-timeout` | A query ran longer than `TAR_SPARQL_TIMEOUT` and was stopped. |
+| `503` | `suggestions-full` | A peer announcement arrived while too many suggestions await review. Try again later. |
 
 ### The `422`, specifically
 
@@ -148,6 +161,7 @@ address refused authentication for a while — check the credential rather than 
 
 ## Audit
 
-Every write is recorded. `GET /api/v1/audit` returns the log, for admins.
+Every write is recorded. `GET /api/v1/audit` returns the most recent entries, for admins;
+`?limit=` defaults to 100 and is clamped to 1000.
 
 [RFC 9457]: https://www.rfc-editor.org/rfc/rfc9457

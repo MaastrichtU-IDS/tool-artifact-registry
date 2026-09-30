@@ -575,7 +575,7 @@ pub fn catalogue() -> Vec<Tool> {
             schema: obj(
                 json!({
                     "id": s("Artifact id or full IRI."),
-                    "depth": int("How many hops, 1–6. Default 1."),
+                    "depth": int("How many hops, 1–6. Default 2: an artifact, the run that made it, and that run's inputs."),
                     "direction": s_enum("Which way to walk.", &["up", "down", "both"]),
                 }),
                 &["id"],

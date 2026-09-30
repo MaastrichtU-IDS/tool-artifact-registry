@@ -20,7 +20,7 @@
 set -euo pipefail
 
 TAR_URL="${TAR_URL:-http://localhost:8080}"
-TAR_ROOT_TOKEN="${TAR_ROOT_TOKEN:-demo-root-token-change-me-please}"
+TAR_ROOT_TOKEN="${TAR_ROOT_TOKEN:-demo-root-token-local-only}"
 ASSETS_URL="${ASSETS_URL:-http://localhost:9000}"
 ASSETS_BUCKET="${ASSETS_BUCKET:-tar-demo-assets}"
 MINIO_USER="${MINIO_USER:-minioadmin}"

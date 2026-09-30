@@ -100,14 +100,16 @@ independent brakes and a time budget:
 3. **A path check.** The query carries the registries it has visited, and a registry never asks
    a peer already on the path, nor the origin, nor itself.
 
-The time budget is passed down, clamped to this registry's own total timeout, with a margin held
-back before forwarding so that a hop still has time to answer after its own children do.
+Each peer gets `min(TAR_FEDERATED_SEARCH_TIMEOUT, TAR_FEDERATED_SEARCH_TOTAL_TIMEOUT)`, further
+clamped to any budget the caller passed down; peers are asked concurrently, so that is also the
+wait for the whole fan-out. A margin is held back before forwarding so that a hop still has time
+to answer after its own children do.
 
 | | Default |
 |---|---|
 | `TAR_FEDERATED_SEARCH_MAX_HOPS` | 3 (max 8) |
-| `TAR_FEDERATED_SEARCH_TIMEOUT` | 3s — per peer |
-| `TAR_FEDERATED_SEARCH_TOTAL_TIMEOUT` | 10s (max 60s) |
+| `TAR_FEDERATED_SEARCH_TIMEOUT` | 3s — per peer, capped by the total |
+| `TAR_FEDERATED_SEARCH_TOTAL_TIMEOUT` | 10s (max 60s) — caps the per-peer value |
 | `TAR_FEDERATED_SEARCH_HOP_MARGIN` | 600ms |
 | `TAR_FEDERATED_SEARCH_MAX_PEERS` | 12 (max 64) |
 | `TAR_FEDERATED_SEARCH_MAX_PEER_HITS` | 100 (max 1000) |

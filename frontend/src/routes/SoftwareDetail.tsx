@@ -175,6 +175,7 @@ export default function SoftwareDetail() {
               </p>
             )}
             {instances.loading && <div style={{ padding: 16 }}><Skeleton rows={3} /></div>}
+            {instances.error && <div style={{ padding: 16 }}><ErrorState error={instances.error} onRetry={instances.reload} /></div>}
             {instances.data && instances.data.items.length === 0 && (
               <div style={{ padding: '0 16px 16px' }}>
                 <p className="muted">

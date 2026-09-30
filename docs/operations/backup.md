@@ -40,7 +40,8 @@ graphs](../identifiers.md#named-graphs).
 Take one before moving the registry to a new base IRI. The move itself is `tar rebase`, in
 [Moving to a new base IRI](deployment.md#moving-to-a-new-base-iri).
 
-`GET /admin/dump` serves the same thing over HTTP, for admins.
+`GET /admin/dump` serves the same thing over HTTP, for admins; `?graph=urn:tar:local` is the
+equivalent of `--graph`.
 
 ## Shapes and vocabulary reload on boot
 

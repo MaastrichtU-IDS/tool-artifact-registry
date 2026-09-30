@@ -51,7 +51,7 @@ pub struct VocabHit {
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub definition: Option<String>,
-    /// `edam` | `local` | `external`
+    /// `bundled` | `local` | `external` — where the term comes from relative to this registry, never a vocabulary name
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,

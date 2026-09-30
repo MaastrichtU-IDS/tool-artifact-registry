@@ -373,13 +373,21 @@ pub fn artifact_ref(ctx: &Ctx, iri: &str) -> ArtifactRef {
 pub fn lineage(ctx: &Ctx, root: &str, depth: i32, direction: &str) -> AppResult<Lineage> {
     let mut nodes: Vec<LineageNode> = Vec::new();
     let mut edges: Vec<LineageEdge> = Vec::new();
+    // Every edge is reachable from both of its ends; it is reported once.
+    let mut edge_seen: std::collections::HashSet<(String, String, String)> = std::collections::HashSet::new();
+    let mut add_edge = |from: &str, to: &str, predicate: &str| {
+        if edge_seen.insert((from.to_string(), to.to_string(), predicate.to_string())) {
+            edges.push(LineageEdge { from: from.to_string(), to: to.to_string(), predicate: predicate.to_string() });
+        }
+    };
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut frontier = vec![(root.to_string(), 0i32)];
+    // Breadth-first, so a node's depth is its shortest distance from the root.
+    let mut frontier = std::collections::VecDeque::from([(root.to_string(), 0i32)]);
     let mut truncated = false;
     let up = direction == "up" || direction == "both";
     let down = direction == "down" || direction == "both";
 
-    while let Some((iri, d)) = frontier.pop() {
+    while let Some((iri, d)) = frontier.pop_front() {
         if !seen.insert(iri.clone()) {
             continue;
         }
@@ -408,20 +416,20 @@ pub fn lineage(ctx: &Ctx, root: &str, depth: i32, direction: &str) -> AppResult<
         }
         if up {
             for parent in p.iris(ns::PROV, "wasDerivedFrom") {
-                edges.push(LineageEdge { from: iri.clone(), to: parent.clone(), predicate: "derivedFrom".into() });
-                frontier.push((parent, d + 1));
+                add_edge(&iri, &parent, "derivedFrom");
+                frontier.push_back((parent, d + 1));
             }
             if let Some(rev) = p.iri(ns::PROV, "wasRevisionOf") {
-                edges.push(LineageEdge { from: iri.clone(), to: rev.clone(), predicate: "revisionOf".into() });
-                frontier.push((rev, d + 1));
+                add_edge(&iri, &rev, "revisionOf");
+                frontier.push_back((rev, d + 1));
             }
             if let Some(run) = p.iri(ns::PROV, "wasGeneratedBy") {
-                edges.push(LineageEdge { from: run.clone(), to: iri.clone(), predicate: "generated".into() });
-                frontier.push((run, d + 1));
+                add_edge(&run, &iri, "generated");
+                frontier.push_back((run, d + 1));
             }
             for used in p.iris(ns::PROV, "used") {
-                edges.push(LineageEdge { from: iri.clone(), to: used.clone(), predicate: "used".into() });
-                frontier.push((used, d + 1));
+                add_edge(&iri, &used, "used");
+                frontier.push_back((used, d + 1));
             }
         }
         if down {
@@ -440,8 +448,13 @@ SELECT ?child ?pred WHERE {{
             );
             for row in ctx.state.store.select(&q).map_err(AppError::from)?.rows {
                 let (Some(child), Some(pred)) = (row.iri("child"), row.str("pred")) else { continue };
-                edges.push(LineageEdge { from: child.clone(), to: iri.clone(), predicate: pred });
-                frontier.push((child, d + 1));
+                // `generated` points from the run to what it made — here, from `iri` to `child`.
+                if pred == "generated" {
+                    add_edge(&iri, &child, &pred);
+                } else {
+                    add_edge(&child, &iri, &pred);
+                }
+                frontier.push_back((child, d + 1));
             }
         }
     }

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAsync } from '../lib/useAsync'
-import { CopyField, ErrorState, Modal, ProblemJsonError, Skeleton } from '../components/common'
+import { CopyField, ErrorState, Modal, ProblemJsonError, Skeleton, useAction } from '../components/common'
 import { RelativeTime } from '../components/chips'
 
 const SCOPES = ['advertise:produce', 'advertise:consume', 'register:software', 'register:instance', 'read:private', 'subscribe:artifacts']
@@ -17,6 +17,7 @@ export default function Tokens() {
   const [minted, setMinted] = useState<string>()
   const [error, setError] = useState<Error>()
   const [confirmRevoke, setConfirmRevoke] = useState<{ id: string; prefix: string }>()
+  const danger = useAction()
 
   if (inst.loading) return <Skeleton rows={6} />
   if (inst.error) return <ErrorState error={inst.error} onRetry={inst.reload} />
@@ -117,6 +118,7 @@ curl -H "Authorization: Bearer $TOKEN" \\
       <section className="card flush">
         <h2>Existing tokens</h2>
         {tokens.loading && <div style={{ padding: 16 }}><Skeleton rows={3} /></div>}
+        {tokens.error && <div style={{ padding: 16 }}><ErrorState error={tokens.error} onRetry={tokens.reload} /></div>}
         {tokens.data && tokens.data.items.length === 0 && (
           <p className="muted" style={{ padding: '0 16px 16px' }}>No tokens have been minted.</p>
         )}
@@ -177,7 +179,8 @@ curl -H "Authorization: Bearer $TOKEN" \\
       )}
 
       {confirmRevoke && (
-        <Modal title="Revoke token" onClose={() => setConfirmRevoke(undefined)}>
+        <Modal title="Revoke token" onClose={() => { danger.reset(); setConfirmRevoke(undefined) }}>
+          {danger.error !== undefined && <ProblemJsonError error={danger.error} />}
           <p>
             Revoke <code className="mono">tar_{confirmRevoke.prefix}…</code> for{' '}
             <strong>{instance.label}</strong>? Anything still using it stops being able to
@@ -187,15 +190,16 @@ curl -H "Authorization: Bearer $TOKEN" \\
             <button
               type="button"
               className="danger"
-              onClick={async () => {
+              disabled={danger.busy}
+              onClick={() => danger.run(async () => {
                 await api.revokeToken(id, confirmRevoke.id)
                 setConfirmRevoke(undefined)
                 tokens.reload()
-              }}
+              })}
             >
               Revoke it
             </button>
-            <button type="button" onClick={() => setConfirmRevoke(undefined)}>Cancel</button>
+            <button type="button" onClick={() => { danger.reset(); setConfirmRevoke(undefined) }}>Cancel</button>
           </div>
         </Modal>
       )}

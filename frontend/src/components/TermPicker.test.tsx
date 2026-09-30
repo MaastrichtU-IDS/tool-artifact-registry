@@ -27,6 +27,15 @@ describe('TermPicker', () => {
   beforeEach(() => vi.stubGlobal('fetch', stubFetch([])))
   afterEach(() => vi.unstubAllGlobals())
 
+  it('asks once for a label it cannot find, instead of asking forever', async () => {
+    const fetch = stubFetch([])
+    vi.stubGlobal('fetch', fetch)
+    render(<TermPicker id="t" label="Types" branch="data" value={['https://x.test/unknown']} onChange={() => {}} />)
+    await new Promise((r) => setTimeout(r, 100))
+    const resolves = fetch.mock.calls.filter(([u]) => String(u).startsWith('/api/v1/vocab/resolve'))
+    expect(resolves).toHaveLength(1)
+  })
+
   it('offers to register a type when nothing matches, rather than leaving the curator stuck', async () => {
     const created = vi.fn(() => ({ iri: 'https://reg.test/type/patch-log', label: 'patch log' }))
     vi.stubGlobal('fetch', stubFetch([], created))

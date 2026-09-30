@@ -15,6 +15,17 @@ search showing tombstoned records.
 
 Suggested split: one PR for §1, one for §2, one for §3, then bump to 0.2.0 and tag.
 
+## Decisions (user, 2026-09-30)
+
+- **Visibility: keep public.** Repo, image and docs site stay public; no pull secret or
+  private-repo changes to the release workflow.
+- **Token minting: tighten both ways.** A minted token's scopes must be within the deployment's
+  `allowed_scopes` when it has any, and a non-admin caller cannot mint scopes it does not hold.
+  Existing tokens keep working.
+- **`/resolve`: peers only, and signed in.** On-demand resolve needs a credential and only
+  fetches IRIs under an active peer's base; the background resolver skips non-peer IRIs, which
+  stay plain cross-links. All fetches go through the guarded client.
+
 ## 0. Decision for the user first
 
 - **Visibility.** The repo, the GHCR package and the Pages site are all **public** today; the

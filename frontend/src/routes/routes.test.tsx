@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ArtifactDetail from './ArtifactDetail'
 import SoftwareDetail from './SoftwareDetail'
 import SoftwareList from './SoftwareList'
+import SoftwareForm from './SoftwareForm'
 import { SessionProvider } from '../lib/session'
 import type { Artifact, Page, Software } from '../lib/types'
 
@@ -252,5 +253,25 @@ describe('ArtifactDetail', () => {
     await waitFor(() =>
       expect(screen.getByRole('link', { name: /Download/ })).toHaveAttribute('href', 'https://shacl.example/r.ttl'),
     )
+  })
+})
+
+describe('SoftwareForm', () => {
+  it('does not offer a blank form for a record that failed to load, so saving cannot wipe it', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const json = (body: unknown, status = 200) =>
+        new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+      if (url.includes('/api/v1/whoami')) return json({ authenticated: true, is_curator: true, is_admin: false, roles: ['curator'], scopes: [] })
+      if (url.includes('/api/v1/software/broken')) return json({ type: 'x', title: 'Internal error', status: 500 }, 500)
+      return json({})
+    }))
+    // Signed in: the session only asks who you are when it holds a token.
+    sessionStorage.setItem('tar.token', 'tar_test_token')
+    renderAt('/software/broken/edit', <SoftwareForm />, '/software/:id/edit')
+    expect(await screen.findByText(/could not be loaded/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /save/i })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/Name/)).not.toBeInTheDocument()
+    sessionStorage.removeItem('tar.token')
   })
 })

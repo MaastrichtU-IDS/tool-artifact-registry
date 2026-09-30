@@ -40,6 +40,9 @@ export default function SoftwareForm() {
   const [loading, setLoading] = useState(editing)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<Error>()
+  // Kept apart from `error`: a record that failed to load must not be shown as an empty form,
+  // because saving that form would PATCH blanks over the real record.
+  const [loadError, setLoadError] = useState<Error>()
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
 
   useEffect(() => {
@@ -68,7 +71,7 @@ export default function SoftwareForm() {
       setRegistrationClients(s.registration_clients ?? [])
       setRegistrationIssuer(s.registration_issuer ?? '')
       setLoading(false)
-    }).catch((e) => { setError(e as Error); setLoading(false) })
+    }).catch((e) => { setLoadError(e as Error); setLoading(false) })
   }, [id])
 
   if (sessionLoading) return <Skeleton rows={4} />
@@ -81,6 +84,14 @@ export default function SoftwareForm() {
     )
   }
   if (loading) return <Skeleton rows={8} />
+  if (loadError) {
+    return (
+      <div>
+        <ProblemJsonError error={loadError} />
+        <p className="hint">The software record could not be loaded, so it is not offered for editing. Reload to try again.</p>
+      </div>
+    )
+  }
 
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
     setForm({ ...form, [k]: e.target.value })

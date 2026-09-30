@@ -28,6 +28,9 @@ export default function InstanceForm() {
   const [loading, setLoading] = useState(editing)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<Error>()
+  // Kept apart from `error`: a record that failed to load must not be shown as an empty form,
+  // because saving that form would PATCH blanks over the real record.
+  const [loadError, setLoadError] = useState<Error>()
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
 
   useEffect(() => {
@@ -51,7 +54,7 @@ export default function InstanceForm() {
       setConsumes((i.capability?.consumes ?? []).map((t) => t.iri))
       setProduces((i.capability?.produces ?? []).map((t) => t.iri))
       setLoading(false)
-    }).catch((e) => { setError(e as Error); setLoading(false) })
+    }).catch((e) => { setLoadError(e as Error); setLoading(false) })
   }, [id])
 
   const releases = useAsync(
@@ -69,6 +72,14 @@ export default function InstanceForm() {
     )
   }
   if (loading) return <Skeleton rows={8} />
+  if (loadError) {
+    return (
+      <div>
+        <ProblemJsonError error={loadError} />
+        <p className="hint">The deployment could not be loaded, so it is not offered for editing. Reload to try again.</p>
+      </div>
+    )
+  }
 
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm({ ...form, [k]: e.target.value })

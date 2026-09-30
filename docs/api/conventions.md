@@ -34,18 +34,24 @@ credentials.
 | Role | May |
 |---|---|
 | `reader` | read |
-| `curator` | register and edit software, deployments, releases and vocabulary terms |
+| `curator` | register and edit software, deployments, releases and vocabulary terms, and withdraw them |
 | `admin` | everything, including peers and token administration |
 
 | Scope | Permits |
 |---|---|
 | `advertise:produce` | advertise artifacts a run produced |
 | `advertise:consume` | advertise artifacts a run consumed |
-| `register:software` | register and update software |
+| `register:software` | register and update software, its releases and capabilities — not deployments, and not withdrawing software |
 | `register:instance` | register deployments |
 | `read:private` | read records that are not publicly readable |
 | `subscribe:artifacts` | manage the deployment's own [subscriptions](subscriptions.md), and nothing else — not its tokens, and not its record |
-| `admin:*` | everything |
+| `admin:*` | everything; minted by an admin, never taken from an identity provider's token |
+
+A token minted for a deployment stays within that deployment's `allowed_scopes` when it has any,
+and a deployment's own credential cannot mint a scope it does not hold. `subscribe:artifacts` is
+the exception to both: it grants less than any of the deployment's credentials already has.
+Scopes in an OIDC token are read only from the registry's own identity provider
+(`TAR_OIDC_ISSUER`), and a bound deployment's are capped by its `allowed_scopes`.
 
 ## Errors
 
@@ -69,7 +75,11 @@ Every error path returns [RFC 9457] `application/problem+json`:
 | `409` | `conflict` | A uniqueness rule was violated. |
 | `410` | `tombstoned` | The record was withdrawn. It still resolves and says so. |
 | `422` | `shacl-validation-failed` | The write is well-formed JSON but not a record the registry accepts. |
+| `422` | `result-too-large` | A query would return more than 100 000 rows. Add a `LIMIT` and page. |
+| `429` | `rate-limited` | Over a rate limit. `Retry-After` says when to try again. |
+| `500` | `internal` | A fault on the server. The `detail` gives a reference to quote to the operator, who finds the internals in the log under it. |
 | `502` | `upstream-failed` | A peer or repository the registry had to reach did not answer. |
+| `503` | `query-timeout` | A query ran longer than `TAR_SPARQL_TIMEOUT` and was stopped. |
 
 ### The `422`, specifically
 

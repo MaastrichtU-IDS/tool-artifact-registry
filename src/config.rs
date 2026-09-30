@@ -39,6 +39,9 @@ pub struct Config {
     /// default, and what everybody running this today has — means embedded Oxigraph under
     /// `data_dir`, unchanged.
     pub sparql_backend: Option<SparqlBackend>,
+    /// How long one query may run, on either backend (`TAR_SPARQL_TIMEOUT`). It used to reach
+    /// only an external endpoint, which left the embedded store with no limit at all.
+    pub sparql_timeout: Duration,
     pub oidc: OidcConfig,
     /// Rate limits (`src/ratelimit.rs`). On by default, so a bare `docker run` is protected.
     pub rate_limit: crate::ratelimit::RateLimitConfig,
@@ -307,6 +310,7 @@ impl Config {
             // absence of one variable is the whole switch, and an existing install changes
             // nothing.
             sparql_backend: env("TAR_SPARQL_ENDPOINT").map(SparqlBackend::from_env).transpose()?,
+            sparql_timeout: env_duration("TAR_SPARQL_TIMEOUT", "60s")?,
             oidc,
             rate_limit: crate::ratelimit::RateLimitConfig::from_env()?,
         })
@@ -334,6 +338,7 @@ impl Config {
             // The default. Tests never start the poller; they call `poll_once` with their own.
             forge_poll_interval: Duration::from_secs(86400),
             sparql_backend: None,
+            sparql_timeout: Duration::from_secs(60),
             oidc: OidcConfig {
                 client_claim: "azp".into(),
                 roles_claim: "realm_access.roles".into(),

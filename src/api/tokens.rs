@@ -29,6 +29,12 @@ pub struct MintToken {
     pub expires_in: Option<String>,
 }
 
+/// The scopes a deployment may be given (`tar:allowedScope`); empty means no ceiling was set.
+fn allowed_scopes(state: &AppState, instance_iri: &str) -> AppResult<Vec<String>> {
+    let quads = state.store.describe(instance_iri).map_err(AppError::from)?;
+    Ok(crate::rdf::Props::from_quads(instance_iri, &quads).strs(crate::ns::TAR, "allowedScope"))
+}
+
 fn may_manage(principal: &Principal, instance_iri: &str) -> AppResult<()> {
     if principal.is_admin() || principal.is_curator() {
         return Ok(());
@@ -46,7 +52,7 @@ pub async fn list(
     principal: Principal,
     Path(id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     may_manage(&principal, &iri)?;
     let tokens = state.ops.list_tokens(&iri).await.map_err(AppError::from)?;
     Ok(Json(json!({"items": tokens, "total": tokens.len()})))
@@ -58,7 +64,7 @@ pub async fn create(
     Path(id): Path<String>,
     Json(input): Json<MintToken>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     may_manage(&principal, &iri)?;
     let exists = super::blocking({
         let (state, iri) = (state.clone(), iri.clone());
@@ -68,6 +74,11 @@ pub async fn create(
     if !exists {
         return Err(AppError::not_found(format!("no instance at {iri}")));
     }
+    let allowed = super::blocking({
+        let (state, iri) = (state.clone(), iri.clone());
+        move || allowed_scopes(&state, &iri)
+    })
+    .await?;
     let scopes: Vec<String> = if input.scopes.is_empty() {
         vec!["advertise:produce".into(), "advertise:consume".into()]
     } else {
@@ -80,6 +91,23 @@ pub async fn create(
         // Only an admin may hand out admin.
         if s == crate::auth::SCOPE_ADMIN && !principal.is_admin() {
             return Err(AppError::forbidden("only an admin can mint an admin:* token"));
+        }
+        // `subscribe:artifacts` grants less than any credential of the deployment already has,
+        // so it is never the thing a ceiling protects.
+        if s == crate::auth::SCOPE_SUBSCRIBE_ARTIFACTS {
+            continue;
+        }
+        // The deployment's own ceiling, for everyone who mints for it.
+        if !allowed.is_empty() && !allowed.contains(s) {
+            return Err(AppError::forbidden(format!(
+                "{s} is not among this deployment's allowed scopes ({}); a curator can widen allowed_scopes first",
+                allowed.join(", ")
+            )));
+        }
+        // And a deployment's own credential cannot mint what it does not hold: otherwise an
+        // advertise-only token could mint itself a register:instance one.
+        if !principal.is_curator() && !principal.has_scope(s) {
+            return Err(AppError::forbidden(format!("this credential cannot mint {s}, which it does not hold itself")));
         }
     }
     let ttl = match input.expires_in.as_deref() {
@@ -109,7 +137,7 @@ pub async fn revoke(
     principal: Principal,
     Path((id, token_id)): Path<(String, String)>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     may_manage(&principal, &iri)?;
     let Some(rec) = state.ops.get_token(&token_id).await.map_err(AppError::from)? else {
         return Err(AppError::not_found("no such token"));
@@ -144,7 +172,7 @@ pub async fn list_for_software(
     Path(id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
     may_manage_software(&principal)?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     let tokens = state.ops.list_tokens(&iri).await.map_err(AppError::from)?;
     Ok(Json(json!({"items": tokens, "total": tokens.len()})))
 }
@@ -161,7 +189,7 @@ pub async fn create_for_software(
     Json(input): Json<MintToken>,
 ) -> AppResult<impl IntoResponse> {
     may_manage_software(&principal)?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     let exists = super::blocking({
         let (state, iri) = (state.clone(), iri.clone());
         move || state.store.exists(&iri).map_err(AppError::from)
@@ -232,7 +260,7 @@ pub async fn revoke_for_software(
     Path((id, token_id)): Path<(String, String)>,
 ) -> AppResult<impl IntoResponse> {
     may_manage_software(&principal)?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     let Some(rec) = state.ops.get_token(&token_id).await.map_err(AppError::from)? else {
         return Err(AppError::not_found("no such token"));
     };

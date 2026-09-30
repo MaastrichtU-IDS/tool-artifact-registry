@@ -160,8 +160,12 @@ async fn advertise(
             // A bare reference: local or foreign. Foreign IRIs are stored verbatim.
             Some(iri) => {
                 if !ids::is_local(state.base(), iri) && !state.store.exists(iri).map_err(AppError::from)? {
-                    state.ops.queue_resolve(iri, None).await.map_err(AppError::from)?;
-                    queued.push(iri.to_string());
+                    // Only a peer's records are fetched; any other foreign IRI stays a plain
+                    // cross-link, so a payload cannot make the registry fetch a URL of its choosing.
+                    if let Some(peer) = super::peers::owning_peer(&state, iri).await {
+                        state.ops.queue_resolve(iri, Some(&peer.id)).await.map_err(AppError::from)?;
+                        queued.push(iri.to_string());
+                    }
                 }
                 iri.to_string()
             }
@@ -190,8 +194,10 @@ async fn advertise(
                             if !ids::is_local(state.base(), parent)
                                 && !state.store.exists(parent).map_err(AppError::from)?
                             {
-                                state.ops.queue_resolve(parent, None).await.map_err(AppError::from)?;
-                                queued.push(parent.clone());
+                                if let Some(peer) = super::peers::owning_peer(&state, parent).await {
+                                    state.ops.queue_resolve(parent, Some(&peer.id)).await.map_err(AppError::from)?;
+                                    queued.push(parent.clone());
+                                }
                             }
                         }
                         if let Some(k) = key.as_deref() {

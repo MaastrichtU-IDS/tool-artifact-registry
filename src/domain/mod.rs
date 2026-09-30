@@ -97,8 +97,12 @@ impl Ctx {
             return Vec::new();
         }
         let mut labels: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
-        let values =
-            iris.iter().filter(|i| i.starts_with("http")).map(|i| format!("<{i}>")).collect::<Vec<_>>().join(" ");
+        let values = iris
+            .iter()
+            .filter(|i| i.starts_with("http"))
+            .map(|i| crate::store::queries::term(i))
+            .collect::<Vec<_>>()
+            .join(" ");
         if !values.is_empty() {
             let q = format!(
                 r#"{p}
@@ -178,8 +182,12 @@ SELECT ?t ?label ?def WHERE {{
     /// Labels for a batch of subjects (`schema:name`, `dct:title` or `rdfs:label`).
     pub fn labels(&self, iris: &[String]) -> HashMap<String, String> {
         let mut out = HashMap::new();
-        let values =
-            iris.iter().filter(|i| i.starts_with("http")).map(|i| format!("<{i}>")).collect::<Vec<_>>().join(" ");
+        let values = iris
+            .iter()
+            .filter(|i| i.starts_with("http"))
+            .map(|i| crate::store::queries::term(i))
+            .collect::<Vec<_>>()
+            .join(" ");
         if values.is_empty() {
             return out;
         }

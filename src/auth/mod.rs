@@ -179,12 +179,24 @@ impl Principal {
         )))
     }
 
+    /// The curator role itself. `register:software` used to pass here too, which let a token
+    /// minted for one project's CI edit or withdraw every deployment in the registry.
     pub fn require_curator(&self) -> AppResult<()> {
+        self.require_authenticated()?;
+        if self.is_curator() {
+            return Ok(());
+        }
+        Err(AppError::forbidden("curator role required"))
+    }
+
+    /// Registering and maintaining software records: a curator, or a credential given
+    /// `register:software` for exactly that. Withdrawing software still needs a curator.
+    pub fn require_software_editor(&self) -> AppResult<()> {
         self.require_authenticated()?;
         if self.is_curator() || self.has_scope(SCOPE_REGISTER_SOFTWARE) {
             return Ok(());
         }
-        Err(AppError::forbidden("curator role required"))
+        Err(AppError::forbidden("curator role or the register:software scope required"))
     }
 
     pub fn require_admin(&self) -> AppResult<()> {

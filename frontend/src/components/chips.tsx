@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { Availability, Origin, TypeRef } from '../lib/types'
+import { safeHref } from '../lib/safeHref'
 
 /** Local vs foreign. On every record header and every list row that can carry foreign data
  *  (handoff §6.1). A cached peer record never renders identically to a local one. */
@@ -19,7 +20,7 @@ export function OriginChip({
   return (
     <span className="inline" style={{ gap: 6 }}>
       {origin.peer_base_iri && interactive ? (
-        <a className="chip peer" href={origin.peer_base_iri} target="_blank" rel="noreferrer"
+        <a className="chip peer" href={safeHref(origin.peer_base_iri)} target="_blank" rel="noreferrer"
            title={`Cached from ${origin.peer_base_iri}. Read-only here; its home registry is authoritative.`}>
           {body}
         </a>
@@ -122,7 +123,7 @@ export function LicenseChip({ license, interactive = true }: { license?: string;
   const spdx = license.replace(/^https?:\/\/spdx\.org\/licenses\//, '')
   if (!interactive) return <span className="chip" title={license}>{spdx}</span>
   return (
-    <a className="chip" href={license} target="_blank" rel="noreferrer" title={license}>{spdx}</a>
+    <a className="chip" href={safeHref(license)} target="_blank" rel="noreferrer" title={license}>{spdx}</a>
   )
 }
 

@@ -80,8 +80,16 @@ async fn run(
     // Parse here so a malformed query is a 400 carrying the parser's own message (line and
     // column), rather than a 500 whose detail only echoes the query back. The store parses
     // again when it evaluates; queries are small and this runs once per request.
-    if let Err(e) = oxigraph::sparql::SparqlEvaluator::new().parse_query(&q) {
-        return Err(AppError::bad_request(format!("SPARQL syntax error: {e}")));
+    let parsed = match spargebra::SparqlParser::new().parse_query(&q) {
+        Ok(p) => p,
+        Err(e) => return Err(AppError::bad_request(format!("SPARQL syntax error: {e}"))),
+    };
+    // No federated sub-queries. The embedded store refuses SERVICE on its own, but an external
+    // triplestore follows it, from its own network: that is a way to make the store behind the
+    // registry fetch any URL. Checked on the parser's normalised form, where a comment cannot
+    // hide the keyword and a literal is always quoted.
+    if has_service(&parsed.to_string()) {
+        return Err(AppError::forbidden("SERVICE is not allowed here; this endpoint queries this registry only"));
     }
 
     let wants_json = format.as_deref() == Some("json")
@@ -182,5 +190,32 @@ fn term_json(t: &oxigraph::model::Term) -> serde_json::Value {
             }
             o
         }
+    }
+}
+
+/// A `SERVICE` pattern in a normalised query: the keyword, then an IRI or a variable.
+fn has_service(normalised: &str) -> bool {
+    let upper = normalised.to_uppercase();
+    upper.match_indices("SERVICE").any(|(i, _)| {
+        let before = upper[..i].chars().next_back();
+        let after = upper[i + "SERVICE".len()..].trim_start();
+        let after = after.strip_prefix("SILENT").map_or(after, str::trim_start);
+        !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '"')
+            && (after.starts_with('<') || after.starts_with('?') || after.starts_with('$'))
+    })
+}
+
+#[cfg(test)]
+mod service_tests {
+    use super::has_service;
+
+    #[test]
+    fn a_service_pattern_is_found_however_it_is_written() {
+        let norm = |q: &str| spargebra::SparqlParser::new().parse_query(q).unwrap().to_string();
+        assert!(has_service(&norm("SELECT * { SERVICE <http://169.254.169.254/> { ?s ?p ?o } }")));
+        assert!(has_service(&norm("SELECT * { service silent <http://x/> { ?s ?p ?o } }")));
+        assert!(has_service(&norm("SELECT * { SERVICE # hidden\n <http://x/> { ?s ?p ?o } }")));
+        assert!(!has_service(&norm("SELECT * { ?s ?p \"SERVICE <http://x/>\" }")), "inside a literal");
+        assert!(!has_service(&norm("SELECT * { ?s <http://example.org/service> ?o }")));
     }
 }

@@ -127,7 +127,7 @@ pub async fn create(
     principal: Principal,
     Json(input): Json<ArtifactTypeIn>,
 ) -> AppResult<impl IntoResponse> {
-    principal.require_curator()?;
+    principal.require_software_editor()?;
     if input.label.trim().is_empty() {
         return Err(AppError::bad_request("an artifact type needs a label"));
     }
@@ -233,7 +233,7 @@ SELECT DISTINCT ?s WHERE {{
 
 pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let iri = ids::iri_for(state.base(), Kind::Type, &id);
+    let iri = ids::reference(state.base(), Kind::Type, &id)?;
     let out = super::blocking(move || load(&ctx, &iri)).await?;
     Ok(Json(out))
 }
@@ -245,8 +245,9 @@ fn load(ctx: &Ctx, iri: &str) -> AppResult<ArtifactTypeOut> {
         .state
         .store
         .select(&format!(
-            "{p}\nSELECT (COUNT(DISTINCT ?a) AS ?n) WHERE {{ GRAPH ?g {{ ?a dct:conformsTo <{iri}> }} }}",
-            p = ns::PREFIXES
+            "{p}\nSELECT (COUNT(DISTINCT ?a) AS ?n) WHERE {{ GRAPH ?g {{ ?a dct:conformsTo {t} }} }}",
+            p = ns::PREFIXES,
+            t = crate::store::queries::term(iri)
         ))
         .ok()
         .and_then(|b| b.rows.first().and_then(|r| r.i64("n")))

@@ -429,13 +429,14 @@ pub fn lineage(ctx: &Ctx, root: &str, depth: i32, direction: &str) -> AppResult<
                 r#"{p}
 SELECT ?child ?pred WHERE {{
   GRAPH ?g {{
-    {{ ?child prov:wasDerivedFrom <{iri}> BIND("derivedFrom" AS ?pred) }}
-    UNION {{ ?child prov:used <{iri}> BIND("used" AS ?pred) }}
-    UNION {{ ?child prov:wasGeneratedBy <{iri}> BIND("generated" AS ?pred) }}
-    UNION {{ ?child prov:wasRevisionOf <{iri}> BIND("revisionOf" AS ?pred) }}
+    {{ ?child prov:wasDerivedFrom {i} BIND("derivedFrom" AS ?pred) }}
+    UNION {{ ?child prov:used {i} BIND("used" AS ?pred) }}
+    UNION {{ ?child prov:wasGeneratedBy {i} BIND("generated" AS ?pred) }}
+    UNION {{ ?child prov:wasRevisionOf {i} BIND("revisionOf" AS ?pred) }}
   }}
 }}"#,
-                p = ns::PREFIXES
+                p = ns::PREFIXES,
+                i = crate::store::queries::term(&iri)
             );
             for row in ctx.state.store.select(&q).map_err(AppError::from)?.rows {
                 let (Some(child), Some(pred)) = (row.iri("child"), row.str("pred")) else { continue };

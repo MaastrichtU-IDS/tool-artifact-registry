@@ -9,6 +9,7 @@ import {
 import {
   ArtifactTypeChip, AvailabilityBadge, HealthDot, OriginChip, RelativeTime, RunStatus, shortId,
 } from '../components/chips'
+import { safeHref } from '../lib/safeHref'
 
 /** Same two-column shell as Software, so the two read as one system — but the content makes
  *  the difference obvious: an Instance is concrete, has an endpoint, and has runs. */
@@ -82,8 +83,8 @@ export default function InstanceDetail() {
               {i.operator?.name && <> · operated by {i.operator.name}</>}
             </p>
             <ul className="chips">
-              {i.endpoint_url && <li><a className="chip accent" href={i.endpoint_url} target="_blank" rel="noreferrer">Open endpoint ↗</a></li>}
-              {i.endpoint_description && <li><a className="chip" href={i.endpoint_description} target="_blank" rel="noreferrer">OpenAPI ↗</a></li>}
+              {i.endpoint_url && <li><a className="chip accent" href={safeHref(i.endpoint_url)} target="_blank" rel="noreferrer">Open endpoint ↗</a></li>}
+              {i.endpoint_description && <li><a className="chip" href={safeHref(i.endpoint_description)} target="_blank" rel="noreferrer">OpenAPI ↗</a></li>}
             </ul>
           </div>
 
@@ -193,7 +194,7 @@ export default function InstanceDetail() {
               <dt>Endpoint</dt>
               <dd>
                 {i.endpoint_url ? (
-                  <a href={i.endpoint_url} target="_blank" rel="noreferrer">{i.endpoint_url}</a>
+                  <a href={safeHref(i.endpoint_url)} target="_blank" rel="noreferrer">{i.endpoint_url}</a>
                 ) : (
                   <span className="muted">none — runs from a CLI or batch job</span>
                 )}

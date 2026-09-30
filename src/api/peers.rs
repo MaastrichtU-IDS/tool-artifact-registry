@@ -182,17 +182,30 @@ pub struct Announce {
 /// Inbound mutual discovery. Produces a suggestion for admin review — never a peer
 /// (spec §8.4). Deliberately unauthenticated: it grants nothing.
 pub async fn announce(State(state): State<Arc<AppState>>, Json(input): Json<Announce>) -> AppResult<impl IntoResponse> {
-    let base = input.base_url.trim_end_matches('/').to_string();
+    let base = input.base_url.trim().trim_end_matches('/').to_string();
+    // Anonymous, so bounded: an http(s) URL of a sane length, a short title, and a cap on how
+    // many suggestions may wait for review, so this cannot be used to fill the disk or bury the
+    // real suggestions.
+    let valid = base.len() <= 200
+        && url::Url::parse(&base).is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some());
+    if !valid {
+        return Err(AppError::bad_request("base_url must be an http(s) URL of at most 200 characters"));
+    }
+    let title = input.title.as_deref().map(|t| t.chars().take(200).collect::<String>());
     if base == state.config.base_iri {
         return Ok(Json(json!({"accepted": false, "reason": "that is this registry"})));
     }
     if let Some(existing) = state.ops.get_peer(&base).await.map_err(AppError::from)? {
         return Ok(Json(json!({"accepted": true, "state": existing.state, "note": "already known"})));
     }
+    if state.ops.list_peers(Some("suggested")).await.map_err(AppError::from)?.len() >= MAX_PENDING_SUGGESTIONS {
+        return Err(AppError::new(StatusCode::SERVICE_UNAVAILABLE, "suggestions-full", "Too many suggestions pending")
+            .detail("this registry has too many peer suggestions waiting for review; try again later"));
+    }
     let s = PeerRecord {
         id: uuid::Uuid::now_v7().to_string(),
         base_iri: base.clone(),
-        title: input.title.clone(),
+        title: title.clone(),
         operator: None,
         added_at: Utc::now().to_rfc3339(),
         last_seen_at: None,
@@ -204,7 +217,7 @@ pub async fn announce(State(state): State<Arc<AppState>>, Json(input): Json<Anno
         stale: false,
     };
     state.ops.upsert_peer(&s).await.map_err(AppError::from)?;
-    let _ = state.ops.audit(None, "anonymous", "peer.announce", Some(&base), input.title.as_deref(), None).await;
+    let _ = state.ops.audit(None, "anonymous", "peer.announce", Some(&base), title.as_deref(), None).await;
     Ok(Json(json!({"accepted": true, "state": "suggested", "note": "queued for admin review"})))
 }
 
@@ -242,8 +255,12 @@ pub struct ResolveQuery {
 /// Resolve a foreign IRI, cache a stub in the peer graph, return it (spec §7.8, §9.4).
 pub async fn resolve(
     State(state): State<Arc<AppState>>,
+    principal: Principal,
     Query(q): Query<ResolveQuery>,
 ) -> AppResult<impl IntoResponse> {
+    // Fetching on demand is the registry making a request on the caller's behalf, so the caller
+    // has to be someone (design note: pre-deploy audit §1.2).
+    principal.require_authenticated()?;
     let iri = q.iri.clone();
     if crate::ids::is_local(state.base(), &iri) {
         return Err(AppError::bad_request("that IRI is local — dereference it directly"));
@@ -273,7 +290,15 @@ pub async fn resolve(
 /// Dereference a foreign IRI with `Accept: text/turtle`, write a minimal stub into the peer
 /// graph, and record success or backoff — on the IRI, and on the peer it belongs to.
 pub async fn fetch_stub(state: &Arc<AppState>, iri: &str) -> AppResult<serde_json::Value> {
-    let peer = owning_peer(state, iri).await;
+    // Only IRIs under an active peer's base are fetched. Anything else stays a cross-link:
+    // otherwise a caller, or a payload, could make the registry fetch any URL and cache what came
+    // back into the catalogue.
+    let Some(peer) = owning_peer(state, iri).await else {
+        return Err(AppError::bad_request(format!(
+            "{iri} is not under the base of any peer this registry federates with; only peers' records are resolved"
+        )));
+    };
+    let peer = Some(peer);
     let failed = |msg: String| {
         let (state, peer_id) = (state.clone(), peer.as_ref().map(|p| p.id.clone()));
         async move {
@@ -284,10 +309,21 @@ pub async fn fetch_stub(state: &Arc<AppState>, iri: &str) -> AppResult<serde_jso
             AppError::bad_request(msg)
         }
     };
-    let body = match state.http.get(iri).header(axum::http::header::ACCEPT, "text/turtle").send().await {
-        Ok(r) if r.status().is_success() => match r.text().await {
-            Ok(body) => body,
+    // A peer is trusted, and may well sit on a private address in the same estate, so private
+    // targets are allowed; redirects and link-local addresses still are not, and the body is
+    // capped while it is read.
+    let client = match url::Url::parse(iri) {
+        Ok(u) => crate::outbound::client_for(&u, true, state.config.peer_resolve_timeout).await,
+        Err(e) => Err(e.to_string()),
+    };
+    let client = match client {
+        Ok(c) => c,
+        Err(e) => return Err(failed(format!("cannot dereference {iri}: {e}")).await),
+    };
+    let body = match client.get(iri).header(axum::http::header::ACCEPT, "text/turtle").send().await {
+        Ok(r) if r.status().is_success() => match crate::outbound::read_capped(r, STUB_MAX_BYTES).await {
             // Not an empty document: parsing "" would replace the cached stub with nothing.
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
             Err(e) => return Err(failed(format!("reading {iri}: {e}")).await),
         },
         Ok(r) => return Err(failed(format!("{iri} returned {}", r.status())).await),
@@ -404,7 +440,15 @@ fn stub_quads(iri: &str, turtle: &str, graph: &str) -> anyhow::Result<Stub> {
     Ok(Stub { quads: out, others })
 }
 
-async fn owning_peer(state: &Arc<AppState>, iri: &str) -> Option<PeerRecord> {
+/// Unreviewed peer suggestions that may wait at once; past this, anonymous announcements are
+/// turned away until an admin works through them.
+const MAX_PENDING_SUGGESTIONS: usize = 100;
+
+/// A stub is one record's description. Four megabytes is generous for that, and small enough
+/// that a hostile peer cannot hold the process's memory hostage with one response.
+const STUB_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+pub(crate) async fn owning_peer(state: &Arc<AppState>, iri: &str) -> Option<PeerRecord> {
     let peers = state.ops.list_peers(None).await.ok()?;
     peers.into_iter().find(|p| iri.starts_with(&p.base_iri))
 }

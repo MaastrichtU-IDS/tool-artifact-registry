@@ -31,7 +31,7 @@ land in a real deployment — a container, compose, or a cluster — see [Deploy
 | `TAR_SPARQL_UPDATE_ENDPOINT` | the query endpoint | Many servers split query and update onto separate URLs. |
 | `TAR_SPARQL_BEARER_TOKEN` | — | Bearer credential for the endpoint. |
 | `TAR_SPARQL_USERNAME` / `TAR_SPARQL_PASSWORD` | — | HTTP basic credential. Both or neither, and not alongside a bearer token. |
-| `TAR_SPARQL_TIMEOUT` | `60s` | Per request. |
+| `TAR_SPARQL_TIMEOUT` | `60s` | How long one query may run, on either backend. A query past it is stopped and answered `503` (`query-timeout`); a streaming one stops at once, one that sorts first at the store's next check, which can be seconds later. |
 
 `TAR_DATA_DIR` still holds the SQLite operational database either way; only the graph moves.
 Details, and what atomicity means over HTTP, in [Graph store](graph-store.md).
@@ -101,7 +101,7 @@ Covered in [Identity provider setup](identity-provider.md): `TAR_OIDC_ISSUER`,
 | `TAR_HEALTH_CHECK_INTERVAL` | `5m` | |
 | `TAR_HEALTH_CHECK_TIMEOUT` | `5s` | |
 | `TAR_HEALTH_CHECK_BATCH` | `20` | Deployments probed per pass. |
-| `TAR_HEALTH_ALLOW_PRIVATE` | `true` | Probe private and loopback addresses. |
+| `TAR_HEALTH_ALLOW_PRIVATE` | `true` | Probe private and loopback addresses. On by default because a deployment inside your estate is normally on one, and the probe only reports up or down. Redirects are never followed, and link-local addresses (cloud metadata) are always refused. |
 
 Private addresses are allowed **by default here and refused by default for webhooks**, which
 looks inconsistent and is not. A deployment endpoint is an address in your own estate, and for an
@@ -163,7 +163,7 @@ See [The hosted MCP server](../mcp.md).
 |---|---|---|
 | `TAR_FORGE_TOKEN` | — | Registry-wide GitHub token, used by sync and by the repository-stats poller. Unset means anonymous: public repositories only, and GitHub's 60 requests/hour instead of 5,000, so the poller paces itself to one request every two minutes rather than every two seconds. |
 | `TAR_FORGE_POLL_INTERVAL` | `24h` | How often stars, forks and last push are refreshed for each local software record with a GitHub repository. The poller wakes at least hourly and fetches only records that are due. The numbers stay in SQLite and are never published to the graph. |
-| `TAR_APIDOC_ALLOW_PRIVATE` | `true` | Fetch API description documents from private addresses. |
+| `TAR_APIDOC_ALLOW_PRIVATE` | `false` | Fetch API description documents from private addresses. Off by default, because the viewer returns what it fetched to anonymous readers. Redirects are never followed, link-local addresses are always refused, and the document is always served as sandboxed plain text. |
 
 ## Build-time
 

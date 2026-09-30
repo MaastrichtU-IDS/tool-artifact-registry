@@ -252,7 +252,7 @@ pub async fn list(
     principal: Principal,
     Path(id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     may_manage(&principal, &iri)?;
     let items = subs::list_for_instance(&state.ops, &iri).await.map_err(AppError::from)?;
     let total = items.len();
@@ -266,7 +266,7 @@ pub async fn create(
     Path(id): Path<String>,
     Json(input): Json<CreateSubscription>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     may_manage(&principal, &iri)?;
     let exists = super::blocking({
         let (state, iri) = (state.clone(), iri.clone());
@@ -536,7 +536,7 @@ pub fn validate_webhook_url(raw: &str, settings: &WebhookSettings) -> AppResult<
     };
     if !settings.allow_private_targets {
         if let Ok(ip) = host.trim_matches(['[', ']']).parse::<IpAddr>() {
-            if !is_public_ip(&ip) {
+            if !crate::outbound::is_public_ip(&ip) {
                 return Err(AppError::bad_request(format!(
                     "webhook_url points at {ip}, which is not a public address; the registry will not be used to \
                      reach into a private network"
@@ -555,44 +555,6 @@ pub fn validate_webhook_url(raw: &str, settings: &WebhookSettings) -> AppResult<
         }
     }
     Ok(url.to_string())
-}
-
-/// Anything that is not routable on the public internet, refused. The list is the usual
-/// SSRF target set: loopback, RFC1918, link-local (which is where cloud metadata lives at
-/// `169.254.169.254`), carrier-grade NAT, unspecified, multicast, and the IPv6 equivalents.
-fn is_public_ip(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let o = v4.octets();
-            !(v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_broadcast()
-                || v4.is_documentation()
-                || v4.is_unspecified()
-                || v4.is_multicast()
-                // 100.64.0.0/10 carrier-grade NAT
-                || (o[0] == 100 && (64..128).contains(&o[1]))
-                // 192.0.0.0/24 IETF protocol assignments
-                || (o[0] == 192 && o[1] == 0 && o[2] == 0)
-                // 198.18.0.0/15 benchmarking
-                || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
-                // 240.0.0.0/4 reserved
-                || o[0] >= 240)
-        }
-        IpAddr::V6(v6) => {
-            let seg = v6.segments();
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                // fc00::/7 unique local
-                || (seg[0] & 0xfe00) == 0xfc00
-                // fe80::/10 link local
-                || (seg[0] & 0xffc0) == 0xfe80
-                // IPv4-mapped: judge the embedded address, or ::ffff:127.0.0.1 walks straight in
-                || v6.to_ipv4_mapped().map(|m| !is_public_ip(&IpAddr::V4(m))).unwrap_or(false))
-        }
-    }
 }
 
 /// The dynamic half of the guard, applied before every attempt. A name that was fine at
@@ -623,7 +585,7 @@ async fn resolve_public_targets(
         .map_err(|e| format!("could not resolve {host}: {e}"))?
         .collect();
     for a in &addrs {
-        if !is_public_ip(&a.ip()) {
+        if !crate::outbound::is_public_ip(&a.ip()) {
             return Err(format!("{host} resolves to {}, which is not a public address; refusing to connect", a.ip()));
         }
     }
@@ -745,8 +707,9 @@ pub async fn notify_advertised(
 /// single lookup rather than a two-hop join per advertisement.
 fn software_of_instance(state: &Arc<AppState>, instance_iri: &str) -> Option<String> {
     let q = format!(
-        "{p}\nSELECT ?sw WHERE {{ GRAPH ?g {{ <{instance_iri}> tar:instanceOf ?sw }} }} LIMIT 1",
-        p = ns::PREFIXES
+        "{p}\nSELECT ?sw WHERE {{ GRAPH ?g {{ {i} tar:instanceOf ?sw }} }} LIMIT 1",
+        p = ns::PREFIXES,
+        i = crate::store::queries::term(instance_iri)
     );
     state.store.select(&q).ok()?.rows.first()?.iri("sw")
 }

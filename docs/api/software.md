@@ -55,7 +55,10 @@ against.
 
 **`api_docs`** is a list of `{url, format, title, description}`, where format is one of
 `openapi`, `asyncapi`, `graphql`, `sparql-service-description`, `ols4`, `postman`, `other`. The
-registry can fetch and render one at `GET /api/v1/software/{id}/api-doc`.
+registry can fetch and render one at `GET /api/v1/software/{id}/api-doc`. The document is
+served as plain text in a sandbox, whatever type its host gave it, with the host's type in
+`x-tar-upstream-content-type`: it is somebody else's content on this registry's origin. It is
+not fetched from a private address unless the operator sets `TAR_APIDOC_ALLOW_PRIVATE`.
 
 **`registration_clients`** lists the OIDC client ids allowed to self-register deployments of
 this software, and **`registration_issuer`** names the identity provider those ids belong to.

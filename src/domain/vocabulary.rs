@@ -345,7 +345,7 @@ pub fn held(state: &AppState, iris: &[&str]) -> Option<HashMap<String, Held>> {
 /// forms return the same rows — but requiring co-location is exactly what made the branch marker
 /// fail, and there is no reason to write the requirement back in.
 fn held_in(store: &dyn crate::store::GraphStore, iris: &[&str]) -> Option<HashMap<String, Held>> {
-    let values = iris.iter().map(|i| format!("<{i}>")).collect::<Vec<_>>().join(" ");
+    let values = iris.iter().map(|i| crate::store::queries::term(i)).collect::<Vec<_>>().join(" ");
     let q = format!(
         "{p}\nSELECT DISTINCT ?t ?g ?class WHERE {{\n  VALUES ?t {{ {values} }}\n\
          \x20 GRAPH ?g {{ ?t a skos:Concept }}\n\

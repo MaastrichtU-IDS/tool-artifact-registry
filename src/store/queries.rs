@@ -64,6 +64,17 @@ pub fn iri(value: &str) -> Result<String> {
     Ok(format!("<{value}>"))
 }
 
+/// `<iri>` for a value that may have come from a caller, where refusing is not the right answer:
+/// a list filter, a lookup. A value that is not a valid absolute IRI becomes an IRI that names
+/// nothing, so the query matches nothing — the honest answer to a filter on a non-IRI — instead
+/// of the value closing the angle brackets and appending its own query.
+pub fn term(value: &str) -> String {
+    match NamedNode::new(value) {
+        Ok(_) if value.contains(':') => format!("<{value}>"),
+        _ => "<urn:tar:no-such-iri>".to_string(),
+    }
+}
+
 fn owned_list() -> String {
     OWNED_SUBRESOURCE_PREDICATES.iter().map(|p| format!("<{p}>")).collect::<Vec<_>>().join(", ")
 }

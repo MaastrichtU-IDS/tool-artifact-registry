@@ -18,6 +18,7 @@ pub mod model;
 pub mod negotiate;
 pub mod ns;
 pub mod ops;
+pub mod outbound;
 pub mod ratelimit;
 pub mod rdf;
 pub mod rebase;

@@ -5,6 +5,7 @@ import { useAsync } from '../lib/useAsync'
 import { EmptyState, ErrorState, Skeleton } from '../components/common'
 import { OriginChip } from '../components/chips'
 import type { PeerSearchStatus, SearchHit } from '../lib/types'
+import { safeHref } from '../lib/safeHref'
 
 /** Propagation adds fields the shared types do not carry yet (they are owned elsewhere).
  *  A federated search now travels past this registry's own peers, so a result has to say
@@ -196,6 +197,6 @@ function HitRow({ hit, basePath }: { hit: FedHit; basePath: string }) {
   return local ? (
     <Link className="row-card" to={`${basePath}/${id}`}>{body}</Link>
   ) : (
-    <a className="row-card" href={hit.iri} target="_blank" rel="noreferrer">{body}</a>
+    <a className="row-card" href={safeHref(hit.iri)} target="_blank" rel="noreferrer">{body}</a>
   )
 }

@@ -82,6 +82,10 @@ pub fn classify(method: &Method, path: &str, query: Option<&str>) -> Option<Clas
     if path == "/api/v1/search" && is_federated(query) {
         return Some(Class::Federated);
     }
+    // The registry fetching a peer's record on the caller's behalf.
+    if path == "/api/v1/resolve" {
+        return Some(Class::Outbound);
+    }
     if let Some(rest) = path.strip_prefix("/api/v1/software/") {
         if let Some((id, action)) = rest.split_once('/') {
             if !id.is_empty() && matches!(action, "api-doc" | "sync") {
@@ -642,6 +646,10 @@ mod tests {
         assert_eq!(c(Method::GET, "/api/v1/search", Some("q=x&fed_id=abc&fed_hops=1")), Some(Class::Federated));
         assert_eq!(c(Method::GET, "/api/v1/software/01a/api-doc", None), Some(Class::Outbound));
         assert_eq!(c(Method::POST, "/api/v1/software/01a/sync", None), Some(Class::Outbound));
+        assert_eq!(
+            c(Method::GET, "/api/v1/resolve", Some("iri=https%3A%2F%2Fpeer.example%2Fx")),
+            Some(Class::Outbound)
+        );
         assert_eq!(c(Method::GET, "/api/v1/software/01a/releases", None), Some(Class::Read));
         assert_eq!(c(Method::POST, "/api/v1/software", None), Some(Class::Write));
         assert_eq!(c(Method::DELETE, "/api/v1/peers/x", None), Some(Class::Write));

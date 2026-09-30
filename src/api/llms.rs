@@ -28,10 +28,11 @@ const RECENT_LIMIT: usize = 20;
 /// Deployments of one piece of software, for its markdown page.
 pub fn instances_of(ctx: &Ctx, software_iri: &str) -> AppResult<Vec<Instance>> {
     let q = format!(
-        "{p}\nSELECT DISTINCT ?s WHERE {{ GRAPH ?g {{ ?s a <{t}> ; tar:instanceOf <{software_iri}> }} \
+        "{p}\nSELECT DISTINCT ?s WHERE {{ GRAPH ?g {{ ?s a <{t}> ; tar:instanceOf {sw} }} \
          FILTER NOT EXISTS {{ GRAPH ?tg {{ ?s tar:tombstoned true }} }} }} ORDER BY DESC(STR(?s)) LIMIT 200",
         p = ns::PREFIXES,
-        t = instdom::TYPE_TAR_INSTANCE
+        t = instdom::TYPE_TAR_INSTANCE,
+        sw = crate::store::queries::term(software_iri)
     );
     let rows = ctx.state.store.select(&q).map_err(AppError::from)?;
     let mut out = Vec::new();

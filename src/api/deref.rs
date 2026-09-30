@@ -22,6 +22,30 @@ fn split_extension(id: &str) -> (String, Option<Repr>) {
     (id.to_string(), None)
 }
 
+/// The UI page for a record kind that has none of its own: a release's software, the newest
+/// version in a series, and the artifacts of a type.
+fn html_home(state: &AppState, kind: Kind, iri: &str, props: &crate::rdf::Props) -> Option<String> {
+    let base = state.base();
+    let local_tail = |i: &str| i.strip_prefix(base).and_then(|p| p.rsplit('/').next()).map(str::to_string);
+    match kind {
+        Kind::Release => props.iri(crate::ns::DCT, "isVersionOf").and_then(|sw| local_tail(&sw)).map(|t| format!("/software/{t}")),
+        Kind::ArtifactSeries => {
+            let q = format!(
+                "{p}\nSELECT ?a WHERE {{ GRAPH ?g {{ ?a dct:isVersionOf {i} }} }} ORDER BY DESC(STR(?a)) LIMIT 1",
+                p = crate::ns::PREFIXES,
+                i = crate::store::queries::term(iri)
+            );
+            let rows = state.store.select(&q).ok()?.rows;
+            rows.first().and_then(|r| r.iri("a")).and_then(|a| local_tail(&a)).map(|t| format!("/artifacts/{t}"))
+        }
+        Kind::Type => Some(format!(
+            "/artifacts?conforms_to={}",
+            percent_encoding::utf8_percent_encode(iri, percent_encoding::NON_ALPHANUMERIC)
+        )),
+        _ => None,
+    }
+}
+
 async fn deref(state: Arc<AppState>, headers: HeaderMap, kind: Kind, id: String) -> AppResult<Response> {
     let (id, pinned) = split_extension(&id);
     let iri = ids::iri_for(state.base(), kind, &id);
@@ -37,6 +61,18 @@ async fn deref(state: Arc<AppState>, headers: HeaderMap, kind: Kind, id: String)
     }
     let ctx = Ctx::new(&state).await?;
 
+    if repr == Repr::Html && !quads.is_empty() {
+        // Releases, types and series have no page of their own; send a browser to the one that
+        // shows them rather than to the UI's "not found".
+        let home = super::blocking({
+            let (state, iri, props) = (state.clone(), iri.clone(), crate::rdf::Props::from_quads(&iri, &quads));
+            move || Ok(html_home(&state, kind, &iri, &props))
+        })
+        .await?;
+        if let Some(to) = home {
+            return Ok(axum::response::Redirect::to(&to).into_response());
+        }
+    }
     if repr == Repr::Html {
         let sp = super::blocking({
             let (ctx, iri) = (ctx, iri.clone());

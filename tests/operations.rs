@@ -242,3 +242,25 @@ fn urlencoding(s: &str) -> String {
         .map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") })
         .collect()
 }
+
+/// §3: a browser following a release, type or series IRI landed on the UI's "not found".
+#[tokio::test]
+async fn a_browser_is_sent_to_the_page_that_shows_a_release_or_a_type() {
+    let h = harness().await;
+    let sw = h.created("/api/v1/software", json!({"name": "has releases", "kinds": ["service"]})).await;
+    let sid = sw["id"].as_str().unwrap();
+    let rel = h.created(&format!("/api/v1/software/{sid}/releases"), json!({"version": "1.0.0"})).await;
+    let ty = h.created("/api/v1/types", json!({"label": "Browsed type"})).await;
+    let html = |path: String| {
+        let req = Request::builder().uri(path).header("accept", "text/html").body(Body::empty()).unwrap();
+        h.app.clone().oneshot(req)
+    };
+    let resp = html(format!("/release/{}", rel["id"].as_str().unwrap())).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(resp.headers()["location"], format!("/software/{sid}").as_str());
+
+    let path = ty["iri"].as_str().unwrap().trim_start_matches(BASE).to_string();
+    let resp = html(path).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert!(resp.headers()["location"].to_str().unwrap().starts_with("/artifacts?conforms_to=https%3A"));
+}

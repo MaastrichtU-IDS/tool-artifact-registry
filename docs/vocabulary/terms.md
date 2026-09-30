@@ -44,7 +44,7 @@ inputs and outputs with, and it costs nothing to carry. EuroSciVoc covers what s
 
 `build.rs` checks upstream at most once a day, rewrites the file only when the content actually
 differs, and leaves the committed bundle alone with a warning if the network or the parse
-fails. `TAR_UPDATE_EDAM=1` forces a check; `TAR_EDAM_OFFLINE=1` skips it entirely and fails if
+fails. `TAR_UPDATE_VOCAB=1` forces a check; `TAR_VOCAB_OFFLINE=1` skips it entirely and fails if
 there is no committed bundle to fall back on.
 
 Which vocabularies these are is a property of *this build*, not of the API. The API never

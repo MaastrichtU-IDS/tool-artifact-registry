@@ -135,7 +135,7 @@ claude mcp add --transport http tar-registry https://your-registry.example/mcp \
 
 ## 3. The tools
 
-Seventeen, not a mirror of forty REST routes. Each entry costs context on every request, and
+Eighteen, not a mirror of forty REST routes. Each entry costs context on every request, and
 near-duplicates make a model choose badly.
 
 ### Orientation
@@ -162,6 +162,7 @@ near-duplicates make a model choose badly.
 | `get_record` | One record in full. |
 | `find_capable_software` | Matchmaking: what can produce or consume this artifact type — answerable before any run exists. |
 | `get_artifact_lineage` | Walk provenance up, down or both. |
+| `identify_content` | Turn a file's digest into the content identifier every registry derives for the same bytes; pass it to `list_records` (`content`) to find every record of them, here and in cached peers. Takes the digest, never the data. |
 
 ### Writing
 

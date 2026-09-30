@@ -68,7 +68,7 @@ address when it is anonymous or its credential failed. Admins are never limited;
 | `TAR_RATE_LIMIT_SPARQL` | `30:10/120:30` | `/sparql`. |
 | `TAR_RATE_LIMIT_FEDERATED` | `10:5/60:10` | A federated search, or a peer's relayed leg of one. |
 | `TAR_RATE_LIMIT_MCP` | `120:30/600:100` | The `/mcp` request itself; the requests a tool makes are charged to their own classes. |
-| `TAR_RATE_LIMIT_OUTBOUND` | `10:5/60:10` | Fetching a record's API document, and repository sync. |
+| `TAR_RATE_LIMIT_OUTBOUND` | `10:5/60:10` | Fetching a record's API document, repository sync, and `/api/v1/resolve`. |
 | `TAR_RATE_LIMIT_AUTH_FAIL` | `20:10` | Failed credentials per address; past it, the address is refused authentication until the next attempt would be allowed. |
 
 A malformed value stops the registry at boot and names the variable. `tar config` prints the
@@ -117,8 +117,8 @@ anywhere.
 | `TAR_PEER_RESOLVE_ENABLED` | `true` | Fetch stubs for foreign IRIs in the background. |
 | `TAR_PEER_RESOLVE_TTL` | `24h` | How long a cached stub stays fresh. |
 | `TAR_PEER_RESOLVE_TIMEOUT` | `5s` | |
-| `TAR_FEDERATED_SEARCH_TIMEOUT` | `3s` | Per peer. |
-| `TAR_FEDERATED_SEARCH_TOTAL_TIMEOUT` | `10s` | Whole fan-out. Max 60s. |
+| `TAR_FEDERATED_SEARCH_TIMEOUT` | `3s` | Per peer. The effective value is `min(this, TAR_FEDERATED_SEARCH_TOTAL_TIMEOUT)`. |
+| `TAR_FEDERATED_SEARCH_TOTAL_TIMEOUT` | `10s` | Caps the per-peer timeout; peers are asked concurrently, so it bounds the fan-out. Max 60s. |
 | `TAR_FEDERATED_SEARCH_MAX_HOPS` | `3` | Max 8. |
 | `TAR_FEDERATED_SEARCH_HOP_MARGIN` | `600ms` | Held back before forwarding, so a hop can still answer. |
 | `TAR_FEDERATED_SEARCH_MAX_PEERS` | `12` | Max 64. |
@@ -135,13 +135,13 @@ See [Federation](../api/federation.md).
 | Variable | Default | |
 |---|---|---|
 | `TAR_SUBSCRIPTION_WEBHOOKS` | `true` | Run the delivery worker at all. |
-| `TAR_SUBSCRIPTION_TICK` | `5s` | Worker poll interval. |
+| `TAR_SUBSCRIPTION_TICK` | `5s` | Worker poll interval. At least 1s. |
 | `TAR_SUBSCRIPTION_BATCH` | `20` | Deliveries attempted per tick. Max 500. |
 | `TAR_SUBSCRIPTION_TIMEOUT` | `5s` | Per attempt. Capped at 30s. |
 | `TAR_SUBSCRIPTION_MAX_ATTEMPTS` | `8` | Before one delivery is dead. Max 20. |
-| `TAR_SUBSCRIPTION_SUSPEND_AFTER` | `12` | Consecutive failures before the webhook is suspended. |
-| `TAR_SUBSCRIPTION_BACKOFF_BASE` | `30s` | |
-| `TAR_SUBSCRIPTION_BACKOFF_MAX` | `6h` | |
+| `TAR_SUBSCRIPTION_SUSPEND_AFTER` | `12` | Consecutive failures before the webhook is suspended. Max 500. |
+| `TAR_SUBSCRIPTION_BACKOFF_BASE` | `30s` | Doubles per failed attempt. Max 1h. |
+| `TAR_SUBSCRIPTION_BACKOFF_MAX` | `6h` | Max 7d. |
 | `TAR_SUBSCRIPTION_ALLOW_HTTP` | `false` | Otherwise HTTPS only. |
 | `TAR_SUBSCRIPTION_ALLOW_PRIVATE_TARGETS` | `false` | Otherwise private, loopback and link-local targets are refused. |
 
@@ -184,4 +184,9 @@ names for these two are still accepted.
 
 Durations accept `600ms`, `30s`, `5m`, `24h`, `7d`, or a bare number of seconds. Sizes accept
 `KiB`, `MiB`, `MB`, or bare bytes. Booleans accept `1`, `true`, `yes` or `on`; anything else is
-false. A value that does not parse falls back to the default.
+false. Most values that do not parse fall back to the default; the exceptions stop the registry
+at boot and name the variable: `TAR_SPARQL_TIMEOUT`, `TAR_PEER_RESOLVE_TTL`,
+`TAR_PEER_RESOLVE_TIMEOUT`, `TAR_FEDERATED_SEARCH_TIMEOUT`, `TAR_FORGE_POLL_INTERVAL`,
+`TAR_PREVIOUS_BASE_IRIS`, the `TAR_SPARQL_*` credentials and every rate-limit variable.
+`TAR_RATE_LIMIT_ENABLED` is strict too: it takes `true`/`false` (or `1`/`0`, `yes`/`no`,
+`on`/`off`) and nothing else, because a typo there would silently remove every limit.

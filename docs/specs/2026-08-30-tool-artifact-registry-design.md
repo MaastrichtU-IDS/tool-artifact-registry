@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft for review |
+| **Status** | Implemented |
 | **Date** | 2026-08-30 |
 | **Owner** | Ensar Emir Erol — MaastrichtU-IDS |
 | **Frontend handoff** | [`docs/design-handoff.md`](../design-handoff.md) |

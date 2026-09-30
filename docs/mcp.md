@@ -374,7 +374,7 @@ $ curl -s -X POST http://127.0.0.1:8100/mcp \
   "resultType":"complete",
   "supportedVersions":["2026-07-28","2025-11-25","2025-06-18","2025-03-26"],
   "capabilities":{"tools":{}},
-  "_meta":{"io.modelcontextprotocol/serverInfo":{"name":"tool-artifact-registry","version":"0.1.0"}},
+  "_meta":{"io.modelcontextprotocol/serverInfo":{"name":"tool-artifact-registry","version":"0.2.0"}},
   "ttlMs":3600000,"cacheScope":"public"}}
 
 $ curl -s -X POST … -H 'mcp-method: tools/list' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'

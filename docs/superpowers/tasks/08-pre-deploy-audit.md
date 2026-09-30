@@ -86,7 +86,7 @@ floor has no automated test (no network seam).
 ## 2. Correctness and operations — must fix before deploying
 
 **Done except 13** on branch `ops-fixes` (2026-09-30), regressions in `tests/operations.rs`.
-Item 13 (bump to 0.2.0 and tag) waits for the user. Notes: withdrawn records now answer 410 on
+Item 13: the bump is on branch `release-0.2.0`; the `v0.2.0` tag follows the merge to main. Notes: withdrawn records now answer 410 on
 every representation, `.md` included; `/admin/ops-backup` is a 500 on a `TAR_DATA_DIR=memory`
 registry (an in-memory SQLite database cannot be copied to a file); the online backup is read
 whole into memory before it is sent.

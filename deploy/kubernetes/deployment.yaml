@@ -35,7 +35,7 @@ spec:
       #   - name: my-registry-credentials
       containers:
         - name: tar
-          image: ghcr.io/maastrichtu-ids/tool-artifact-registry:0.1.0
+          image: ghcr.io/maastrichtu-ids/tool-artifact-registry:0.2.0
           imagePullPolicy: IfNotPresent
           args: ["serve"]
           securityContext:

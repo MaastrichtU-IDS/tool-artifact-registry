@@ -46,7 +46,7 @@ pub async fn list(
     principal: Principal,
     Path(id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     may_manage(&principal, &iri)?;
     let tokens = state.ops.list_tokens(&iri).await.map_err(AppError::from)?;
     Ok(Json(json!({"items": tokens, "total": tokens.len()})))
@@ -58,7 +58,7 @@ pub async fn create(
     Path(id): Path<String>,
     Json(input): Json<MintToken>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     may_manage(&principal, &iri)?;
     let exists = super::blocking({
         let (state, iri) = (state.clone(), iri.clone());
@@ -109,7 +109,7 @@ pub async fn revoke(
     principal: Principal,
     Path((id, token_id)): Path<(String, String)>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     may_manage(&principal, &iri)?;
     let Some(rec) = state.ops.get_token(&token_id).await.map_err(AppError::from)? else {
         return Err(AppError::not_found("no such token"));
@@ -144,7 +144,7 @@ pub async fn list_for_software(
     Path(id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
     may_manage_software(&principal)?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     let tokens = state.ops.list_tokens(&iri).await.map_err(AppError::from)?;
     Ok(Json(json!({"items": tokens, "total": tokens.len()})))
 }
@@ -161,7 +161,7 @@ pub async fn create_for_software(
     Json(input): Json<MintToken>,
 ) -> AppResult<impl IntoResponse> {
     may_manage_software(&principal)?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     let exists = super::blocking({
         let (state, iri) = (state.clone(), iri.clone());
         move || state.store.exists(&iri).map_err(AppError::from)
@@ -232,7 +232,7 @@ pub async fn revoke_for_software(
     Path((id, token_id)): Path<(String, String)>,
 ) -> AppResult<impl IntoResponse> {
     may_manage_software(&principal)?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     let Some(rec) = state.ops.get_token(&token_id).await.map_err(AppError::from)? else {
         return Err(AppError::not_found("no such token"));
     };

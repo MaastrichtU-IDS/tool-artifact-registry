@@ -36,13 +36,13 @@ pub async fn list(State(state): State<Arc<AppState>>, Query(f): Query<RunFilter>
             body.push_str(&super::text_filter(q, &["?label", "?key"]));
         }
         if let Some(i) = f.instance.as_deref().filter(|v| !v.is_empty()) {
-            let iri = ids::iri_for(ctx.base(), Kind::Instance, i);
-            body.push_str(&format!("\nGRAPH ?g {{ ?s prov:wasAssociatedWith|tar:atInstance <{iri}> }}"));
+            let iri = crate::store::queries::term(&ids::iri_for(ctx.base(), Kind::Instance, i));
+            body.push_str(&format!("\nGRAPH ?g {{ ?s prov:wasAssociatedWith|tar:atInstance {iri} }}"));
         }
         if let Some(sw) = f.software.as_deref().filter(|v| !v.is_empty()) {
-            let iri = ids::iri_for(ctx.base(), Kind::Software, sw);
+            let iri = crate::store::queries::term(&ids::iri_for(ctx.base(), Kind::Software, sw));
             body.push_str(&format!(
-                "\nGRAPH ?g {{ ?s prov:wasAssociatedWith|tar:atInstance ?i . ?i tar:instanceOf <{iri}> }}"
+                "\nGRAPH ?g {{ ?s prov:wasAssociatedWith|tar:atInstance ?i . ?i tar:instanceOf {iri} }}"
             ));
         }
         if let Some(s) = f.status.as_deref().filter(|v| !v.is_empty()) {
@@ -70,7 +70,7 @@ pub async fn get(
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let iri = ids::iri_for(state.base(), Kind::Run, &id);
+    let iri = ids::reference(state.base(), Kind::Run, &id)?;
     let run = super::blocking({
         let iri = iri.clone();
         move || dom::load_run(&ctx, &iri)

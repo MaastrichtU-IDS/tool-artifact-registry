@@ -383,7 +383,8 @@ mod tests {
     fn a_licence_must_be_an_http_iri_on_every_kind_of_record() {
         let bare = |r: Report| r.findings.iter().any(|f| f.message.starts_with("license must be an SPDX IRI"));
         let sw = |l: &str| software(SoftwareIn { name: "x".into(), license: Some(l.into()), ..Default::default() });
-        let art = |l: &str| artifact(ArtifactIn { title: Some("x".into()), license: Some(l.into()), ..Default::default() });
+        let art =
+            |l: &str| artifact(ArtifactIn { title: Some("x".into()), license: Some(l.into()), ..Default::default() });
         assert!(bare(sw("MIT")) && bare(art("CC-BY-4.0")));
         assert!(!bare(sw("https://spdx.org/licenses/MIT")) && !bare(art("https://spdx.org/licenses/CC-BY-4.0")));
     }

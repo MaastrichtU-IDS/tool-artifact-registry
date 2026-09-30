@@ -441,10 +441,10 @@ pub async fn capabilities(
     let ctx = Ctx::new(&state).await?;
     let mut clauses = String::new();
     if let Some(t) = q.produces.as_deref().filter(|v| !v.is_empty()) {
-        clauses.push_str(&format!("?cap tar:produces <{t}> . "));
+        clauses.push_str(&format!("?cap tar:produces {} . ", crate::store::queries::term(t)));
     }
     if let Some(t) = q.consumes.as_deref().filter(|v| !v.is_empty()) {
-        clauses.push_str(&format!("?cap tar:consumes <{t}> . "));
+        clauses.push_str(&format!("?cap tar:consumes {} . ", crate::store::queries::term(t)));
     }
     if clauses.is_empty() {
         return Err(AppError::bad_request("give at least one of produces= or consumes= (an ArtifactType IRI)"));

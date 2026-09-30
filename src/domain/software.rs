@@ -347,10 +347,11 @@ pub fn list_releases(ctx: &Ctx, software_iri: &str) -> AppResult<Vec<Release>> {
     let q = format!(
         r#"{p}
 SELECT ?r WHERE {{
-  GRAPH ?g {{ ?r dct:isVersionOf <{software_iri}> ; schema:softwareVersion ?v }}
+  GRAPH ?g {{ ?r dct:isVersionOf {sw} ; schema:softwareVersion ?v }}
   FILTER NOT EXISTS {{ GRAPH ?g2 {{ ?r tar:tombstoned true }} }}
 }}"#,
-        p = ns::PREFIXES
+        p = ns::PREFIXES,
+        sw = crate::store::queries::term(software_iri)
     );
     let rows = ctx.state.store.select(&q).map_err(AppError::from)?;
     let mut out = Vec::new();
@@ -378,7 +379,7 @@ pub struct SoftwareCounts {
 
 /// Instance and 30-day run counts per Software, in two aggregate queries rather than N.
 pub fn software_counts(ctx: &Ctx, only: Option<&str>) -> AppResult<HashMap<String, SoftwareCounts>> {
-    let filter = only.map(|s| format!("FILTER(?sw = <{s}>)")).unwrap_or_default();
+    let filter = only.map(|s| format!("FILTER(?sw = {})", crate::store::queries::term(s))).unwrap_or_default();
     let mut out: HashMap<String, SoftwareCounts> = HashMap::new();
     let q = format!(
         r#"{p}

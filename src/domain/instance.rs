@@ -137,7 +137,7 @@ pub struct InstanceSignals {
 
 /// Run and artifact signals per Instance, aggregated (handoff §4.2 signal bar).
 pub fn instance_signals(ctx: &Ctx, only: Option<&str>) -> AppResult<HashMap<String, InstanceSignals>> {
-    let filter = only.map(|s| format!("FILTER(?i = <{s}>)")).unwrap_or_default();
+    let filter = only.map(|s| format!("FILTER(?i = {})", crate::store::queries::term(s))).unwrap_or_default();
     let mut out: HashMap<String, InstanceSignals> = HashMap::new();
     let since = super::thirty_days_ago();
 

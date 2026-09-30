@@ -25,6 +25,10 @@ Suggested split: one PR for §1, one for §2, one for §3, then bump to 0.2.0 an
 - **`/resolve`: peers only, and signed in.** On-demand resolve needs a credential and only
   fetches IRIs under an active peer's base; the background resolver skips non-peer IRIs, which
   stay plain cross-links. All fetches go through the guarded client.
+- **Private addresses: split.** Records may list internal endpoints. The health probe keeps
+  probing them (it only reports up/down); the API-doc viewer does not proxy private addresses
+  unless `TAR_APIDOC_ALLOW_PRIVATE=true`. Neither follows redirects, and both always refuse
+  link-local addresses (cloud metadata).
 
 ## 0. Decision for the user first
 

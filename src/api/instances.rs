@@ -43,24 +43,26 @@ fn where_body(base: &str, f: &InstanceFilter) -> String {
         w.push_str(&super::text_filter(q, &["?label"]));
     }
     if let Some(sw) = f.software.as_deref().filter(|v| !v.is_empty()) {
-        let iri = ids::iri_for(base, Kind::Software, sw);
-        w.push_str(&format!("\nGRAPH ?g {{ ?s tar:instanceOf <{iri}> }}"));
+        let iri = crate::store::queries::term(&ids::iri_for(base, Kind::Software, sw));
+        w.push_str(&format!("\nGRAPH ?g {{ ?s tar:instanceOf {iri} }}"));
     }
     if let Some(r) = f.release.as_deref().filter(|v| !v.is_empty()) {
         // Unchecked, a value here is spliced into the query. A reference that is not one
         // matches nothing, which is the honest answer to a filter on it.
-        let iri = ids::reference(base, Kind::Release, r).unwrap_or_else(|_| format!("{base}/release/-invalid-"));
-        w.push_str(&format!("\nGRAPH ?g {{ ?s tar:runsRelease <{iri}> }}"));
+        let iri = crate::store::queries::term(&ids::iri_for(base, Kind::Release, r));
+        w.push_str(&format!("\nGRAPH ?g {{ ?s tar:runsRelease {iri} }}"));
     }
     if let Some(o) = f.operator.as_deref().filter(|v| !v.is_empty()) {
-        w.push_str(&format!("\nGRAPH ?g {{ ?s dct:publisher <{o}> }}"));
+        w.push_str(&format!("\nGRAPH ?g {{ ?s dct:publisher {} }}", crate::store::queries::term(o)));
     }
     if let Some(s) = f.status.as_deref().filter(|v| !v.is_empty()) {
         w.push_str(&format!("\nGRAPH ?g {{ ?s tar:health \"{}\" }}", super::escape_literal(s)));
     }
     match f.registry.as_deref() {
         Some("local") => w.push_str(&format!("\nFILTER(?g = <{}>)", ns::G_LOCAL)),
-        Some(peer) if !peer.is_empty() => w.push_str(&format!("\nFILTER(?g = <{}>)", ns::peer_graph(peer))),
+        Some(peer) if !peer.is_empty() => {
+            w.push_str(&format!("\nFILTER(?g = {})", crate::store::queries::term(&ns::peer_graph(peer))))
+        }
         _ => {}
     }
     w.push_str(&format!("\n{}", f.paging.cursor_filter("?s")));
@@ -101,7 +103,7 @@ pub async fn get(
     principal: Principal,
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     let mut inst = super::blocking({
         let iri = iri.clone();
         move || dom::load_instance(&ctx, &iri)
@@ -318,7 +320,7 @@ pub async fn patch(
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     // A deployment may maintain its own record; anyone else needs curator.
     if !principal.acts_for_instance(&iri) {
         principal.require_curator()?;
@@ -412,7 +414,7 @@ pub async fn soft_delete(
     Path(id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     super::software::tombstone(&state, &iri, &principal).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -424,7 +426,7 @@ pub async fn put_capability(
     Path(id): Path<String>,
     Json(input): Json<CapabilityIn>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     if !principal.acts_for_instance(&iri) {
         principal.require_curator()?;
     }
@@ -718,12 +720,13 @@ pub async fn runs(
     Query(paging): Query<Paging>,
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     let page = super::blocking(move || {
         let body = format!(
-            "GRAPH ?g {{ ?s a <{t}> ; prov:wasAssociatedWith|tar:atInstance <{iri}> }}\n{}",
+            "GRAPH ?g {{ ?s a <{t}> ; prov:wasAssociatedWith|tar:atInstance {i} }}\n{}",
             paging.cursor_filter("?s"),
-            t = rundom::TYPE_ACTIVITY
+            t = rundom::TYPE_ACTIVITY,
+            i = crate::store::queries::term(&iri)
         );
         let (iris, next) = page_iris(&ctx.state, &body, &paging)?;
         let total = count(&ctx.state, &body)?;
@@ -745,11 +748,12 @@ pub async fn artifacts(
     Query(paging): Query<Paging>,
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     let page = super::blocking(move || {
         let body = format!(
-            "GRAPH ?g {{ ?run prov:wasAssociatedWith|tar:atInstance <{iri}> . ?s prov:wasGeneratedBy ?run }}\n{}",
-            paging.cursor_filter("?s")
+            "GRAPH ?g {{ ?run prov:wasAssociatedWith|tar:atInstance {i} . ?s prov:wasGeneratedBy ?run }}\n{}",
+            paging.cursor_filter("?s"),
+            i = crate::store::queries::term(&iri)
         );
         let (iris, next) = page_iris(&ctx.state, &body, &paging)?;
         let total = count(&ctx.state, &body)?;

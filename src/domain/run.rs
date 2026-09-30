@@ -98,8 +98,9 @@ pub fn run_summary_from_props(ctx: &Ctx, iri: &str, p: &Props) -> RunSummary {
 fn generated_iris(ctx: &Ctx, run_iri: &str) -> Vec<String> {
     let q = format!(
         r#"{p}
-SELECT ?a WHERE {{ GRAPH ?g {{ ?a prov:wasGeneratedBy <{run_iri}> }} }}"#,
-        p = ns::PREFIXES
+SELECT ?a WHERE {{ GRAPH ?g {{ ?a prov:wasGeneratedBy {r} }} }}"#,
+        p = ns::PREFIXES,
+        r = crate::store::queries::term(run_iri)
     );
     ctx.state.store.select(&q).map(|b| b.rows.iter().filter_map(|r| r.iri("a")).collect()).unwrap_or_default()
 }

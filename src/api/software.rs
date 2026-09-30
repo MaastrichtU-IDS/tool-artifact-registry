@@ -55,7 +55,11 @@ fn where_body(f: &SoftwareFilter) -> String {
     ] {
         if let Some(v) = value.as_deref().filter(|v| !v.is_empty()) {
             w.push('\n');
-            w.push_str(&pattern.replace("{{", "{").replace("}}", "}").replace("{v}", v));
+            // `term`, not `v` itself: a raw value here closed the angle brackets and appended
+            // its own query, an anonymous read oracle over the whole store.
+            w.push_str(
+                &pattern.replace("{{", "{").replace("}}", "}").replace("<{v}>", &crate::store::queries::term(v)),
+            );
         }
     }
     if let Some(k) = f.keyword.as_deref().filter(|v| !v.is_empty()) {
@@ -69,7 +73,9 @@ fn where_body(f: &SoftwareFilter) -> String {
     }
     match f.registry.as_deref() {
         Some("local") => w.push_str(&format!("\nFILTER(?g = <{}>)", ns::G_LOCAL)),
-        Some(peer) if !peer.is_empty() => w.push_str(&format!("\nFILTER(?g = <{}>)", ns::peer_graph(peer))),
+        Some(peer) if !peer.is_empty() => {
+            w.push_str(&format!("\nFILTER(?g = {})", crate::store::queries::term(&ns::peer_graph(peer))))
+        }
         _ => {}
     }
     w.push_str(&format!("\n{}", f.paging.cursor_filter("?s")));
@@ -140,7 +146,7 @@ pub async fn get(
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     let mut sw = super::blocking({
         let iri = iri.clone();
         move || dom::load_software(&ctx, &iri)
@@ -237,7 +243,7 @@ pub async fn patch(
     Json(body): Json<serde_json::Value>,
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     if !ids::is_local(state.base(), &iri) {
         return Err(AppError::forbidden("this registry is not authoritative for that IRI (spec §9.7)"));
     }
@@ -295,7 +301,7 @@ pub async fn soft_delete(
     Path(id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     tombstone(&state, &iri, &principal).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -328,7 +334,7 @@ pub async fn tombstone(state: &Arc<AppState>, iri: &str, principal: &Principal) 
 
 pub async fn list_releases(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     let releases = super::blocking(move || dom::list_releases(&ctx, &iri)).await?;
     let total = releases.len() as i64;
     Ok(Json(Page::new(releases, total, None)))
@@ -341,7 +347,7 @@ pub async fn create_release(
     Json(input): Json<ReleaseIn>,
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
-    let software_iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let software_iri = ids::reference(state.base(), Kind::Software, &id)?;
     let iri = ids::mint(state.base(), Kind::Release);
     let subject = principal.subject.clone();
     let version = input.version.clone();
@@ -386,7 +392,7 @@ pub async fn sync(
     Path(id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     let ctx = Ctx::new(&state).await?;
     let (existing, quads, cfg) = super::blocking({
         let (ctx, iri) = (ctx.clone(), iri.clone());
@@ -585,7 +591,7 @@ pub async fn delete_release(
     Path((id, release_id)): Path<(String, String)>,
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
-    let software_iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let software_iri = ids::reference(state.base(), Kind::Software, &id)?;
     let iri = ids::iri_for(state.base(), Kind::Release, &release_id);
     super::blocking({
         let (state, software_iri, iri) = (state.clone(), software_iri.clone(), iri.clone());
@@ -613,7 +619,7 @@ pub async fn put_capability(
     Json(input): Json<CapabilityIn>,
 ) -> AppResult<impl IntoResponse> {
     principal.require_curator()?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     put_capability_on(&state, &principal, &iri, &input, "software").await
 }
 
@@ -664,7 +670,7 @@ pub async fn export_biotools(
     Path(id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     let sw = super::blocking(move || dom::load_software(&ctx, &iri)).await?;
 
     let function = sw.capability.as_ref().map(|c| {

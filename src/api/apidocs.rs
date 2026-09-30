@@ -56,7 +56,7 @@ pub async fn fetch(
     Path(id): Path<String>,
     Query(q): Query<DocQuery>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Software, &id);
+    let iri = ids::reference(state.base(), Kind::Software, &id)?;
     let ctx = Ctx::new(&state).await?;
     let sw = super::blocking({
         let iri = iri.clone();

@@ -252,7 +252,7 @@ pub async fn list(
     principal: Principal,
     Path(id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     may_manage(&principal, &iri)?;
     let items = subs::list_for_instance(&state.ops, &iri).await.map_err(AppError::from)?;
     let total = items.len();
@@ -266,7 +266,7 @@ pub async fn create(
     Path(id): Path<String>,
     Json(input): Json<CreateSubscription>,
 ) -> AppResult<impl IntoResponse> {
-    let iri = ids::iri_for(state.base(), Kind::Instance, &id);
+    let iri = ids::reference(state.base(), Kind::Instance, &id)?;
     may_manage(&principal, &iri)?;
     let exists = super::blocking({
         let (state, iri) = (state.clone(), iri.clone());
@@ -745,8 +745,9 @@ pub async fn notify_advertised(
 /// single lookup rather than a two-hop join per advertisement.
 fn software_of_instance(state: &Arc<AppState>, instance_iri: &str) -> Option<String> {
     let q = format!(
-        "{p}\nSELECT ?sw WHERE {{ GRAPH ?g {{ <{instance_iri}> tar:instanceOf ?sw }} }} LIMIT 1",
-        p = ns::PREFIXES
+        "{p}\nSELECT ?sw WHERE {{ GRAPH ?g {{ {i} tar:instanceOf ?sw }} }} LIMIT 1",
+        p = ns::PREFIXES,
+        i = crate::store::queries::term(instance_iri)
     );
     state.store.select(&q).ok()?.rows.first()?.iri("sw")
 }

@@ -49,10 +49,10 @@ fn where_body(base: &str, f: &ArtifactFilter) -> String {
         w.push_str(&super::text_filter(q, &["?title", "?desc"]));
     }
     if let Some(t) = f.conforms_to.as_deref().filter(|v| !v.is_empty()) {
-        w.push_str(&format!("\nGRAPH ?g {{ ?s dct:conformsTo <{t}> }}"));
+        w.push_str(&format!("\nGRAPH ?g {{ ?s dct:conformsTo {} }}", crate::store::queries::term(t)));
     }
     if let Some(l) = f.license.as_deref().filter(|v| !v.is_empty()) {
-        w.push_str(&format!("\nGRAPH ?g {{ ?s dct:license <{l}> }}"));
+        w.push_str(&format!("\nGRAPH ?g {{ ?s dct:license {} }}", crate::store::queries::term(l)));
     }
     if let Some(a) = f.availability.as_deref().filter(|v| !v.is_empty()) {
         w.push_str(&format!("\nGRAPH ?g {{ ?s dcat:distribution/tar:availability \"{}\" }}", super::escape_literal(a)));
@@ -73,20 +73,20 @@ fn where_body(base: &str, f: &ArtifactFilter) -> String {
         }
     }
     if let Some(i) = f.instance.as_deref().filter(|v| !v.is_empty()) {
-        let iri = ids::iri_for(base, Kind::Instance, i);
+        let iri = crate::store::queries::term(&ids::iri_for(base, Kind::Instance, i));
         w.push_str(&format!(
-            "\nGRAPH ?g {{ ?s prov:wasGeneratedBy ?r . ?r prov:wasAssociatedWith|tar:atInstance <{iri}> }}"
+            "\nGRAPH ?g {{ ?s prov:wasGeneratedBy ?r . ?r prov:wasAssociatedWith|tar:atInstance {iri} }}"
         ));
     }
     if let Some(sw) = f.software.as_deref().filter(|v| !v.is_empty()) {
-        let iri = ids::iri_for(base, Kind::Software, sw);
+        let iri = crate::store::queries::term(&ids::iri_for(base, Kind::Software, sw));
         w.push_str(&format!(
-            "\nGRAPH ?g {{ ?s prov:wasGeneratedBy ?r . ?r prov:wasAssociatedWith|tar:atInstance ?i . ?i tar:instanceOf <{iri}> }}"
+            "\nGRAPH ?g {{ ?s prov:wasGeneratedBy ?r . ?r prov:wasAssociatedWith|tar:atInstance ?i . ?i tar:instanceOf {iri} }}"
         ));
     }
     if let Some(r) = f.run.as_deref().filter(|v| !v.is_empty()) {
-        let iri = ids::iri_for(base, Kind::Run, r);
-        w.push_str(&format!("\nGRAPH ?g {{ ?s prov:wasGeneratedBy <{iri}> }}"));
+        let iri = crate::store::queries::term(&ids::iri_for(base, Kind::Run, r));
+        w.push_str(&format!("\nGRAPH ?g {{ ?s prov:wasGeneratedBy {iri} }}"));
     }
     if let Some(c) = f.content.as_deref().filter(|v| !v.is_empty()) {
         // One hop through the distribution, because that is where the identifier honestly sits.
@@ -95,7 +95,10 @@ fn where_body(base: &str, f: &ArtifactFilter) -> String {
         // and binding the graph to <urn:tar:local> would quietly remove it. Nothing is merged:
         // two records for one file come back as two rows, each with its own origin.
         match crate::domain::content::parse_query(c) {
-            Some(iri) => w.push_str(&format!("\nGRAPH ?g {{ ?s dcat:distribution/prov:specializationOf <{iri}> }}")),
+            Some(iri) => w.push_str(&format!(
+                "\nGRAPH ?g {{ ?s dcat:distribution/prov:specializationOf {} }}",
+                crate::store::queries::term(&iri)
+            )),
             // A value that names no bytes cannot match anything. Answering it with an unfiltered
             // list would look like "every artifact has this content", which is worse than empty.
             None => w.push_str("\nFILTER(false)"),
@@ -103,7 +106,9 @@ fn where_body(base: &str, f: &ArtifactFilter) -> String {
     }
     match f.registry.as_deref() {
         Some("local") => w.push_str(&format!("\nFILTER(?g = <{}>)", ns::G_LOCAL)),
-        Some(peer) if !peer.is_empty() => w.push_str(&format!("\nFILTER(?g = <{}>)", ns::peer_graph(peer))),
+        Some(peer) if !peer.is_empty() => {
+            w.push_str(&format!("\nFILTER(?g = {})", crate::store::queries::term(&ns::peer_graph(peer))))
+        }
         _ => {}
     }
     w.push_str(&format!("\n{}", f.paging.cursor_filter("?s")));
@@ -129,7 +134,7 @@ pub async fn get(
     headers: HeaderMap,
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let iri = ids::iri_for(state.base(), Kind::Artifact, &id);
+    let iri = ids::reference(state.base(), Kind::Artifact, &id)?;
     let artifact = super::blocking({
         let iri = iri.clone();
         move || dom::load_artifact(&ctx, &iri)
@@ -539,7 +544,7 @@ pub async fn lineage(
     Query(q): Query<LineageQuery>,
 ) -> AppResult<impl IntoResponse> {
     let ctx = Ctx::new(&state).await?;
-    let iri = ids::iri_for(state.base(), Kind::Artifact, &id);
+    let iri = ids::reference(state.base(), Kind::Artifact, &id)?;
     let depth = q.depth.unwrap_or(1).clamp(1, 6);
     let direction = q.direction.unwrap_or_else(|| "both".into());
     if !["up", "down", "both"].contains(&direction.as_str()) {
@@ -561,8 +566,9 @@ pub async fn lineage(
 /// Other artifacts in the same `dct:isVersionOf` series (handoff §5.5 "Versions").
 pub fn version_series(ctx: &Ctx, series_iri: &str) -> Vec<ArtifactRef> {
     let q = format!(
-        "{p}\nSELECT ?s WHERE {{ GRAPH ?g {{ ?s dct:isVersionOf <{series_iri}> }} }} ORDER BY DESC(STR(?s))",
-        p = ns::PREFIXES
+        "{p}\nSELECT ?s WHERE {{ GRAPH ?g {{ ?s dct:isVersionOf {series} }} }} ORDER BY DESC(STR(?s))",
+        p = ns::PREFIXES,
+        series = crate::store::queries::term(series_iri)
     );
     ctx.state
         .store

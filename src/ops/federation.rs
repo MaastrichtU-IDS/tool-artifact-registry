@@ -103,7 +103,10 @@ impl FedSettings {
                 .and_then(|v| parse_duration(&v).ok())
                 .unwrap_or(d.hop_margin),
             max_peers: env_usize("TAR_FEDERATED_SEARCH_MAX_PEERS", d.max_peers, 64),
-            max_peer_bytes: env_usize("TAR_FEDERATED_SEARCH_MAX_PEER_BYTES", d.max_peer_bytes, 32 * 1024 * 1024),
+            max_peer_bytes: env("TAR_FEDERATED_SEARCH_MAX_PEER_BYTES")
+                .and_then(|v| crate::config::parse_bytes(&v))
+                .unwrap_or(d.max_peer_bytes)
+                .min(32 * 1024 * 1024),
             max_peer_hits: env_usize("TAR_FEDERATED_SEARCH_MAX_PEER_HITS", d.max_peer_hits, 1000),
             max_peer_statuses: env_usize("TAR_FEDERATED_SEARCH_MAX_PEER_STATUSES", d.max_peer_statuses, 256),
             max_total_hits: env_usize("TAR_FEDERATED_SEARCH_MAX_TOTAL_HITS", d.max_total_hits, 5000),

@@ -217,16 +217,19 @@ fn env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
-fn env_bool(key: &str, default: bool) -> bool {
+pub(crate) fn env_bool(key: &str, default: bool) -> bool {
     match env(key) {
         Some(v) => matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
         None => default,
     }
 }
 
-/// Accepts `30s`, `5m`, `24h`, `7d`, or a bare number of seconds.
+/// Accepts `600ms`, `30s`, `5m`, `24h`, `7d`, or a bare number of seconds.
 pub fn parse_duration(s: &str) -> Result<Duration> {
     let s = s.trim();
+    if let Some(ms) = s.strip_suffix("ms") {
+        return Ok(Duration::from_millis(ms.trim().parse().with_context(|| format!("bad duration {s:?}"))?));
+    }
     let (num, mult) = match s.chars().last() {
         Some('s') => (&s[..s.len() - 1], 1u64),
         Some('m') => (&s[..s.len() - 1], 60),
@@ -355,7 +358,7 @@ impl Config {
     }
 }
 
-fn parse_bytes(v: &str) -> Option<usize> {
+pub(crate) fn parse_bytes(v: &str) -> Option<usize> {
     let v = v.trim();
     let (n, m) = if let Some(x) = v.strip_suffix("MiB") {
         (x, 1024 * 1024)
@@ -366,7 +369,7 @@ fn parse_bytes(v: &str) -> Option<usize> {
     } else {
         (v, 1)
     };
-    n.trim().parse::<usize>().ok().map(|n| n * m)
+    n.trim().parse::<usize>().ok().and_then(|n| n.checked_mul(m))
 }
 
 #[cfg(test)]
@@ -409,5 +412,22 @@ mod binding_issuer_tests {
         assert!(cfg(None, &[ci, "https://partner.example/realms/theirs"]).issuer_pin_required());
         // OIDC off entirely: there is no binding to pin.
         assert!(!cfg(None, &[]).issuer_pin_required());
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn durations_and_sizes_take_the_documented_units() {
+        assert_eq!(parse_duration("600ms").unwrap(), Duration::from_millis(600));
+        assert_eq!(parse_duration("30s").unwrap(), Duration::from_secs(30));
+        assert_eq!(parse_duration("6h").unwrap(), Duration::from_secs(6 * 3600));
+        assert_eq!(parse_duration("45").unwrap(), Duration::from_secs(45));
+        assert!(parse_duration("18446744073709551615d").is_err());
+        assert_eq!(parse_bytes("2 MiB"), Some(2 * 1024 * 1024));
+        assert_eq!(parse_bytes("512KiB"), Some(512 * 1024));
+        assert_eq!(parse_bytes("18446744073709551615MiB"), None);
     }
 }

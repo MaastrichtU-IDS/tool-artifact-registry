@@ -182,7 +182,6 @@ names for these two are still accepted.
 
 ## Durations and sizes
 
-Durations accept `30s`, `5m`, `24h`, `7d`, or a bare number of seconds. Sizes accept `KiB`,
-`MiB`, `MB`, or bare bytes. Booleans accept `1`, `true`, `yes` or `on` — except the
-`TAR_HEALTH_*` switches, which currently recognise only `1` and `true`. Prefer `1` or `true`
-everywhere and the difference never comes up.
+Durations accept `600ms`, `30s`, `5m`, `24h`, `7d`, or a bare number of seconds. Sizes accept
+`KiB`, `MiB`, `MB`, or bare bytes. Booleans accept `1`, `true`, `yes` or `on`; anything else is
+false. A value that does not parse falls back to the default.

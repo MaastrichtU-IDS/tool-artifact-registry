@@ -42,10 +42,10 @@ impl Settings {
                 .unwrap_or_else(|_| crate::config::parse_duration(d).expect("built-in default parses"))
         };
         Self {
-            enabled: env("TAR_HEALTH_CHECK_ENABLED").map(|v| v == "1" || v == "true").unwrap_or(true),
+            enabled: crate::config::env_bool("TAR_HEALTH_CHECK_ENABLED", true),
             interval: dur("TAR_HEALTH_CHECK_INTERVAL", "5m"),
             timeout: dur("TAR_HEALTH_CHECK_TIMEOUT", "5s"),
-            allow_private: env("TAR_HEALTH_ALLOW_PRIVATE").map(|v| v == "1" || v == "true").unwrap_or(true),
+            allow_private: crate::config::env_bool("TAR_HEALTH_ALLOW_PRIVATE", true),
             batch: env("TAR_HEALTH_CHECK_BATCH").and_then(|v| v.parse().ok()).unwrap_or(20),
         }
     }

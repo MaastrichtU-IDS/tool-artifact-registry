@@ -50,7 +50,7 @@ pub type DocCache = std::sync::Mutex<std::collections::HashMap<String, CachedDoc
 fn allow_private() -> bool {
     // Off by default: this proxy returns what it fetched to anonymous readers, so a record
     // pointing at an internal address would publish that address's content.
-    std::env::var("TAR_APIDOC_ALLOW_PRIVATE").map(|v| v == "1" || v == "true").unwrap_or(false)
+    crate::config::env_bool("TAR_APIDOC_ALLOW_PRIVATE", false)
 }
 
 pub async fn fetch(

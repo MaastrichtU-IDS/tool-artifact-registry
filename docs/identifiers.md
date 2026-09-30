@@ -115,6 +115,11 @@ close the query endpoint, so an operator who wants a genuinely private registry 
 about both.
 
 Updates are not accepted. Writes go through the API, where SHACL validation, the vocabulary
-rule and the audit log live.
+rule and the audit log live. Neither is `SERVICE`: the endpoint queries this registry only, and
+an external triplestore would otherwise fetch from its own network on a caller's behalf.
+
+A query runs for at most `TAR_SPARQL_TIMEOUT` (60 s by default) and returns at most 100 000
+rows; past either it is refused with a problem document that says which. Rate limits apply to
+`/sparql` as a class of their own.
 
 [FAIR Signposting]: https://signposting.org/

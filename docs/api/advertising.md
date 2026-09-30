@@ -84,9 +84,10 @@ registry has to keep believing in. If you do want progress visible, post with `s
 ## Foreign inputs
 
 `was_derived_from`, `was_revision_of` and `is_version_of` may point at an IRI at another
-registry. Advertising never blocks on the network: an unknown IRI is stored verbatim, and a
-background worker fetches a stub into that peer's own graph afterwards. The
-`queued_for_resolution` list in the response tells you which ones that happened for.
+registry. Advertising never blocks on the network: an unknown IRI is stored verbatim, and when
+it belongs to a **peer** of this registry, a background worker fetches a stub into that peer's
+own graph afterwards. The `queued_for_resolution` list in the response tells you which ones that
+happened for. An IRI that belongs to no peer stays a cross-link and is never fetched.
 
 This is what makes cross-registry lineage cheap enough to actually do. See
 [Federation](federation.md).

@@ -39,6 +39,11 @@ Suggested split: one PR for §1, one for §2, one for §3, then bump to 0.2.0 an
 
 ## 1. Security — must fix before deploying
 
+**Done** on branch `security-fixes` (2026-09-30), one commit per item, regressions in
+`tests/security.rs`. Two notes: a SPARQL query that sorts before returning stops at oxigraph's
+next cancellation check, which can be seconds past `TAR_SPARQL_TIMEOUT`; and the JWKS refetch
+floor has no automated test (no network seam).
+
 1. **SPARQL injection in IRI filters** (reproduced). `license`, `publisher`, `topic`, `produces`,
    `consumes` (`src/api/software.rs:50-58`), `conforms_to`, `license` (`artifacts.rs`),
    `operator` (`instances.rs`), and every `instance=`/`software=`/`run=` filter via

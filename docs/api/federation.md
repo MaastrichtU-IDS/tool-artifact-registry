@@ -60,8 +60,15 @@ records and not to a peer's: peer data does not pass through a write handler at 
 [vocabulary rule](../vocabulary/terms.md#federation-is-untouched-by-this-rule) never sees it.
 
 A resolved stub is refreshed every `TAR_PEER_RESOLVE_TTL`, default 24 hours. `GET
-/api/v1/resolve?iri=…` dereferences one on demand, and `&refresh=true` forces a re-fetch. The
-background resolver ticks every 30 seconds and backs off on failure.
+/api/v1/resolve?iri=…` dereferences one on demand, and `&refresh=true` forces a re-fetch; it
+needs a credential and is rate-limited as `outbound`. The background resolver ticks every 30
+seconds and backs off on failure.
+
+**Only peers' records are fetched.** An IRI under the base of an active peer is resolved; any
+other foreign IRI is kept as a plain cross-link and never fetched, by `/resolve` or by the
+background resolver. Otherwise anyone who could write a record, or call `/resolve`, could make
+the registry fetch a URL of their choosing and cache the answer in the catalogue. Fetches follow
+no redirects, refuse link-local addresses, and read at most 4 MiB.
 
 A stub keeps the record and what it owns (its blank nodes, distributions and checksums), in the
 vocabularies the registry reads. Other records in the peer's document are not cached with it.
